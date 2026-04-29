@@ -72,7 +72,7 @@ import {
   deleteDoc,
   updateDoc
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase
@@ -126,6 +126,18 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+// Constants
+const PROCEDURES_OPTIONS = [
+  { name: 'Avaliação Inicial', price: 150 },
+  { name: 'Limpeza (Profilaxia)', price: 200 },
+  { name: 'Restauração Resina', price: 250 },
+  { name: 'Extração Simples', price: 300 },
+  { name: 'Tratamento de Canal', price: 1200 },
+  { name: 'Clareamento Dental', price: 800 },
+  { name: 'Implante Dentário', price: 3500 },
+  { name: 'Aparelho Ortodôntico', price: 2500 }
+];
 
 const INITIAL_USERS = [
   { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123' },
@@ -189,6 +201,7 @@ export default function App() {
       
       // Notify all admins about the new ticket
       const admins = users.filter(u => u.role === 'Admin');
+      const shortId = ticketId.includes('-') ? ticketId.split('-')[1] : ticketId;
       console.log(`Notificando ${admins.length} administradores...`);
       for (const admin of admins) {
         // Notification target should match what the admin listener expects (id || uid)
@@ -197,7 +210,7 @@ export default function App() {
         await setDoc(doc(db, 'notifications', notifId), {
           id: notifId,
           userId: targetId,
-          message: `Novo chamado recebido: #${ticketId.split('-')[1]}`,
+          message: `Novo chamado recebido: #${shortId}`,
           type: 'info',
           read: false,
           createdAt: new Date().toISOString()
@@ -296,6 +309,10 @@ export default function App() {
     });
   }, [filteredRecords, filterProcedure, filterStatus, filterPayment, searchPatient]);
 
+  const openTicketsCount = useMemo(() => {
+    return tickets.filter(t => t.status === 'Pendente').length;
+  }, [tickets]);
+
   // Seeding Logic
   React.useEffect(() => {
     const seed = async () => {
@@ -333,9 +350,6 @@ export default function App() {
     // Check for existing session or just set ready
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       console.log("Auth state changed:", user?.uid);
-      if (!user) {
-        signInAnonymously(auth).catch(err => console.error("Erro na auth anônima:", err));
-      }
       setIsAuthReady(true);
     });
     return () => unsubscribe();
@@ -466,7 +480,7 @@ export default function App() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [currentUser]);
 
   const handleCreatePatient = async (newPatient: any): Promise<boolean> => {
     if (!newPatient.name) {
@@ -478,16 +492,32 @@ export default function App() {
       id: `rec-pat-${Date.now()}`,
       data: format(new Date(), 'yyyy-MM-dd'),
       paciente: newPatient.name,
-      procedimento: 'Avaliação Inicial',
+      procedimento: newPatient.procedimento || 'Avaliação Inicial',
       dentista: currentUser?.name || 'Dra. Ana Silveira',
       status: 'Pendente',
       statusPagamento: 'Pendente',
-      valor: 0,
+      valor: Number(newPatient.valor) || 0,
     };
     
     try {
       console.log("Processando cadastro de paciente no Firestore...");
       await setDoc(doc(db, 'records', record.id), record);
+
+      // Notify the dentist about new patient (initial evaluation)
+      const dentist = users.find(u => u.name === record.dentista);
+      if (dentist) {
+        const dId = dentist.id || dentist.uid || dentist.firebaseUid;
+        const nId = `notif-newpat-${Date.now()}`;
+        await setDoc(doc(db, 'notifications', nId), {
+          id: nId,
+          userId: dId,
+          message: `Nova avaliação inicial: ${record.paciente}`,
+          type: 'info',
+          read: false,
+          createdAt: new Date().toISOString()
+        });
+      }
+
       setSubPage(null);
       return true;
     } catch (e: any) {
@@ -507,11 +537,11 @@ export default function App() {
       id: `rec-new-${Date.now()}`,
       data: newAppt.data,
       paciente: newAppt.paciente,
-      procedimento: 'Avaliação',
+      procedimento: newAppt.procedimento || 'Avaliação',
       dentista: newAppt.dentista,
       status: 'Agendado',
       statusPagamento: 'Pendente',
-      valor: 150,
+      valor: Number(newAppt.valor) || 0,
     };
 
     try {
@@ -586,38 +616,55 @@ export default function App() {
       // Optimistic update for better UX
       setData(prev => prev.map(r => r.id === recordId ? { ...r, status: 'Cancelado' } : r));
 
-      // 1. Update Firestore
-      await updateDoc(doc(db, 'records', recordId), {
+      // 1. Update Firestore - Using setDoc with merge to ensure it works even if doc wasn't found (seeding issues)
+      await setDoc(doc(db, 'records', recordId), {
         status: 'Cancelado'
-      });
+      }, { merge: true });
 
-      // 2. Notification for Admin and Dentist
-      const notifId = `notif-${Date.now()}`;
-      const admins = users.filter(u => u.role === 'Admin');
-      const targetUsers = [...admins];
-      const dentist = users.find(u => u.name === record.dentista);
-      if (dentist && !targetUsers.some(u => u.id === dentist.id)) {
-        targetUsers.push(dentist);
-      }
+      // 2. Notification for Admin, Dentist and Patient (wrapped in try-catch to not block cancellation)
+      try {
+        const notifId = `notif-cancel-${Date.now()}`;
+        const admins = users.filter(u => u.role === 'Admin');
+        const targetUsers = [...admins];
+        
+        const dentist = users.find(u => u.name === record.dentista);
+        if (dentist && !targetUsers.some(u => (u.id || u.uid) === (dentist.id || dentist.uid))) {
+          targetUsers.push(dentist);
+        }
 
-      console.log(`Notificando ${targetUsers.length} usuários sobre cancelamento...`);
-      for (const u of targetUsers) {
-        const uId = u.id || u.uid || u.firebaseUid;
-        const individualNotifId = `${notifId}-${u.id}`;
-        await setDoc(doc(db, 'notifications', individualNotifId), {
-          id: individualNotifId,
-          userId: uId,
-          message: `Agendamento de ${record.paciente} CANCELADO.`,
-          type: 'warning',
-          read: false,
-          createdAt: new Date().toISOString()
-        });
+        // Notify the patient if they exist as a registered user in our system
+        const patientUser = users.find(u => u.name === record.paciente);
+        if (patientUser && !targetUsers.some(u => (u.id || u.uid) === (patientUser.id || patientUser.uid))) {
+          targetUsers.push(patientUser);
+        }
+
+        console.log(`Notificando ${targetUsers.length} usuários sobre cancelamento...`);
+        for (const u of targetUsers) {
+          const uId = u.id || u.uid || u.firebaseUid;
+          if (!uId) continue;
+
+          const individualNotifId = `${notifId}-${uId}`;
+          await setDoc(doc(db, 'notifications', individualNotifId), {
+            id: individualNotifId,
+            userId: uId,
+            message: `Agendamento de ${record.paciente} CANCELADO.`,
+            type: 'warning',
+            read: false,
+            createdAt: new Date().toISOString()
+          });
+        }
+      } catch (notifErr) {
+        console.warn("Agendamento cancelado, mas houve erro ao enviar notificações:", notifErr);
       }
 
       console.log(`Cancelamento concluído para ${record.paciente}`);
     } catch (e) {
       console.error("Erro no processo de cancelamento:", e);
-      // Revert optimistic update on error by letting onSnapshot fix it or just alert
+      // Revert optimistic update on error
+      const originalRecord = data.find(r => r.id === recordId);
+      if (originalRecord) {
+        setData(prev => prev.map(r => r.id === recordId ? originalRecord : r));
+      }
       alert("Não foi possível cancelar o agendamento no servidor. Verifique sua conexão.");
       handleFirestoreError(e, OperationType.UPDATE, 'records/' + recordId);
     }
@@ -670,28 +717,17 @@ export default function App() {
   };
 
   const handleLogin = async (userProfile: any) => {
-    // Ensure we have a Firebase Auth session
-    let fbUser = auth.currentUser;
-    if (!fbUser) {
-      try {
-        const cred = await signInAnonymously(auth);
-        fbUser = cred.user;
-      } catch (authErr) {
-        console.error("Critical: Failed to establish Firebase session during login.", authErr);
-      }
-    }
-
     // Link the logical user to the current Firebase Auth session
-    if (fbUser) {
+    if (auth.currentUser) {
       try {
         // 1. Update the main user document
         await setDoc(doc(db, 'users', userProfile.id), {
-          firebaseUid: fbUser.uid,
+          firebaseUid: auth.currentUser.uid,
           lastLogin: new Date().toISOString()
         }, { merge: true });
         
         // 2. Create/Update a security mapping using UID as key for Rules lookup
-        await setDoc(doc(db, 'users_by_uid', fbUser.uid), {
+        await setDoc(doc(db, 'users_by_uid', auth.currentUser.uid), {
           userDocId: userProfile.id,
           name: userProfile.name,
           role: userProfile.role,
@@ -699,7 +735,7 @@ export default function App() {
         });
 
         // Add firebaseUid to userProfile so currentUser has it
-        userProfile.firebaseUid = fbUser.uid;
+        userProfile.firebaseUid = auth.currentUser.uid;
       } catch (e) {
         console.error("Error linking Firebase UID:", e);
       }
@@ -780,13 +816,13 @@ export default function App() {
           />
         );
       case 'Agenda':
-        return <AgendaView data={filteredData} onAdd={() => setSubPage('NovoAgendamento')} onStart={handleStartConsultation} onFinish={handleFinishConsultation} onCancel={handleCancelAppointment} />;
+        return <AgendaView data={filteredData} fullData={data} onAdd={() => setSubPage('NovoAgendamento')} onStart={handleStartConsultation} onFinish={handleFinishConsultation} onCancel={handleCancelAppointment} />;
       case 'Financeiro':
         return canAccessFinance ? <FinanceView data={filteredData} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Equipe':
         return <TeamView data={filteredData} users={users} currentUser={currentUser} />;
       case 'Administração':
-        return canAccessAdmin ? <AdminView users={users} onAddUser={handleCreateUser} tickets={tickets} onOpenSupport={handleSupportTicket} onUpdateTicket={handleUpdateTicketStatus} currentUser={currentUser} /> : <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>;
+        return canAccessAdmin ? <AdminView users={users} onAddUser={handleCreateUser} tickets={tickets} onOpenSupport={handleSupportTicket} onUpdateTicket={handleUpdateTicketStatus} currentUser={currentUser} initialTab={subPage === 'Suporte' ? 'tickets' : 'users'} /> : <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>;
       default:
         return <DashboardView filteredData={filteredData} />;
     }
@@ -882,19 +918,45 @@ export default function App() {
           </div>
           <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
           
-          <div className="relative">
-            <button 
-              onClick={() => setShowNotifications(!showNotifications)}
-              className={cn(
-                "p-2 rounded-lg bg-slate-50 border border-slate-100 hover:border-brand-cyan transition-colors cursor-pointer relative",
-                showNotifications ? "border-brand-cyan text-brand-cyan" : "text-slate-400"
-              )}
-            >
-              <Bell className="w-4 h-4" />
-              {notifications.some(n => !n.read) && (
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white ring-2 ring-rose-500/20" />
-              )}
-            </button>
+          <div className="flex items-center gap-2">
+            {currentUser?.role === 'Admin' && openTicketsCount > 0 && (
+              <motion.button 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => { setActivePage('Administração'); setSubPage('Suporte'); }}
+                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-full hover:bg-rose-100 transition-all cursor-pointer group shadow-sm ring-4 ring-rose-500/5"
+              >
+                <div className="relative">
+                  <MessageSquare className="w-3.5 h-3.5 text-rose-500 group-hover:scale-110 transition-transform" />
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full border border-rose-50 flex animate-pulse" />
+                </div>
+                <span className="text-[10px] font-black text-rose-700 uppercase tracking-widest leading-none hidden sm:inline">
+                  {openTicketsCount} Chamado{openTicketsCount > 1 ? 's' : ''} Aberto{openTicketsCount > 1 ? 's' : ''}
+                </span>
+                <span className="text-[10px] font-black text-rose-700 sm:hidden">
+                  {openTicketsCount}
+                </span>
+              </motion.button>
+            )}
+
+            <div className="relative">
+              <button 
+                onClick={() => setShowNotifications(!showNotifications)}
+                className={cn(
+                  "p-2 rounded-lg bg-slate-50 border border-slate-100 hover:border-brand-cyan transition-colors cursor-pointer relative group",
+                  showNotifications ? "border-brand-cyan text-brand-cyan" : "text-slate-400"
+                )}
+              >
+                <Bell className={cn(
+                  "w-4 h-4 transition-transform group-hover:rotate-12",
+                  notifications.some(n => !n.read) && "animate-[bell-ring_1s_infinite]"
+                )} />
+                {notifications.some(n => !n.read) && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white ring-2 ring-rose-500/20" />
+                )}
+              </button>
 
             <AnimatePresence>
               {showNotifications && (
@@ -972,8 +1034,9 @@ export default function App() {
               )}
             </AnimatePresence>
           </div>
+        </div>
 
-          <button 
+        <button 
             onClick={handleLogout}
             className="flex flex-col items-center justify-center px-4 py-1.5 bg-rose-50 text-rose-600 rounded border border-rose-100 hover:bg-rose-100 transition-all cursor-pointer group min-w-[55px] shrink-0 active:scale-95"
             title="Sair do Sistema"
@@ -1691,9 +1754,23 @@ function PatientsView({
   );
 }
 
-function AgendaView({ data, onAdd, onStart, onFinish, onCancel }: { data: DentalRecord[]; onAdd: () => void; onStart: (id: string) => void; onFinish: (id: string) => void; onCancel: (id: string) => void }) {
+function AgendaView({ 
+  data, 
+  fullData,
+  onAdd, 
+  onStart, 
+  onFinish, 
+  onCancel 
+}: { 
+  data: DentalRecord[]; 
+  fullData: DentalRecord[];
+  onAdd: () => void; 
+  onStart: (id: string) => void; 
+  onFinish: (id: string) => void; 
+  onCancel: (id: string) => void 
+}) {
   const upcoming = data.filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento');
-  const cancelled = data.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+  const cancelled = fullData.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
   return (
     <section className="bg-white border border-slate-200 overflow-hidden flex flex-col">
@@ -1747,11 +1824,7 @@ function AgendaView({ data, onAdd, onStart, onFinish, onCancel }: { data: Dental
                         Iniciar
                       </button>
                       <button 
-                        onClick={() => {
-                          if (confirm(`Deseja cancelar o agendamento de ${apt.paciente}?`)) {
-                            onCancel(apt.id);
-                          }
-                        }}
+                        onClick={() => onCancel(apt.id)}
                         className="flex-1 bg-rose-50 hover:bg-rose-500 hover:text-white text-rose-500 text-[9px] font-bold uppercase py-1 rounded transition-colors cursor-pointer"
                       >
                         Cancelar
@@ -2216,7 +2289,17 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
   const [cpf, setCpf] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [procedimento, setProcedimento] = useState('Avaliação Inicial');
+  const [valor, setValor] = useState('150');
   const [isSaving, setIsSaving] = useState(false);
+
+  const handleProcedureChange = (procName: string) => {
+    setProcedimento(procName);
+    const option = PROCEDURES_OPTIONS.find(p => p.name === procName);
+    if (option) {
+      setValor(option.price.toString());
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-300">
@@ -2273,6 +2356,32 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
               className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none disabled:bg-slate-50" 
             />
           </div>
+
+          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Procedimento</label>
+              <select 
+                disabled={isSaving || isEdit}
+                value={procedimento}
+                onChange={(e) => handleProcedureChange(e.target.value)}
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none disabled:bg-slate-50 cursor-pointer"
+              >
+                {PROCEDURES_OPTIONS.map(opt => (
+                  <option key={opt.name} value={opt.name}>{opt.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Valor (R$)</label>
+              <input 
+                disabled={isSaving || isEdit}
+                type="number" 
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none disabled:bg-slate-50" 
+              />
+            </div>
+          </div>
         </div>
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
@@ -2283,7 +2392,7 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
               if (name.trim()) {
                 setIsSaving(true);
                 try {
-                  await onSave({ name, cpf, phone, email });
+                  await onSave({ name, cpf, phone, email, procedimento, valor });
                 } finally {
                   setIsSaving(false);
                 }
@@ -2305,6 +2414,16 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
   const [paciente, setPaciente] = useState('');
   const [dataVal, setDataVal] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [dentista, setDentista] = useState('');
+  const [procedimento, setProcedimento] = useState('Avaliação Inicial');
+  const [valor, setValor] = useState('150');
+
+  const handleProcedureChange = (procName: string) => {
+    setProcedimento(procName);
+    const option = PROCEDURES_OPTIONS.find(p => p.name === procName);
+    if (option) {
+      setValor(option.price.toString());
+    }
+  };
 
   // Get unique patients and dentists from live data
   const patientList = useMemo(() => {
@@ -2367,12 +2486,36 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
               {dentistList.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
+
+          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Procedimento</label>
+              <select 
+                value={procedimento}
+                onChange={(e) => handleProcedureChange(e.target.value)}
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer"
+              >
+                {PROCEDURES_OPTIONS.map(opt => (
+                  <option key={opt.name} value={opt.name}>{opt.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400">Valor (R$)</label>
+              <input 
+                type="number" 
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none" 
+              />
+            </div>
+          </div>
         </div>
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
           <button onClick={onBack} className="px-6 py-2 rounded text-xs font-bold text-slate-400 hover:bg-slate-50 transition-colors cursor-pointer">Descartar</button>
           <button 
-            onClick={() => onSave({ paciente, data: dataVal, dentista })}
+            onClick={() => onSave({ paciente, data: dataVal, dentista, procedimento, valor })}
             className="bg-brand-cyan text-white px-6 py-2 rounded text-xs font-bold shadow-sm hover:translate-y-[-1px] transition-all cursor-pointer"
           >
             Confirmar Agenda
@@ -2389,7 +2532,8 @@ function AdminView({
   tickets, 
   onOpenSupport, 
   onUpdateTicket, 
-  currentUser 
+  currentUser,
+  initialTab = 'users'
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
@@ -2397,6 +2541,7 @@ function AdminView({
   onOpenSupport: () => void; 
   onUpdateTicket: (id: string, status: 'Em Analise' | 'Resolvido') => Promise<void>;
   currentUser: any;
+  initialTab?: 'users' | 'tickets' | 'settings' | 'import';
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [newUserName, setNewUserName] = useState('');
@@ -2404,7 +2549,14 @@ function AdminView({
   const [newUserUsername, setNewUserUsername] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('123');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'users' | 'tickets' | 'settings' | 'import'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'tickets' | 'settings' | 'import'>(initialTab);
+
+  // Sync activeTab with initialTab changes
+  React.useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [isProcessingTicket, setIsProcessingTicket] = useState<string | null>(null);
 
   const handleTicketAction = async (id: string, status: 'Em Analise' | 'Resolvido') => {
