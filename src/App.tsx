@@ -685,17 +685,51 @@ export default function App() {
   const handleWhatsAppReminder = (record: DentalRecord) => {
     console.log("Acionando lembrete WhatsApp para:", record.paciente);
     
-    // Procura o paciente ignorando caixa (case-insensitive)
-    const patient = patients.find(p => p.name.toLowerCase().trim() === record.paciente.toLowerCase().trim());
+    // Auxiliar para normalizar nomes para comparação (remove acentos, espaços extras e símbolos)
+    const normalize = (str: string) => {
+      if (!str) return '';
+      return str.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove acentos
+        .replace(/[^a-z0-9]/g, ' ') // Mantém apenas alfanuméricos como espaços
+        .replace(/\s+/g, ' ') // Remove espaços múltiplos
+        .trim();
+    };
+
+    const normalizedTarget = normalize(record.paciente);
+    
+    // Procura o paciente com comparação robusta
+    const patient = patients.find(p => normalize(p.name) === normalizedTarget);
     
     console.log("Resultado da busca do paciente:", patient ? "Encontrado" : "Não encontrado");
     
-    // Buscando telefone no cadastro do paciente. Se não houver, pede para cadastrar.
-    const phone = patient?.phone || patient?.telefone || patient?.celular || '';
+    if (!patient) {
+      // Se não encontrar pelo nome exato normalizado, tenta ver se o nome do cadastro está contido no agendamento ou vice-versa
+      const fallbackPatient = patients.find(p => {
+        const pNorm = normalize(p.name);
+        return pNorm.includes(normalizedTarget) || normalizedTarget.includes(pNorm);
+      });
+      
+      if (fallbackPatient) {
+        console.log("Paciente encontrado via busca flexível:", fallbackPatient.name);
+        proceedWithWhatsApp(fallbackPatient, record);
+      } else {
+        console.warn("Paciente não encontrado na base de dados:", record.paciente);
+        console.log("Nomes disponíveis na base (normalizados):", patients.map(p => normalize(p.name)).join(', '));
+        alert(`O paciente "${record.paciente}" não foi encontrado no cadastro de pacientes.\n\nCertifique-se de que o nome cadastrado no agendamento é o mesmo que consta na aba 'Pacientes'.`);
+      }
+    } else {
+      proceedWithWhatsApp(patient, record);
+    }
+  };
+
+  // Função interna para processar o envio após encontrar o paciente
+  const proceedWithWhatsApp = (patient: any, record: DentalRecord) => {
+    // Buscando telefone no cadastro do paciente em múltiplos campos comuns
+    const phone = patient.phone || patient.telefone || patient.celular || patient.mobile || patient.contato || '';
     
     if (!phone) {
-      console.warn("Telefone não encontrado para o paciente:", record.paciente);
-      alert(`O paciente "${record.paciente}" não tem um telefone cadastrado.\n\nPor favor, vá em 'Pacientes', edite o cadastro e adicione um número de celular.`);
+      console.warn("Telefone não encontrado no objeto do paciente:", patient);
+      alert(`O paciente "${patient.name}" não tem um telefone cadastrado.\n\nPor favor, vá na aba 'Pacientes', procure por este paciente, clique em 'Editar' e adicione o número de celular.`);
       return;
     }
 
@@ -704,24 +738,22 @@ export default function App() {
     const encodedMessage = encodeURIComponent(message);
     
     // Remove caracteres não numéricos e garante o DDI 55 (Brasil) se não houver
-    const cleanPhone = phone.replace(/\D/g, '');
+    const cleanPhone = phone.toString().replace(/\D/g, '');
     let finalPhone = cleanPhone;
     
     if (cleanPhone.length === 10 || cleanPhone.length === 11) {
       finalPhone = `55${cleanPhone}`;
     } else if (cleanPhone.length < 10) {
-      alert("O telefone cadastrado parece estar incompleto ou incorreto. Verifique o cadastro do paciente.");
+      alert("O telefone cadastrado (" + phone + ") parece estar incompleto ou incorreto. Por favor, verifique o cadastro do paciente.");
       return;
     }
     
     const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodedMessage}`;
     console.log("Abrindo URL do WhatsApp:", whatsappUrl);
     
-    // Tenta abrir em nova aba
     const win = window.open(whatsappUrl, '_blank');
     if (!win) {
-      // Se o bloqueador de popups impedir, avisa o usuário
-      alert("O seu navegador bloqueou a abertura do WhatsApp. Por favor, permita pop-ups para este site ou utilize um link direto.");
+      alert("O seu navegador bloqueou a abertura do WhatsApp. Por favor, permita pop-ups para este site.");
     }
   };
 
