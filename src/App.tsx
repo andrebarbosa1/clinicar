@@ -37,7 +37,8 @@ import {
   HelpCircle,
   MessageSquare,
   Cpu,
-  Upload
+  Upload,
+  Menu
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -167,6 +168,7 @@ export default function App() {
   const [isSendingTicket, setIsSendingTicket] = useState(false);
   const [tickets, setTickets] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   React.useEffect(() => {
     const q = query(collection(db, 'patients'));
@@ -567,7 +569,7 @@ export default function App() {
     };
 
     try {
-      console.log("Tentando salvar agendamento:", record);
+      console.log("Tentando salvar agendamento no Firestore:", record);
       await setDoc(doc(db, 'records', record.id), record);
 
       // Notify the dentist
@@ -586,9 +588,11 @@ export default function App() {
       }
 
       setSubPage(null);
-    } catch (e) {
+      return true;
+    } catch (e: any) {
       console.error("Erro ao salvar agendamento:", e);
-      handleFirestoreError(e, OperationType.WRITE, 'records/' + record.id);
+      alert("Erro ao salvar agendamento: " + (e.message || "Verifique sua conexão ou permissões."));
+      return false;
     }
   };
 
@@ -835,7 +839,7 @@ export default function App() {
       return <PatientFormView isEdit patientName={selectedPatientId} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'NovoAgendamento' && activePage === 'Agenda') {
-      return <AppointmentFormView data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
+      return <AppointmentFormView patients={patients} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
     }
 
     // Permission Guard for module rendering
@@ -885,13 +889,20 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-4 sticky top-0 z-50 shrink-0">
-        <div className="flex items-center gap-6">
+      <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0">
+        <div className="flex items-center gap-4 md:gap-6">
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="p-2 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
+          >
+            {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center">
+            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
               <Stethoscope className="h-5 w-5 text-white" />
             </div>
-            <h1 className="text-xl font-bold text-slate-800 tracking-tight">OdontoDash <span className="text-brand-cyan font-normal">Analytics</span></h1>
+            <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">OdontoDash <span className="text-brand-cyan font-normal">Analytics</span></h1>
           </div>
           
           {currentUser && (
@@ -906,9 +917,10 @@ export default function App() {
             </div>
           )}
         </div>
-        
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+
+        <div className="flex items-center gap-2 lg:gap-3">
+          {/* Desktop Navigation */}
+          <nav className="hidden lg:flex items-center gap-1">
             <RibbonItem 
               icon={<LayoutDashboard className="w-4 h-4" />} 
               label="Dashboard" 
@@ -961,15 +973,18 @@ export default function App() {
                 onClick={() => { setActivePage('Administração'); setSubPage(null); }}
               />
             )}
-            <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
-            <button 
-              onClick={handleSupportTicket}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-brand-cyan hover:bg-brand-cyan/5 transition-all group"
-            >
-              <HelpCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
-              <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:block">Suporte</span>
-            </button>
-          </div>
+          </nav>
+
+          <div className="hidden lg:block w-px h-6 bg-slate-100 mx-1 shrink-0" />
+          
+          <button 
+            onClick={handleSupportTicket}
+            className="flex items-center gap-1.5 px-2 md:px-3 py-2 rounded-xl text-brand-cyan hover:bg-brand-cyan/5 transition-all group shrink-0"
+          >
+            <HelpCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
+            <span className="text-[10px] font-bold uppercase tracking-widest hidden md:block">Suporte</span>
+          </button>
+
           <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
           
           <div className="flex items-center gap-2">
@@ -980,22 +995,22 @@ export default function App() {
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={() => { setActivePage('Administração'); setSubPage('Suporte'); }}
-                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-full hover:bg-rose-100 transition-all cursor-pointer group shadow-sm ring-4 ring-rose-500/5"
+                className="flex items-center gap-2 px-2 md:px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-full hover:bg-rose-100 transition-all cursor-pointer group shadow-sm ring-4 ring-rose-500/5 shrink-0"
               >
                 <div className="relative">
                   <MessageSquare className="w-3.5 h-3.5 text-rose-500 group-hover:scale-110 transition-transform" />
                   <span className="absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full border border-rose-50 flex animate-pulse" />
                 </div>
                 <span className="text-[10px] font-black text-rose-700 uppercase tracking-widest leading-none hidden sm:inline">
-                  {openTicketsCount} Chamado{openTicketsCount > 1 ? 's' : ''} Aberto{openTicketsCount > 1 ? 's' : ''}
+                  {openTicketsCount} <span className="hidden md:inline">Chamado{openTicketsCount > 1 ? 's' : ''} Aberto{openTicketsCount > 1 ? 's' : ''}</span>
                 </span>
-                <span className="text-[10px] font-black text-rose-700 sm:hidden">
+                <span className="text-[10px] font-black text-rose-700 md:hidden">
                   {openTicketsCount}
                 </span>
               </motion.button>
             )}
 
-            <div className="relative">
+            <div className="relative shrink-0">
               <button 
                 onClick={() => setShowNotifications(!showNotifications)}
                 className={cn(
@@ -1101,26 +1116,82 @@ export default function App() {
         </div>
       </header>
 
-      {/* Filters Bar (Swapped from Ribbon) */}
-      <nav className="bg-slate-50 border-b border-slate-200 px-6 py-2 flex flex-wrap items-center gap-6 sticky top-[61px] z-40 shrink-0">
+      {/* Mobile Menu Overlay */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMenuOpen(false)}
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] lg:hidden"
+            />
+            <motion.div 
+              initial={{ x: -300 }}
+              animate={{ x: 0 }}
+              exit={{ x: -300 }}
+              className="fixed top-0 left-0 bottom-0 w-72 bg-white shadow-2xl z-[101] lg:hidden flex flex-col pt-20"
+            >
+              <div className="px-6 mb-8 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-500 border border-slate-200 uppercase">
+                  {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm font-bold text-slate-800">{currentUser.name}</span>
+                  <span className="text-[10px] uppercase font-bold text-brand-cyan tracking-widest">{currentUser.role}</span>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-4 space-y-2">
+                <MobileNavItem icon={<LayoutDashboard className="w-5 h-5" />} label="Dashboard" active={activePage === 'Dashboard'} onClick={() => { setActivePage('Dashboard'); setIsMenuOpen(false); }} />
+                <MobileNavItem icon={<Users className="w-5 h-5" />} label="Pacientes" active={activePage === 'Pacientes'} onClick={() => { setActivePage('Pacientes'); setIsMenuOpen(false); }} />
+                <MobileNavItem icon={<Calendar className="w-5 h-5" />} label="Agenda" active={activePage === 'Agenda'} onClick={() => { setActivePage('Agenda'); setIsMenuOpen(false); }} />
+                <MobileNavItem icon={<RotateCcw className="w-5 h-5" />} label="Retorno" active={activePage === 'Retorno'} onClick={() => { setActivePage('Retorno'); setIsMenuOpen(false); }} />
+                <MobileNavItem icon={<FileText className="w-5 h-5" />} label="Documentos" active={activePage === 'Documentos'} onClick={() => { setActivePage('Documentos'); setIsMenuOpen(false); }} />
+                {(currentUser?.role === 'Admin' || currentUser?.role === 'Recepcionista') && (
+                  <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
+                )}
+                <MobileNavItem icon={<Stethoscope className="w-5 h-5" />} label="Equipe" active={activePage === 'Equipe'} onClick={() => { setActivePage('Equipe'); setIsMenuOpen(false); }} />
+                {currentUser?.role === 'Admin' && (
+                  <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
+                )}
+              </div>
+              
+              <div className="p-4 border-t border-slate-100">
+                <button 
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-3 p-3 text-rose-500 font-bold text-sm hover:bg-rose-50 rounded-xl transition-colors"
+                >
+                  <LogOut className="w-5 h-5" />
+                  Sair do Sistema
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Filters Bar */}
+      <nav className="bg-slate-50 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-6 sticky top-[53px] md:top-[61px] z-40 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="relative group">
+          <div className="relative group flex-1 md:flex-none">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
             <input 
               type="text" 
               placeholder="Buscar paciente..."
-              className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-48 shadow-sm"
+              className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
               value={searchPatient}
               onChange={(e) => setSearchPatient(e.target.value)}
             />
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Procedimento:</span>
+        <div className="flex flex-wrap items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-2 flex-1 md:flex-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
             <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none min-w-[120px] cursor-pointer shadow-sm"
+              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
               value={filterProcedure}
               onChange={(e) => setFilterProcedure(e.target.value)}
             >
@@ -1128,10 +1199,10 @@ export default function App() {
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Atendimento:</span>
+          <div className="flex items-center gap-2 flex-1 md:flex-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
             <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none min-w-[120px] cursor-pointer shadow-sm"
+              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
             >
@@ -1139,10 +1210,10 @@ export default function App() {
             </select>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Financeiro:</span>
+          <div className="flex items-center gap-2 flex-1 md:flex-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
             <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none min-w-[120px] cursor-pointer shadow-sm"
+              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
               value={filterPayment}
               onChange={(e) => setFilterPayment(e.target.value)}
             >
@@ -1160,7 +1231,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -5 }}
             transition={{ duration: 0.15 }}
-            className="p-6 space-y-6 max-w-(--breakpoint-xl) mx-auto w-full"
+            className="p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl) mx-auto w-full"
           >
             {renderContent()}
           </motion.div>
@@ -1518,6 +1589,31 @@ function DocumentsView({ data, users, currentUser }: { data: DentalRecord[], use
   );
 }
 
+function MobileNavItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-4 p-4 rounded-xl transition-all group",
+        active 
+          ? "bg-brand-cyan text-white shadow-lg shadow-brand-cyan/20" 
+          : "text-slate-500 hover:bg-slate-50"
+      )}
+    >
+      <div className={cn(
+        "transition-transform group-hover:scale-110",
+        active ? "text-white" : "text-slate-400"
+      )}>
+        {icon}
+      </div>
+      <span className="text-sm font-bold">{label}</span>
+      {active && (
+        <div className="ml-auto w-1.5 h-1.5 bg-white rounded-full" />
+      )}
+    </button>
+  );
+}
+
 function RibbonItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
   return (
     <button 
@@ -1769,41 +1865,45 @@ function PatientsView({
           Cadastrar Novo
         </button>
       </div>
-      <table className="w-full text-left border-collapse">
-        <thead className="bg-white text-[10px] font-bold text-slate-400 uppercase border-b border-slate-100">
-          <tr>
-            <th className="px-4 py-3">Nome do Paciente</th>
-            <th className="px-4 py-3">Última Visita</th>
-            <th className="px-4 py-3 text-center">Procedimentos</th>
-            <th className="px-4 py-3 text-right">Investimento Total</th>
-            <th className="px-4 py-3 text-center">Ações</th>
-          </tr>
-        </thead>
-        <tbody className="text-xs font-mono text-slate-600">
-          {patients.map((p) => (
-            <tr key={p.name} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-              <td className="px-4 py-3 font-sans font-medium text-slate-900">{p.name}</td>
-              <td className="px-4 py-3">{format(parseISO(p.lastVisit), 'dd/MM/yyyy')}</td>
-              <td className="px-4 py-3 text-center">{p.procedures}</td>
-              <td className="px-4 py-3 text-right font-bold text-slate-800">{formatCurrency(p.totalSpent)}</td>
-              <td className="px-4 py-3 text-center">
-                <button 
-                  onClick={() => onOpenChart(p.name)}
-                  className="text-[10px] text-brand-cyan underline font-sans mr-3 cursor-pointer"
-                >
-                  Prontuário
-                </button>
-                <button 
-                  onClick={() => onOpenEdit(p.name)}
-                  className="text-[10px] text-slate-400 underline font-sans cursor-pointer"
-                >
-                  Editar
-                </button>
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[600px]">
+          <thead className="bg-white text-[10px] font-bold text-slate-400 uppercase border-b border-slate-100">
+            <tr>
+              <th className="px-4 py-3">Nome do Paciente</th>
+              <th className="px-4 py-3">Última Visita</th>
+              <th className="px-4 py-3 text-center">Procedimentos</th>
+              <th className="px-4 py-3 text-right">Investimento Total</th>
+              <th className="px-4 py-3 text-center">Ações</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="text-xs font-mono text-slate-600">
+            {patients.map((p) => (
+              <tr key={p.name} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 font-sans font-medium text-slate-900">{p.name}</td>
+                <td className="px-4 py-3">{format(parseISO(p.lastVisit), 'dd/MM/yyyy')}</td>
+                <td className="px-4 py-3 text-center">{p.procedures}</td>
+                <td className="px-4 py-3 text-right font-bold text-slate-800">{formatCurrency(p.totalSpent)}</td>
+                <td className="px-4 py-3 text-center">
+                  <div className="flex items-center justify-center gap-3">
+                    <button 
+                      onClick={() => onOpenChart(p.name)}
+                      className="text-[10px] text-brand-cyan underline font-sans cursor-pointer"
+                    >
+                      Prontuário
+                    </button>
+                    <button 
+                      onClick={() => onOpenEdit(p.name)}
+                      className="text-[10px] text-slate-400 underline font-sans cursor-pointer"
+                    >
+                      Editar
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -2388,7 +2488,7 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
               className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none disabled:bg-slate-50" 
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-400 font-mono text-[9px]">CPF</label>
               <input 
@@ -2476,12 +2576,13 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
   );
 }
 
-function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => void; onSave: (a: any) => void; data: DentalRecord[]; users: any[] }) {
+function AppointmentFormView({ onBack, onSave, data, users, patients }: { onBack: () => void; onSave: (a: any) => Promise<boolean>; data: DentalRecord[]; users: any[]; patients: any[] }) {
   const [paciente, setPaciente] = useState('');
   const [dataVal, setDataVal] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [dentista, setDentista] = useState('');
   const [procedimento, setProcedimento] = useState('Avaliação Inicial');
   const [valor, setValor] = useState('150');
+  const [isSaving, setIsSaving] = useState(false);
 
   const handleProcedureChange = (procName: string) => {
     setProcedimento(procName);
@@ -2491,11 +2592,14 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
     }
   };
 
-  // Get unique patients and dentists from live data
+  // Get unique patients from patients collection and historical records
   const patientList = useMemo(() => {
-    const names = new Set(data.map(m => m.paciente));
-    return Array.from(names).sort();
-  }, [data]);
+    const names = new Set([
+      ...patients.map(p => p.name),
+      ...data.map(m => m.paciente)
+    ]);
+    return Array.from(names).sort().filter(Boolean);
+  }, [data, patients]);
 
   const dentistList = useMemo(() => {
     const names = new Set(users.map(u => u.role === 'Dentista' || u.role === 'Admin' ? u.name : null).filter(Boolean));
@@ -2503,6 +2607,20 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
     if (names.size === 0) return ['Dr. Silva', 'Dra. Maria', 'Dr. Ricardo', 'Dra. Ana'];
     return Array.from(names).sort() as string[];
   }, [users]);
+
+  const handleSave = async () => {
+    if (!paciente || !dentista || !dataVal) {
+      alert('Por favor, preencha todos os campos do agendamento.');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await onSave({ paciente, data: dataVal, dentista, procedimento, valor });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-300">
@@ -2513,53 +2631,70 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
         <h2 className="text-xl font-bold text-slate-800">Novo Agendamento</h2>
       </div>
 
-      <div className="bg-white border border-slate-200 p-8 space-y-6 shadow-sm">
+      <div className="bg-white border border-slate-200 p-8 space-y-6 shadow-sm relative overflow-hidden">
+        {isSaving && (
+          <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center backdrop-blur-[1px]">
+            <div className="flex flex-col items-center gap-2">
+              <Activity className="w-8 h-8 text-brand-cyan animate-spin" />
+              <span className="text-xs font-bold text-slate-600 uppercase tracking-widest">Salvando Agendamento...</span>
+            </div>
+          </div>
+        )}
+
         <div className="space-y-4">
           <div className="space-y-1">
             <label className="text-[10px] uppercase font-bold text-slate-400">Paciente</label>
             <select 
+              disabled={isSaving}
               value={paciente}
               onChange={(e) => setPaciente(e.target.value)}
-              className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer"
+              className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50"
             >
               <option value="">Selecione um paciente...</option>
               {patientList.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-400 font-mono text-[9px]">Data</label>
               <input 
+                disabled={isSaving}
                 type="date" 
                 value={dataVal}
                 onChange={(e) => setDataVal(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer" 
+                className="w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50" 
               />
             </div>
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-400 font-mono text-[9px]">Horário</label>
-              <input type="time" className="w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer" />
+              <input 
+                disabled={isSaving}
+                type="time" 
+                className="w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50" 
+              />
             </div>
           </div>
           <div className="space-y-1">
             <label className="text-[10px] uppercase font-bold text-slate-400">Dentista Responsável</label>
             <select 
+              disabled={isSaving}
               value={dentista}
               onChange={(e) => setDentista(e.target.value)}
-              className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer"
+              className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50"
             >
               <option value="">Selecione o dentista...</option>
               {dentistList.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-50">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-50">
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-400">Procedimento</label>
               <select 
+                disabled={isSaving}
                 value={procedimento}
                 onChange={(e) => handleProcedureChange(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer"
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50"
               >
                 {PROCEDURES_OPTIONS.map(opt => (
                   <option key={opt.name} value={opt.name}>{opt.name}</option>
@@ -2569,22 +2704,24 @@ function AppointmentFormView({ onBack, onSave, data, users }: { onBack: () => vo
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-400">Valor (R$)</label>
               <input 
+                disabled={isSaving}
                 type="number" 
                 value={valor}
                 onChange={(e) => setValor(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none" 
+                className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none disabled:bg-slate-50" 
               />
             </div>
           </div>
         </div>
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
-          <button onClick={onBack} className="px-6 py-2 rounded text-xs font-bold text-slate-400 hover:bg-slate-50 transition-colors cursor-pointer">Descartar</button>
+          <button disabled={isSaving} onClick={onBack} className="px-6 py-2 rounded text-xs font-bold text-slate-400 hover:bg-slate-50 transition-colors cursor-pointer">Descartar</button>
           <button 
-            onClick={() => onSave({ paciente, data: dataVal, dentista, procedimento, valor })}
-            className="bg-brand-cyan text-white px-6 py-2 rounded text-xs font-bold shadow-sm hover:translate-y-[-1px] transition-all cursor-pointer"
+            disabled={isSaving}
+            onClick={handleSave}
+            className="bg-brand-cyan text-white px-6 py-2 rounded text-xs font-bold shadow-sm hover:translate-y-[-1px] transition-all cursor-pointer disabled:opacity-50 disabled:translate-y-0"
           >
-            Confirmar Agenda
+            {isSaving ? 'Salvando...' : 'Confirmar Agenda'}
           </button>
         </div>
       </div>
@@ -2633,18 +2770,18 @@ function AdminView({
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-left-2 duration-300">
-      <div className="bg-slate-900 text-white p-8 border border-slate-800 flex flex-col md:flex-row justify-between items-center shadow-lg gap-6">
+      <div className="bg-slate-900 text-white p-6 md:p-8 border border-slate-800 flex flex-col md:flex-row justify-between items-center shadow-lg gap-6">
         <div>
-          <h2 className="text-xl font-bold tracking-tight mb-2 uppercase italic font-serif text-brand-cyan">Gestão Estratégica</h2>
-          <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase">Controle de usuários, permissões e infraestrutura.</p>
+          <h2 className="text-xl font-bold tracking-tight mb-2 uppercase italic font-serif text-brand-cyan text-center md:text-left">Gestão Estratégica</h2>
+          <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase text-center md:text-left">Controle de usuários, permissões e infraestrutura.</p>
         </div>
         
-        <div className="flex bg-slate-800 p-1 rounded-xl shadow-inner">
+        <div className="flex bg-slate-800 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar w-full md:w-auto">
           <button 
             type="button"
             onClick={() => setActiveTab('users')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all",
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
               activeTab === 'users' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
@@ -2654,7 +2791,7 @@ function AdminView({
             type="button"
             onClick={() => setActiveTab('tickets')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all",
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
               activeTab === 'tickets' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
@@ -2664,7 +2801,7 @@ function AdminView({
             type="button"
             onClick={() => setActiveTab('settings')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all",
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
               activeTab === 'settings' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
@@ -2674,7 +2811,7 @@ function AdminView({
             type="button"
             onClick={() => setActiveTab('import')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all",
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
               activeTab === 'import' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
