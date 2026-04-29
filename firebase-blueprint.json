@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "ClinicalRecord": {
+      "title": "ClinicalRecord",
+      "description": "A dental clinical record or appointment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "string", "format": "date" },
+        "paciente": { "type": "string" },
+        "procedimento": { "type": "string" },
+        "dentista": { "type": "string" },
+        "status": { "type": "string", "enum": ["Realizado", "Agendado", "Cancelado", "Pendente"] },
+        "statusPagamento": { "type": "string", "enum": ["Pago", "Pendente", "Atrasado"] },
+        "valor": { "type": "number" }
+      },
+      "required": ["id", "data", "paciente", "procedimento", "dentista", "status", "statusPagamento", "valor"]
+    },
+    "AppUser": {
+      "title": "AppUser",
+      "description": "A system user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "modules": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" }
+      },
+      "required": ["id", "name", "role", "modules", "username", "password"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A notification alert for users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "warning", "error", "success"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "message", "type", "read", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "A technical support ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pendente", "Em Analise", "Resolvido"] },
+        "assignedTo": { "type": "string" },
+        "assignedToName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" }
+      },
+      "required": ["id", "userId", "description", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/records/{recordId}": {
+      "schema": "ClinicalRecord",
+      "description": "Collection of dental records"
+    },
+    "/users/{userId}": {
+      "schema": "AppUser",
+      "description": "Collection of application users"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User notifications"
+    },
+    "/support_tickets/{ticketId}": {
+      "schema": "SupportTicket",
+      "description": "Technical support tickets"
+    }
+  }
+}

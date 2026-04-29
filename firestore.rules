@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'andreb202121@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Admin'
+      );
+    }
+
+    function isDentista() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Dentista';
+    }
+
+    function isRecepcionista() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Recepcionista';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Records Rules
+    match /records/{recordId} {
+      allow read, write: if true;
+    }
+
+    // User Rules
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /users_by_uid/{uid} {
+      allow read, write: if true;
+    }
+
+    match /notifications/{notificationId} {
+      allow read, write: if true;
+    }
+
+    match /support_tickets/{ticketId} {
+      allow read, write: if true;
+    }
+  }
+}
