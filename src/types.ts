@@ -15,6 +15,8 @@ export interface DentalRecord {
   status: ProcedureStatus;
   statusPagamento: PaymentStatus;
   valor: number;
+  reminderSent?: boolean;
+  reminderSentAt?: string;
 }
 
 export interface MetricCard {

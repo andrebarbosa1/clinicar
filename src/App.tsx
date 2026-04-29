@@ -166,6 +166,16 @@ export default function App() {
   const [supportDescription, setSupportDescription] = useState('');
   const [isSendingTicket, setIsSendingTicket] = useState(false);
   const [tickets, setTickets] = useState<any[]>([]);
+  const [patients, setPatients] = useState<any[]>([]);
+
+  React.useEffect(() => {
+    const q = query(collection(db, 'patients'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPatients(list);
+    });
+    return () => unsubscribe();
+  }, []);
 
   React.useEffect(() => {
     const q = query(collection(db, 'support_tickets'));
@@ -501,7 +511,19 @@ export default function App() {
     
     try {
       console.log("Processando cadastro de paciente no Firestore...");
+      // Save record
       await setDoc(doc(db, 'records', record.id), record);
+
+      // Save patient contact info
+      const patientId = `pat-${Date.now()}`;
+      await setDoc(doc(db, 'patients', patientId), {
+        id: patientId,
+        name: newPatient.name,
+        email: newPatient.email,
+        phone: newPatient.phone,
+        cpf: newPatient.cpf,
+        createdAt: new Date().toISOString()
+      });
 
       // Notify the dentist about new patient (initial evaluation)
       const dentist = users.find(u => u.name === record.dentista);
@@ -599,6 +621,38 @@ export default function App() {
       await setDoc(doc(db, 'records', id), { statusPagamento: newStatus }, { merge: true });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, 'records/' + id);
+    }
+  };
+
+  const handleSendManualReminder = async (record: DentalRecord) => {
+    const patient = patients.find(p => p.name === record.paciente);
+    if (!patient || !patient.email) {
+      alert("Este paciente não tem um e-mail cadastrado.");
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/send-reminder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordId: record.id,
+          patientEmail: patient.email,
+          patientName: record.paciente,
+          date: record.data,
+          time: "conforme agendado"
+        })
+      });
+
+      if (response.ok) {
+        alert(`Lembrete enviado para ${patient.email}!`);
+      } else {
+        const err = await response.json();
+        alert(`Erro ao enviar: ${err.error || 'Serviço de e-mail não configurado'}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao conectar com o servidor.");
     }
   };
 
@@ -816,7 +870,7 @@ export default function App() {
           />
         );
       case 'Agenda':
-        return <AgendaView data={filteredData} fullData={data} onAdd={() => setSubPage('NovoAgendamento')} onStart={handleStartConsultation} onFinish={handleFinishConsultation} onCancel={handleCancelAppointment} />;
+        return <AgendaView data={filteredData} fullData={data} onAdd={() => setSubPage('NovoAgendamento')} onStart={handleStartConsultation} onFinish={handleFinishConsultation} onCancel={handleCancelAppointment} onSendReminder={handleSendManualReminder} />;
       case 'Financeiro':
         return canAccessFinance ? <FinanceView data={filteredData} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Equipe':
@@ -1760,14 +1814,16 @@ function AgendaView({
   onAdd, 
   onStart, 
   onFinish, 
-  onCancel 
+  onCancel,
+  onSendReminder
 }: { 
   data: DentalRecord[]; 
   fullData: DentalRecord[];
   onAdd: () => void; 
   onStart: (id: string) => void; 
   onFinish: (id: string) => void; 
-  onCancel: (id: string) => void 
+  onCancel: (id: string) => void;
+  onSendReminder: (record: DentalRecord) => void;
 }) {
   const upcoming = data.filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento');
   const cancelled = fullData.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
@@ -1804,6 +1860,16 @@ function AgendaView({
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-[10px] bg-white px-1.5 border border-slate-100 rounded text-slate-400 font-bold">{apt.dentista}</span>
                   <StatusBadge status={apt.status} />
+                  <button 
+                    onClick={() => onSendReminder(apt)}
+                    className={cn(
+                      "p-1 transition-colors",
+                      (apt as any).reminderSent ? "text-emerald-500" : "text-slate-300 hover:text-brand-cyan"
+                    )}
+                    title={(apt as any).reminderSent ? `Enviado em: ${new Date((apt as any).reminderSentAt).toLocaleString()}` : "Enviar Lembrete por E-mail"}
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                  </button>
                 </div>
 
                 <div className="flex gap-2">
