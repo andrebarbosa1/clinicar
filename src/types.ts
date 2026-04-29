@@ -9,6 +9,7 @@ export type PaymentStatus = 'Pago' | 'Pendente' | 'Atrasado';
 export interface DentalRecord {
   id: string;
   data: string;
+  horario?: string;
   paciente: string;
   procedimento: string;
   dentista: string;

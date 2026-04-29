@@ -38,7 +38,11 @@ import {
   MessageSquare,
   Cpu,
   Upload,
-  Menu
+  Menu,
+  Mail,
+  MailOpen,
+  MessageCircle,
+  Phone
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -169,6 +173,7 @@ export default function App() {
   const [tickets, setTickets] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [editingPatientEmail, setEditingPatientEmail] = useState<{patientName: string; appointmentId: string} | null>(null);
 
   React.useEffect(() => {
     const q = query(collection(db, 'patients'));
@@ -357,57 +362,76 @@ export default function App() {
     seed();
   }, [isAuthReady, isAuthenticated, users.length, data.length]);
 
-  // Firebase Auth & Initial Listeners
+  // Consolidated Auth & Context Listeners
   React.useEffect(() => {
-    // Check for existing session or just set ready
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      console.log("Auth state changed:", user?.uid);
+    let unsubUsers = () => {};
+    let unsubRecords = () => {};
+
+    // Initial auth check to recover session
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      console.log("Auth state event:", user?.uid);
+      
+      if (user) {
+        const savedSession = localStorage.getItem('odonto_session');
+        if (savedSession) {
+          try {
+            const sessionData = JSON.parse(savedSession);
+            setCurrentUser(sessionData);
+            setIsAuthenticated(true);
+            
+            // Re-verify the mapping in Firestore
+            const mappingRef = doc(db, 'users_by_uid', user.uid);
+            const mappingSnap = await getDoc(mappingRef);
+            if (!mappingSnap.exists()) {
+              console.log("Restoring security mapping...");
+              await setDoc(mappingRef, {
+                userDocId: sessionData.id,
+                name: sessionData.name,
+                role: sessionData.role,
+                updatedAt: new Date().toISOString()
+              });
+            }
+          } catch (e) {
+            console.error("Session restoration error:", e);
+          }
+        }
+      }
+      
+      // Only set ready after we've had a chance to try session recovery
       setIsAuthReady(true);
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubAuth();
+    };
   }, []);
 
-  // 2. Real-time Listeners (Reactive to Auth and Role)
+  // 2. Data Listeners (Reactive to Auth Readiness and User Role)
   React.useEffect(() => {
     if (!isAuthReady) return;
 
-    console.log("Iniciando monitoramento de usuários no Firestore...");
-    // Users sync - Allowed for any user (now public read)
+    // Users sync (Always active if authenticated or about to be)
+    console.log("Starting users monitor...");
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       const u = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
-      console.log("Usuários sincronizados do Firestore:", u.length, u.map((user: any) => user.username));
-      
-      // If we have users in Firestore, use them. 
-      // We also merge with INITIAL_USERS to ensure defaults always work
       const mergedUsers = [...u];
       INITIAL_USERS.forEach((initial: any) => {
         const index = mergedUsers.findIndex(m => m.id === initial.id || m.username === initial.username);
-        if (index !== -1) {
-          // Ensure core credentials from INITIAL_USERS take precedence if there's a conflict
-          mergedUsers[index] = { ...mergedUsers[index], ...initial };
-        } else {
-          mergedUsers.push(initial);
-        }
+        if (index !== -1) mergedUsers[index] = { ...mergedUsers[index], ...initial };
+        else mergedUsers.push(initial);
       });
-      
       setUsers(mergedUsers);
     }, (error) => {
-      console.error("Erro crítico na sincronização de usuários:", error);
-      // Fallback to initial users on error so UI doesn't break
+      console.error("Users sync error:", error);
       setUsers(INITIAL_USERS);
     });
 
     let unsubRecords = () => {};
-
-    // Records sync - Conditional on Role/Authentication
     if (isAuthenticated && currentUser) {
       let recordsQuery;
-      
       if (currentUser.role === 'Admin' || currentUser.role === 'Recepcionista') {
-        // Admin/Recepcionists see everything
         recordsQuery = collection(db, 'records');
       } else if (currentUser.role === 'Dentista') {
-        // Dentists see only their own
         recordsQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
       }
 
@@ -420,15 +444,8 @@ export default function App() {
         }, (error) => {
           console.error("Records sync error:", error);
           setIsLoadingData(false);
-          // If we get permission error, it might be due to session desync or rule updates
-          if (error.message.includes('permissions')) {
-            console.warn("Permission denied for records sync. Might need fresh login.");
-          }
         });
       }
-    } else {
-      // If not "logically" authenticated (still in login screen), don't try to sync sensitive records
-      setData([]);
     }
 
     return () => {
@@ -436,40 +453,6 @@ export default function App() {
       unsubRecords();
     };
   }, [isAuthReady, isAuthenticated, currentUser?.role, currentUser?.name]);
-
-  // Sync session if already signed in
-  React.useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        // Try to recover session if user was already fully authenticated
-        const savedSession = localStorage.getItem('odonto_session');
-        if (savedSession) {
-          try {
-            const sessionData = JSON.parse(savedSession);
-            setCurrentUser(sessionData);
-            setIsAuthenticated(true);
-            
-            // Re-verify the mapping in Firestore if needed
-            if (user && sessionData.id) {
-              const mappingRef = doc(db, 'users_by_uid', user.uid);
-              const mappingSnap = await getDoc(mappingRef);
-              if (!mappingSnap.exists()) {
-                console.log("Restaurando mapeamento de segurança...");
-                await setDoc(mappingRef, {
-                  userDocId: sessionData.id,
-                  name: sessionData.name,
-                  role: sessionData.role,
-                  updatedAt: new Date().toISOString()
-                });
-              }
-            }
-          } catch (e) {
-            console.error("Erro ao restaurar sessão:", e);
-          }
-        }
-      }
-    });
-  }, []);
 
   // Notifications Listener
   React.useEffect(() => {
@@ -560,6 +543,7 @@ export default function App() {
     const record: DentalRecord = {
       id: `rec-new-${Date.now()}`,
       data: newAppt.data,
+      horario: newAppt.horario || '',
       paciente: newAppt.paciente,
       procedimento: newAppt.procedimento || 'Avaliação',
       dentista: newAppt.dentista,
@@ -628,10 +612,48 @@ export default function App() {
     }
   };
 
+  const handleSavePatientEmail = async (patientName: string, email: string) => {
+    try {
+      const patient = patients.find(p => p.name === patientName);
+      const patientId = patient?.id || patientName.toLowerCase().replace(/\s+/g, '-');
+      
+      await setDoc(doc(db, 'patients', patientId), {
+        name: patientName,
+        email: email,
+        updatedAt: new Date().toISOString(),
+        id: patientId
+      }, { merge: true });
+
+      alert("E-mail cadastrado com sucesso!");
+      
+      // If we were trying to send a reminder, trigger it again
+      if (editingPatientEmail?.appointmentId) {
+        const record = data.find(r => r.id === editingPatientEmail.appointmentId);
+        if (record) {
+          // We need to wait a bit for the state to sync or just manually call the reminder with the new email
+          // For simplicity, let's just close the modal and tell them to click the bell again
+          // Actually, let's try to trigger it
+          setEditingPatientEmail(null);
+          setTimeout(() => {
+            handleSendManualReminder({ ...record });
+          }, 500);
+        } else {
+          setEditingPatientEmail(null);
+        }
+      } else {
+        setEditingPatientEmail(null);
+      }
+    } catch (error) {
+      console.error("Erro ao salvar e-mail:", error);
+      alert("Erro ao salvar e-mail.");
+    }
+  };
+
   const handleSendManualReminder = async (record: DentalRecord) => {
     const patient = patients.find(p => p.name === record.paciente);
+    
     if (!patient || !patient.email) {
-      alert("Este paciente não tem um e-mail cadastrado.");
+      setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id });
       return;
     }
 
@@ -657,6 +679,49 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert("Erro ao conectar com o servidor.");
+    }
+  };
+
+  const handleWhatsAppReminder = (record: DentalRecord) => {
+    console.log("Acionando lembrete WhatsApp para:", record.paciente);
+    
+    // Procura o paciente ignorando caixa (case-insensitive)
+    const patient = patients.find(p => p.name.toLowerCase().trim() === record.paciente.toLowerCase().trim());
+    
+    console.log("Resultado da busca do paciente:", patient ? "Encontrado" : "Não encontrado");
+    
+    // Buscando telefone no cadastro do paciente. Se não houver, pede para cadastrar.
+    const phone = patient?.phone || patient?.telefone || patient?.celular || '';
+    
+    if (!phone) {
+      console.warn("Telefone não encontrado para o paciente:", record.paciente);
+      alert(`O paciente "${record.paciente}" não tem um telefone cadastrado.\n\nPor favor, vá em 'Pacientes', edite o cadastro e adicione um número de celular.`);
+      return;
+    }
+
+    const timeStr = record.horario ? ` às ${record.horario}` : '';
+    const message = `Olá ${record.paciente}, aqui é da Clínica Odontológica. Confirmando sua consulta de ${record.procedimento} para o dia ${format(parseISO(record.data), "dd/MM")}${timeStr} com ${record.dentista}. Podemos confirmar?`;
+    const encodedMessage = encodeURIComponent(message);
+    
+    // Remove caracteres não numéricos e garante o DDI 55 (Brasil) se não houver
+    const cleanPhone = phone.replace(/\D/g, '');
+    let finalPhone = cleanPhone;
+    
+    if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+      finalPhone = `55${cleanPhone}`;
+    } else if (cleanPhone.length < 10) {
+      alert("O telefone cadastrado parece estar incompleto ou incorreto. Verifique o cadastro do paciente.");
+      return;
+    }
+    
+    const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodedMessage}`;
+    console.log("Abrindo URL do WhatsApp:", whatsappUrl);
+    
+    // Tenta abrir em nova aba
+    const win = window.open(whatsappUrl, '_blank');
+    if (!win) {
+      // Se o bloqueador de popups impedir, avisa o usuário
+      alert("O seu navegador bloqueou a abertura do WhatsApp. Por favor, permita pop-ups para este site ou utilize um link direto.");
     }
   };
 
@@ -857,7 +922,7 @@ export default function App() {
                 <span className="text-[10px] font-bold text-brand-cyan uppercase tracking-widest">Sincronizando dados em tempo real...</span>
               </div>
             )}
-            <DashboardView filteredData={filteredData} />
+            <DashboardView filteredData={filteredData} onSendWhatsApp={handleWhatsAppReminder} />
           </div>
         );
       case 'Retorno':
@@ -874,7 +939,17 @@ export default function App() {
           />
         );
       case 'Agenda':
-        return <AgendaView data={filteredData} fullData={data} onAdd={() => setSubPage('NovoAgendamento')} onStart={handleStartConsultation} onFinish={handleFinishConsultation} onCancel={handleCancelAppointment} onSendReminder={handleSendManualReminder} />;
+        return <AgendaView 
+          data={filteredData} 
+          fullData={data} 
+          onAdd={() => setSubPage('NovoAgendamento')} 
+          onStart={handleStartConsultation} 
+          onFinish={handleFinishConsultation} 
+          onCancel={handleCancelAppointment} 
+          onSendReminder={handleSendManualReminder}
+          onSendWhatsApp={handleWhatsAppReminder}
+          onEditEmail={(record) => setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id })}
+        />;
       case 'Financeiro':
         return canAccessFinance ? <FinanceView data={filteredData} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Equipe':
@@ -882,12 +957,20 @@ export default function App() {
       case 'Administração':
         return canAccessAdmin ? <AdminView users={users} onAddUser={handleCreateUser} tickets={tickets} onOpenSupport={handleSupportTicket} onUpdateTicket={handleUpdateTicketStatus} currentUser={currentUser} initialTab={subPage === 'Suporte' ? 'tickets' : 'users'} /> : <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>;
       default:
-        return <DashboardView filteredData={filteredData} />;
+        return <DashboardView filteredData={filteredData} onSendWhatsApp={handleWhatsAppReminder} />;
     }
   };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
+      {editingPatientEmail && (
+        <EmailModal 
+          patientName={editingPatientEmail.patientName} 
+          onClose={() => setEditingPatientEmail(null)} 
+          onSave={handleSavePatientEmail} 
+        />
+      )}
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0">
         <div className="flex items-center gap-4 md:gap-6">
@@ -1636,7 +1719,13 @@ function RibbonItem({ icon, label, active = false, onClick }: { icon: React.Reac
   );
 }
 
-function DashboardView({ filteredData }: { filteredData: DentalRecord[] }) {
+function DashboardView({ 
+  filteredData,
+  onSendWhatsApp
+}: { 
+  filteredData: DentalRecord[];
+  onSendWhatsApp: (record: DentalRecord) => void;
+}) {
   // Metrics
   const metrics = useMemo(() => {
     const totalValue = filteredData.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
@@ -1805,6 +1894,7 @@ function DashboardView({ filteredData }: { filteredData: DentalRecord[] }) {
                   <th className="px-4 py-2">Procedimento</th>
                   <th className="px-4 py-2 text-right">Valor</th>
                   <th className="px-4 py-2 text-center">Status</th>
+                  <th className="px-4 py-2 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="text-xs font-mono text-slate-600">
@@ -1816,6 +1906,15 @@ function DashboardView({ filteredData }: { filteredData: DentalRecord[] }) {
                     <td className="px-4 py-2 text-right">{formatCurrency(record.valor)}</td>
                     <td className="px-4 py-2 text-center">
                       <StatusBadge status={record.status} />
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); onSendWhatsApp(record); }}
+                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors cursor-pointer"
+                        title="Enviar WhatsApp"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -1915,7 +2014,9 @@ function AgendaView({
   onStart, 
   onFinish, 
   onCancel,
-  onSendReminder
+  onSendReminder,
+  onSendWhatsApp,
+  onEditEmail
 }: { 
   data: DentalRecord[]; 
   fullData: DentalRecord[];
@@ -1924,6 +2025,8 @@ function AgendaView({
   onFinish: (id: string) => void; 
   onCancel: (id: string) => void;
   onSendReminder: (record: DentalRecord) => void;
+  onSendWhatsApp: (record: DentalRecord) => void;
+  onEditEmail: (record: DentalRecord) => void;
 }) {
   const upcoming = data.filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento');
   const cancelled = fullData.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
@@ -1961,14 +2064,31 @@ function AgendaView({
                   <span className="text-[10px] bg-white px-1.5 border border-slate-100 rounded text-slate-400 font-bold">{apt.dentista}</span>
                   <StatusBadge status={apt.status} />
                   <button 
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onSendWhatsApp(apt); }}
+                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-full transition-all cursor-pointer shadow-sm border border-emerald-100/50 active:scale-95 z-10"
+                    title="Enviar Lembrete por WhatsApp"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 pointer-events-none" />
+                  </button>
+                  <button 
                     onClick={() => onSendReminder(apt)}
                     className={cn(
-                      "p-1 transition-colors",
-                      (apt as any).reminderSent ? "text-emerald-500" : "text-slate-300 hover:text-brand-cyan"
+                      "p-1.5 transition-all rounded-full cursor-pointer border shadow-sm active:scale-95",
+                      (apt as any).reminderSent 
+                        ? "text-emerald-600 border-emerald-100 bg-emerald-50" 
+                        : "text-slate-400 border-slate-100 hover:bg-slate-50 hover:text-brand-cyan"
                     )}
                     title={(apt as any).reminderSent ? `Enviado em: ${new Date((apt as any).reminderSentAt).toLocaleString()}` : "Enviar Lembrete por E-mail"}
                   >
                     <Bell className="w-3.5 h-3.5" />
+                  </button>
+                  <button 
+                    onClick={() => onEditEmail(apt)}
+                    className="p-1.5 text-slate-400 hover:text-brand-cyan hover:bg-slate-50 rounded-full transition-all cursor-pointer border border-slate-100 shadow-sm active:scale-95"
+                    title="Cadastrar/Editar E-mail do Paciente"
+                  >
+                    <MailOpen className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
@@ -2383,68 +2503,298 @@ function SettingsView() {
   );
 }
 
+function Tooth({ 
+  number, 
+  status = 'Normal', 
+  onClick 
+}: { 
+  number: number; 
+  status?: string; 
+  onClick: () => void;
+  key?: number | string;
+}) {
+  const getStatusColor = (s: string) => {
+    switch(s) {
+      case 'Cárie': return 'bg-red-500 border-red-700';
+      case 'Extraído': return 'bg-slate-800 border-slate-900 opacity-20';
+      case 'Restauração': return 'bg-emerald-500 border-emerald-700';
+      case 'Endodontia': return 'bg-purple-500 border-purple-700';
+      default: return 'bg-white border-slate-200';
+    }
+  };
+
+  return (
+    <div 
+      onClick={onClick}
+      className={cn(
+        "w-8 h-10 border-2 rounded-sm cursor-pointer flex items-center justify-center text-[10px] font-bold transition-all hover:scale-110 shrink-0",
+        getStatusColor(status),
+        status === 'Normal' ? 'text-slate-400' : 'text-white'
+      )}
+      title={`Dente ${number}: ${status}`}
+    >
+      {number}
+    </div>
+  );
+}
+
+function Odontogram({ 
+  patientName,
+  onUpdate 
+}: { 
+  patientName: string;
+  onUpdate?: () => void;
+}) {
+  const [data, setData] = useState<Record<number, string>>({});
+  const [selectedTooth, setSelectedTooth] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  React.useEffect(() => {
+    const docRef = doc(db, 'odontograms', patientName.toLowerCase().replace(/\s+/g, '-'));
+    const unsub = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setData(docSnap.data().teeth || {});
+      }
+      setLoading(false);
+    });
+    return unsub;
+  }, [patientName]);
+
+  const handleUpdateTooth = async (status: string) => {
+    if (selectedTooth === null) return;
+    
+    const patientId = patientName.toLowerCase().replace(/\s+/g, '-');
+    const newData = { ...data, [selectedTooth]: status };
+    
+    try {
+      await setDoc(doc(db, 'odontograms', patientId), {
+        patientName,
+        teeth: newData,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      setData(newData);
+      setSelectedTooth(null);
+      if (onUpdate) onUpdate();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const upperRight = [18, 17, 16, 15, 14, 13, 12, 11];
+  const upperLeft = [21, 22, 23, 24, 25, 26, 27, 28];
+  const lowerRight = [48, 47, 46, 45, 44, 43, 42, 41];
+  const lowerLeft = [31, 32, 33, 34, 35, 36, 37, 38];
+
+  if (loading) return <div className="h-40 flex items-center justify-center text-slate-400 text-xs">Carregando Odontograma...</div>;
+
+  return (
+    <div className="bg-white p-6 rounded-2xl border border-slate-200">
+      <div className="flex flex-col items-center gap-8 relative overflow-x-auto pb-4 custom-scrollbar">
+        
+        {/* Upper Arch */}
+        <div className="flex gap-4 min-w-max">
+          <div className="flex gap-1">
+            {upperRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
+          </div>
+          <div className="w-[1px] bg-slate-200 h-10"></div>
+          <div className="flex gap-1">
+            {upperLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
+          </div>
+        </div>
+
+        {/* Lower Arch */}
+        <div className="flex gap-4 min-w-max">
+          <div className="flex gap-1">
+            {lowerRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
+          </div>
+          <div className="w-[1px] bg-slate-200 h-10"></div>
+          <div className="flex gap-1">
+            {lowerLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
+          </div>
+        </div>
+
+        {/* Floating Menu for Selected Tooth */}
+        <AnimatePresence>
+          {selectedTooth && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 10 }}
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white shadow-2xl border border-slate-200 p-4 rounded-xl z-10 w-48"
+            >
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Dente {selectedTooth}</span>
+                <button onClick={() => setSelectedTooth(null)} className="p-1 hover:bg-slate-50 rounded-full transition-colors">
+                  <X className="w-3 h-3 text-slate-300 hover:text-slate-600" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-1">
+                {['Normal', 'Cárie', 'Extraído', 'Restauração', 'Endodontia'].map(status => (
+                  <button 
+                    key={status}
+                    onClick={() => handleUpdateTooth(status)}
+                    className={cn(
+                      "text-left px-3 py-1.5 rounded text-[10px] font-bold transition-all",
+                      data[selectedTooth] === status ? "bg-brand-cyan text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"
+                    )}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <div className="flex flex-wrap justify-center gap-4 text-[9px] uppercase font-bold text-slate-400 mt-4 border-t border-slate-50 pt-4 w-full">
+          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div> Cárie</div>
+          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-slate-800 rounded-full opacity-20"></div> Extraído</div>
+          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div> Restauração</div>
+          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-purple-500 rounded-full"></div> Endodontia</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MedicalChartView({ patientName, data, onBack }: { patientName: string; data: DentalRecord[]; onBack: () => void }) {
+  const [activeTab, setActiveTab] = useState<'timeline' | 'odontogram' | 'info'>('timeline');
   const patientHistory = data.filter(r => r.paciente === patientName);
   const totalSpent = patientHistory.reduce((s, r) => s + r.valor, 0);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-      <div className="flex items-center gap-4">
-        <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full cursor-pointer transition-colors">
-          <ArrowLeft className="w-5 h-5 text-slate-600" />
-        </button>
-        <div>
-          <h2 className="text-xl font-bold font-serif italic text-slate-800">{patientName}</h2>
-          <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Prontuário Digital</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full cursor-pointer transition-colors">
+            <ArrowLeft className="w-5 h-5 text-slate-600" />
+          </button>
+          <div>
+            <h2 className="text-xl font-bold font-serif italic text-slate-800">{patientName}</h2>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Prontuário Digital</p>
+          </div>
+        </div>
+        <div className="bg-emerald-50 border border-emerald-100 px-4 py-2 rounded-xl text-right">
+           <div className="text-[9px] text-emerald-600 uppercase font-bold">Investimento Total</div>
+           <div className="text-lg font-bold text-emerald-800 font-mono">{formatCurrency(totalSpent)}</div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white border border-slate-200 p-6 space-y-4 shadow-sm">
-          <h3 className="text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100 pb-2">Informações Cadastrais</h3>
-          <div className="space-y-3 font-mono">
-            <div>
-              <div className="text-[9px] text-slate-400 uppercase">CPF</div>
-              <div className="text-sm">123.456.789-00</div>
-            </div>
-            <div>
-              <div className="text-[9px] text-slate-400 uppercase">Data Nasc.</div>
-              <div className="text-sm">15/05/1985</div>
-            </div>
-            <div>
-              <div className="text-[9px] text-slate-400 uppercase">Telefone</div>
-              <div className="text-sm">(11) 98888-7777</div>
+      <div className="flex gap-2 p-1 bg-slate-100 rounded-xl w-fit">
+        {[
+          { id: 'timeline', label: 'Histórico', icon: Activity },
+          { id: 'odontogram', label: 'Odontograma', icon: ClipboardList },
+          { id: 'info', label: 'Informações', icon: User }
+        ].map(tab => (
+          <button 
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id as any)}
+            className={cn(
+              "px-6 py-2 text-[10px] font-bold uppercase tracking-widest transition-all rounded-lg flex items-center gap-2",
+              activeTab === tab.id 
+                ? "bg-white text-brand-cyan shadow-sm" 
+                : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            <tab.icon className={cn("w-3.5 h-3.5", activeTab === tab.id ? "text-brand-cyan" : "text-slate-400")} />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-[400px]">
+        {activeTab === 'timeline' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-12 space-y-4">
+              {patientHistory.length === 0 ? (
+                <div className="py-20 text-center bg-white border border-slate-200 border-dashed rounded-2xl">
+                  <Activity className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                  <p className="text-slate-400 text-sm font-medium">Nenhum histórico registrado para este paciente.</p>
+                </div>
+              ) : (
+                patientHistory.map((record, i) => (
+                  <div key={record.id} className="relative pl-8 pb-8 last:pb-0">
+                    {i !== patientHistory.length - 1 && <div className="absolute left-[11px] top-6 bottom-0 w-[2px] bg-slate-100"></div>}
+                    <div className="absolute left-0 top-1.5 w-[24px] h-[24px] bg-white border-2 border-brand-cyan rounded-full flex items-center justify-center">
+                      <Activity className="w-3 h-3 text-brand-cyan" />
+                    </div>
+                    <div className="bg-white border border-slate-200 p-4 rounded-xl hover:shadow-md transition-shadow">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-800">{record.procedimento}</h4>
+                          <p className="text-[10px] text-slate-400 font-bold">{format(parseISO(record.data), "dd 'de' MMMM, yyyy", { locale: ptBR })} • {record.horario}</p>
+                        </div>
+                        <StatusBadge status={record.status} />
+                      </div>
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-50 mt-3">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{record.dentista}</span>
+                        <span className="text-xs font-bold text-slate-800">{formatCurrency(record.valor)}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        </div>
+        )}
 
-        <div className="md:col-span-2 bg-white border border-slate-200 p-6 space-y-4 shadow-sm">
-          <h3 className="text-[10px] uppercase font-bold text-slate-400 border-b border-slate-100 pb-2">Histórico Clínico</h3>
-          <div className="space-y-4 max-h-[300px] overflow-auto pr-2 custom-scrollbar">
-            {patientHistory.map((h, i) => (
-              <div key={i} className="flex gap-4 border-l-2 border-slate-100 pl-4 relative">
-                <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-brand-cyan"></div>
-                <div className="flex-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[10px] font-bold text-slate-900">{h.procedimento}</span>
-                    <span className="text-[9px] text-slate-400 font-mono">{format(parseISO(h.data), 'dd/MM/yyyy')}</span>
-                  </div>
-                  <p className="text-[10px] text-slate-500 mt-1">Dentista: {h.dentista} - Status: {h.status}</p>
+        {activeTab === 'odontogram' && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-top-1 duration-300">
+             <Odontogram patientName={patientName} />
+             <div className="bg-amber-50 border border-amber-100 p-6 rounded-2xl flex gap-4">
+                <div className="bg-amber-100 p-3 rounded-xl h-fit">
+                  <ClipboardList className="w-6 h-6 text-amber-600" />
+                </div>
+                <div>
+                  <h4 className="text-amber-800 font-bold text-sm mb-1 uppercase tracking-tight">Como utilizar o Odontograma</h4>
+                  <p className="text-[11px] text-amber-700/80 leading-relaxed font-medium">
+                    O odontograma é a representação visual da boca do paciente. 
+                    <br/>- Clique em qualquer dente para abrir o menu de status.
+                    <br/>- Marque Cáries, Restaurações ou Extrações para manter o histórico visual atualizado.
+                    <br/>- As alterações ficam salvas permanentemente no banco de dados da clínica.
+                  </p>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {activeTab === 'info' && (
+          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm animate-in fade-in duration-300">
+            <div className="bg-slate-50 border-b border-slate-100 px-6 py-4">
+              <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Informações Pessoais</h3>
+            </div>
+            <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">CPF</label>
+                <div className="text-sm font-bold text-slate-800">123.456.789-00</div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">Nascimento</label>
+                <div className="text-sm font-bold text-slate-800">15/05/1985 (39 anos)</div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">Gênero</label>
+                <div className="text-sm font-bold text-slate-800">Feminino</div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">Celular / WhatsApp</label>
+                <div className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  (11) 98888-7777 
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
                 </div>
               </div>
-            ))}
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">E-mail</label>
+                <div className="text-sm font-bold text-slate-800 truncate">paciente.exemplo@provedor.com</div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] uppercase font-bold text-slate-400">Ultima Visita</label>
+                <div className="text-sm font-bold text-slate-800">Há 2 meses</div>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-
-      <div className="bg-white border border-slate-200 p-6 shadow-sm">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-[10px] uppercase font-bold text-slate-400">Resumo Financeiro</h3>
-          <div className="text-sm font-bold text-emerald-600 font-mono">Total Investido: {formatCurrency(totalSpent)}</div>
-        </div>
-        <div className="h-2 w-full bg-slate-50 rounded-full overflow-hidden">
-          <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: '100%' }}></div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -3575,6 +3925,93 @@ function PublicBookingView({ onBack, users }: { onBack: () => void; users: any[]
           Ambiente Seguro | Agendamento via ClinicalGate Cloud
         </p>
       </div>
+    </div>
+  );
+}
+
+function EmailModal({ 
+  patientName, 
+  onClose, 
+  onSave 
+}: { 
+  patientName: string; 
+  onClose: () => void; 
+  onSave: (name: string, email: string) => Promise<void> 
+}) {
+  const [email, setEmail] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!email || !email.includes('@')) return;
+    setIsSaving(true);
+    try {
+      await onSave(patientName, email);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200"
+      >
+        <div className="bg-brand-cyan p-6 text-white">
+          <div className="flex items-center gap-3">
+            <Mail className="w-6 h-6" />
+            <h3 className="text-lg font-bold">Cadastrar E-mail</h3>
+          </div>
+          <p className="text-cyan-50 text-xs mt-1">O e-mail é necessário para enviar lembretes automáticos.</p>
+        </div>
+
+        <div className="p-8 space-y-6 relative">
+          {isSaving && (
+            <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center backdrop-blur-[1px]">
+              <Activity className="w-8 h-8 text-brand-cyan animate-spin" />
+            </div>
+          )}
+          <div className="space-y-1">
+            <label className="text-[10px] uppercase font-bold text-slate-400">Paciente</label>
+            <div className="text-slate-800 font-bold">{patientName}</div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] uppercase font-bold text-slate-400">Endereço de E-mail</label>
+            <div className="relative group">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+              <input 
+                autoFocus
+                disabled={isSaving}
+                type="email"
+                placeholder="exemplo@email.com"
+                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan outline-none transition-all disabled:opacity-50"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && email && handleSave()}
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <button 
+              disabled={isSaving}
+              onClick={onClose}
+              className="flex-1 px-4 py-3 rounded-xl border border-slate-200 text-slate-500 font-bold text-sm hover:bg-slate-50 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button 
+              disabled={!email || !email.includes('@') || isSaving}
+              onClick={handleSave}
+              className="flex-1 px-4 py-3 rounded-xl bg-brand-cyan text-white font-bold text-sm shadow-lg shadow-brand-cyan/20 hover:translate-y-[-2px] active:translate-y-0 transition-all disabled:opacity-50 disabled:translate-y-0"
+            >
+              {isSaving ? 'Salvando...' : 'Salvar e Enviar'}
+            </button>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }
