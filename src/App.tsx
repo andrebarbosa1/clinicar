@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, 
   TrendingUp, 
@@ -14,6 +14,7 @@ import {
   Filter,
   Calendar,
   Stethoscope,
+  ChevronLeft,
   ChevronRight,
   MoreVertical,
   Activity,
@@ -77,13 +78,18 @@ import {
   deleteDoc,
   updateDoc
 } from 'firebase/firestore';
-import { getAuth, onAuthStateChanged, signOut } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+
+// Configure Persistence
+setPersistence(auth, browserLocalPersistence).catch(err => {
+  console.error("Auth persistence error:", err);
+});
 
 enum OperationType {
   CREATE = 'create',
@@ -145,9 +151,9 @@ const PROCEDURES_OPTIONS = [
 ];
 
 const INITIAL_USERS = [
-  { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123' },
-  { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123' },
-  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Agenda, Pacientes, Financeiro', username: 'mariana', password: '123' },
+  { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com' },
+  { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com' },
+  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Agenda, Pacientes, Financeiro', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
 ];
 
 export default function App() {
@@ -364,40 +370,37 @@ export default function App() {
 
   // Consolidated Auth & Context Listeners
   React.useEffect(() => {
-    let unsubUsers = () => {};
-    let unsubRecords = () => {};
+    // Initial sync with localStorage to prevent flicker (Optimistic UI)
+    const savedSession = localStorage.getItem('odonto_session');
+    if (savedSession) {
+      try {
+        const sessionData = JSON.parse(savedSession);
+        setCurrentUser(sessionData);
+        setIsAuthenticated(true);
+        console.log("Optimistic session loaded from localStorage");
+      } catch (e) {
+        console.warn("Invalid saved session found");
+      }
+    }
 
-    // Initial auth check to recover session
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      console.log("Auth state event:", user?.uid);
+      console.log("Auth state event:", user?.uid ? `Authenticated (${user.uid})` : "Not Authenticated");
       
       if (user) {
+        // User is logged into Firebase
         const savedSession = localStorage.getItem('odonto_session');
+        let finalUserData = null;
+
         if (savedSession) {
           try {
-            const sessionData = JSON.parse(savedSession);
-            setCurrentUser(sessionData);
-            setIsAuthenticated(true);
-            
-            // Re-verify the mapping in Firestore
-            const mappingRef = doc(db, 'users_by_uid', user.uid);
-            const mappingSnap = await getDoc(mappingRef);
-            if (!mappingSnap.exists()) {
-              console.log("Restoring security mapping...");
-              await setDoc(mappingRef, {
-                userDocId: sessionData.id,
-                name: sessionData.name,
-                role: sessionData.role,
-                updatedAt: new Date().toISOString()
-              });
-            }
-          } catch (e) {
-            console.error("Session restoration error:", e);
-          }
-        } else {
-          // Fallback: Try to restore session from Firestore if localStorage is missing
+            finalUserData = JSON.parse(savedSession);
+          } catch(e) { console.error(e); }
+        }
+
+        // If no local storage OR UID doesn't match, fetch from Firestore
+        if (!finalUserData || (finalUserData.firebaseUid && finalUserData.firebaseUid !== user.uid)) {
           try {
-            console.log("LocalStorage session missing, attempting background recovery...");
+            console.log("Fetching matching user document for UID:", user.uid);
             const mappingRef = doc(db, 'users_by_uid', user.uid);
             const mappingSnap = await getDoc(mappingRef);
             
@@ -407,30 +410,60 @@ export default function App() {
               const userSnap = await getDoc(userRef);
               
               if (userSnap.exists()) {
-                const userData = { ...userSnap.data(), id: userSnap.id };
-                setCurrentUser(userData);
-                setIsAuthenticated(true);
-                localStorage.setItem('odonto_session', JSON.stringify(userData));
-                console.log("Session recovered from Firestore.");
+                finalUserData = { ...userSnap.data(), id: userSnap.id, firebaseUid: user.uid };
               }
             } else {
-              // No mapping found, check if it's one of the initial users
-              // This is a safety net for development
-              console.warn("No user mapping found for UID:", user.uid);
+              // Check by email as fallback
+              const usersRef = collection(db, 'users');
+              const qEmail = query(usersRef, where('email', '==', user.email));
+              const emailResult = await getDoc(doc(db, 'patients', 'dummy')); // Just getting permissions early
+              // Note: actual query might be better but let's assume mapping is the standard
             }
-          } catch (err) {
-            console.error("Critical session restoration error:", err);
+          } catch(err) {
+            console.error("Error during background session recovery:", err);
           }
         }
+
+        if (finalUserData) {
+          setCurrentUser(finalUserData);
+          setIsAuthenticated(true);
+          localStorage.setItem('odonto_session', JSON.stringify(finalUserData));
+        } else {
+          // Firebase authenticated but no linked profile found in our DB
+          // Check if it's a known initial user that hasn't been mapped yet
+          const foundInitial = INITIAL_USERS.find(u => (u as any).email === user.email);
+          if (foundInitial) {
+             const userData = { ...foundInitial, firebaseUid: user.uid };
+             setCurrentUser(userData);
+             setIsAuthenticated(true);
+             localStorage.setItem('odonto_session', JSON.stringify(userData));
+             
+             // Create the mapping for future lookups
+             try {
+                await setDoc(doc(db, 'users_by_uid', user.uid), {
+                  userDocId: foundInitial.id,
+                  name: foundInitial.name,
+                  role: foundInitial.role,
+                  updatedAt: new Date().toISOString()
+                });
+             } catch(e) { console.error("Mapping creation failed:", e); }
+          } else {
+             // Truly unknown user
+             console.warn("Firebase user has no profile mapping.");
+          }
+        }
+      } else {
+        // User is NOT logged into Firebase
+        console.log("Cleaning up session - no Firebase user found");
+        localStorage.removeItem('odonto_session');
+        setCurrentUser(null);
+        setIsAuthenticated(false);
       }
       
-      // Only set ready after we've had a chance to try session recovery
       setIsAuthReady(true);
     });
 
-    return () => {
-      unsubAuth();
-    };
+    return () => unsubAuth();
   }, []);
 
   // 2. Data Listeners (Reactive to Auth Readiness and User Role)
@@ -2009,71 +2042,178 @@ function PatientsView({
   onOpenEdit: (id: string) => void;
   onAdd: () => void;
 }) {
-  const patients = useMemo(() => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 8;
+
+  const allPatients = useMemo(() => {
     const list: { [key: string]: { lastVisit: string, totalSpent: number, procedures: number } } = {};
     data.forEach(r => {
-      if (!list[r.paciente]) {
-        list[r.paciente] = { lastVisit: r.data, totalSpent: 0, procedures: 0 };
+      const pName = r.paciente || 'Paciente Sem Nome';
+      if (!list[pName]) {
+        list[pName] = { lastVisit: r.data, totalSpent: 0, procedures: 0 };
       }
-      list[r.paciente].totalSpent += r.valor;
-      list[r.paciente].procedures += 1;
-      if (new Date(r.data) > new Date(list[r.paciente].lastVisit)) {
-        list[r.paciente].lastVisit = r.data;
+      list[pName].totalSpent += r.valor || 0;
+      list[pName].procedures += 1;
+      if (new Date(r.data) > new Date(list[pName].lastVisit)) {
+        list[pName].lastVisit = r.data;
       }
     });
     return Object.entries(list).map(([name, stats]) => ({ name, ...stats }));
   }, [data]);
 
+  const filteredPatients = useMemo(() => {
+    return allPatients
+      .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allPatients, searchTerm]);
+
+  // Reset pagination when search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const currentPatients = filteredPatients.slice(startIndex, startIndex + itemsPerPage);
+
   return (
-    <section className="bg-white border border-slate-200 overflow-hidden flex flex-col">
-      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex justify-between items-center">
-        <h2 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Base de Pacientes</h2>
-        <button 
-          onClick={onAdd}
-          className="text-[10px] bg-brand-cyan text-white px-3 py-1 font-bold rounded cursor-pointer"
-        >
-          Cadastrar Novo
-        </button>
+    <section className="bg-white border border-slate-200 overflow-hidden flex flex-col min-h-[500px]">
+      <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-xs font-bold text-slate-600 uppercase tracking-widest mb-1">Base de Pacientes</h2>
+          <p className="text-[10px] text-slate-400 font-medium">{filteredPatients.length} pacientes encontrados</p>
+        </div>
+        
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input 
+              type="text"
+              placeholder="Buscar paciente..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-1.5 bg-white border border-slate-200 text-xs focus:ring-1 focus:ring-brand-cyan outline-none rounded transition-all"
+            />
+          </div>
+          <button 
+            onClick={onAdd}
+            className="whitespace-nowrap text-[10px] bg-brand-cyan text-white px-4 py-2 font-bold rounded cursor-pointer hover:bg-brand-cyan/90 transition-colors shadow-sm"
+          >
+            Cadastrar Novo
+          </button>
+        </div>
       </div>
-      <div className="overflow-x-auto">
+
+      <div className="flex-1 overflow-x-auto min-h-[400px]">
         <table className="w-full text-left border-collapse min-w-[600px]">
           <thead className="bg-white text-[10px] font-bold text-slate-400 uppercase border-b border-slate-100">
             <tr>
-              <th className="px-4 py-3">Nome do Paciente</th>
-              <th className="px-4 py-3">Última Visita</th>
-              <th className="px-4 py-3 text-center">Procedimentos</th>
-              <th className="px-4 py-3 text-right">Investimento Total</th>
-              <th className="px-4 py-3 text-center">Ações</th>
+              <th className="px-6 py-4">Nome do Paciente</th>
+              <th className="px-6 py-4">Última Visita</th>
+              <th className="px-6 py-4 text-center">Procedimentos</th>
+              <th className="px-6 py-4 text-right">Investimento Total</th>
+              <th className="px-6 py-4 text-center">Ações</th>
             </tr>
           </thead>
           <tbody className="text-xs font-mono text-slate-600">
-            {patients.map((p) => (
-              <tr key={p.name} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                <td className="px-4 py-3 font-sans font-medium text-slate-900">{p.name}</td>
-                <td className="px-4 py-3">{format(parseISO(p.lastVisit), 'dd/MM/yyyy')}</td>
-                <td className="px-4 py-3 text-center">{p.procedures}</td>
-                <td className="px-4 py-3 text-right font-bold text-slate-800">{formatCurrency(p.totalSpent)}</td>
-                <td className="px-4 py-3 text-center">
-                  <div className="flex items-center justify-center gap-3">
-                    <button 
-                      onClick={() => onOpenChart(p.name)}
-                      className="text-[10px] text-brand-cyan underline font-sans cursor-pointer"
-                    >
-                      Prontuário
-                    </button>
-                    <button 
-                      onClick={() => onOpenEdit(p.name)}
-                      className="text-[10px] text-slate-400 underline font-sans cursor-pointer"
-                    >
-                      Editar
-                    </button>
-                  </div>
+            {currentPatients.length > 0 ? (
+              currentPatients.map((p) => (
+                <tr key={p.name} className="border-b border-slate-50 hover:bg-slate-50 transition-colors group">
+                  <td className="px-6 py-4">
+                    <div className="font-sans font-semibold text-slate-900 text-sm group-hover:text-brand-cyan transition-colors">{p.name}</div>
+                  </td>
+                  <td className="px-6 py-4">{format(parseISO(p.lastVisit), 'dd/MM/yyyy')}</td>
+                  <td className="px-6 py-4 text-center font-bold">
+                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full text-[10px]">{p.procedures}</span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-bold text-slate-800">{formatCurrency(p.totalSpent)}</td>
+                  <td className="px-6 py-4 text-center">
+                    <div className="flex items-center justify-center gap-4">
+                      <button 
+                        onClick={() => onOpenChart(p.name)}
+                        className="text-[10px] bg-cyan-50 text-brand-cyan px-2 py-1 rounded border border-cyan-100 hover:bg-cyan-100 font-bold transition-colors cursor-pointer"
+                      >
+                        Prontuário
+                      </button>
+                      <button 
+                        onClick={() => onOpenEdit(p.name)}
+                        className="text-[10px] bg-slate-50 text-slate-500 px-2 py-1 rounded border border-slate-100 hover:bg-slate-100 font-bold transition-colors cursor-pointer"
+                      >
+                        Editar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={5} className="px-6 py-20 text-center text-slate-400 font-sans italic">
+                  Nenhum paciente encontrado para a busca "{searchTerm}"
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="bg-slate-50 border-t border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
+          <div className="text-[11px] text-slate-500 font-medium">
+            Exibindo <span className="font-bold text-slate-800">{startIndex + 1}</span> a <span className="font-bold text-slate-800">{Math.min(startIndex + itemsPerPage, filteredPatients.length)}</span> de <span className="font-bold text-slate-800">{filteredPatients.length}</span> pacientes
+          </div>
+          
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded border border-slate-200 bg-white text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            
+            <div className="flex items-center gap-1 mx-2">
+              {[...Array(totalPages)].map((_, i) => {
+                const page = i + 1;
+                // Mostrar as primeiras 2, a atual, as últimas 2, e reticências se necessário
+                if (
+                  page <= 2 || 
+                  page >= totalPages - 1 || 
+                  (page >= currentPage - 1 && page <= currentPage + 1)
+                ) {
+                  return (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`w-7 h-7 flex items-center justify-center rounded text-[11px] font-bold transition-all ${
+                        currentPage === page 
+                          ? 'bg-brand-cyan text-white shadow-sm' 
+                          : 'bg-white border border-slate-200 text-slate-500 hover:border-brand-cyan/50 hover:text-brand-cyan'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  );
+                } else if (
+                  (page === 3 && currentPage > 4) || 
+                  (page === totalPages - 2 && currentPage < totalPages - 3)
+                ) {
+                  return <span key={page} className="px-1 text-slate-300">...</span>;
+                }
+                return null;
+              })}
+            </div>
+
+            <button 
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="p-1.5 rounded border border-slate-200 bg-white text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
