@@ -394,6 +394,33 @@ export default function App() {
           } catch (e) {
             console.error("Session restoration error:", e);
           }
+        } else {
+          // Fallback: Try to restore session from Firestore if localStorage is missing
+          try {
+            console.log("LocalStorage session missing, attempting background recovery...");
+            const mappingRef = doc(db, 'users_by_uid', user.uid);
+            const mappingSnap = await getDoc(mappingRef);
+            
+            if (mappingSnap.exists()) {
+              const mappingData = mappingSnap.data();
+              const userRef = doc(db, 'users', mappingData.userDocId);
+              const userSnap = await getDoc(userRef);
+              
+              if (userSnap.exists()) {
+                const userData = { ...userSnap.data(), id: userSnap.id };
+                setCurrentUser(userData);
+                setIsAuthenticated(true);
+                localStorage.setItem('odonto_session', JSON.stringify(userData));
+                console.log("Session recovered from Firestore.");
+              }
+            } else {
+              // No mapping found, check if it's one of the initial users
+              // This is a safety net for development
+              console.warn("No user mapping found for UID:", user.uid);
+            }
+          } catch (err) {
+            console.error("Critical session restoration error:", err);
+          }
         }
       }
       
@@ -477,53 +504,65 @@ export default function App() {
     return unsubscribe;
   }, [currentUser]);
 
-  const handleCreatePatient = async (newPatient: any): Promise<boolean> => {
+  const handleCreatePatient = async (newPatient: any, existingId?: string): Promise<boolean> => {
     if (!newPatient.name) {
       alert('Por favor, informe o nome do paciente.');
       return false;
     }
 
-    const record: DentalRecord = {
-      id: `rec-pat-${Date.now()}`,
-      data: format(new Date(), 'yyyy-MM-dd'),
-      paciente: newPatient.name,
-      procedimento: newPatient.procedimento || 'Avaliação Inicial',
-      dentista: currentUser?.name || 'Dra. Ana Silveira',
-      status: 'Pendente',
-      statusPagamento: 'Pendente',
-      valor: Number(newPatient.valor) || 0,
-    };
+    // Only create a record for NEW patients
+    if (!existingId) {
+      const record: DentalRecord = {
+        id: `rec-pat-${Date.now()}`,
+        data: format(new Date(), 'yyyy-MM-dd'),
+        paciente: newPatient.name,
+        procedimento: newPatient.procedimento || 'Avaliação Inicial',
+        dentista: currentUser?.name || 'Dra. Ana Silveira',
+        status: 'Pendente',
+        statusPagamento: 'Pendente',
+        valor: Number(newPatient.valor) || 0,
+      };
+      
+      try {
+        await setDoc(doc(db, 'records', record.id), record);
+        
+        // Notify the dentist about new patient (initial evaluation)
+        const dentist = users.find(u => u.name === record.dentista);
+        if (dentist) {
+          const dId = dentist.id || dentist.uid || dentist.firebaseUid;
+          const nId = `notif-newpat-${Date.now()}`;
+          await setDoc(doc(db, 'notifications', nId), {
+            id: nId,
+            userId: dId,
+            message: `Nova avaliação inicial: ${record.paciente}`,
+            type: 'info',
+            read: false,
+            createdAt: new Date().toISOString()
+          });
+        }
+      } catch (e) {
+        console.warn("Error creating initial record:", e);
+      }
+    }
     
     try {
-      console.log("Processando cadastro de paciente no Firestore...");
-      // Save record
-      await setDoc(doc(db, 'records', record.id), record);
-
-      // Save patient contact info
-      const patientId = `pat-${Date.now()}`;
-      await setDoc(doc(db, 'patients', patientId), {
-        id: patientId,
+      console.log(existingId ? "Updating patient..." : "Creating new patient...");
+      const patientId = existingId || `pat-${Date.now()}`;
+      
+      const patientData: any = {
         name: newPatient.name,
         email: newPatient.email,
         phone: newPatient.phone,
         cpf: newPatient.cpf,
-        createdAt: new Date().toISOString()
-      });
-
-      // Notify the dentist about new patient (initial evaluation)
-      const dentist = users.find(u => u.name === record.dentista);
-      if (dentist) {
-        const dId = dentist.id || dentist.uid || dentist.firebaseUid;
-        const nId = `notif-newpat-${Date.now()}`;
-        await setDoc(doc(db, 'notifications', nId), {
-          id: nId,
-          userId: dId,
-          message: `Nova avaliação inicial: ${record.paciente}`,
-          type: 'info',
-          read: false,
-          createdAt: new Date().toISOString()
-        });
+        updatedAt: new Date().toISOString()
+      };
+      
+      if (!existingId) {
+        patientData.id = patientId;
+        patientData.createdAt = new Date().toISOString();
       }
+
+      await setDoc(doc(db, 'patients', patientId), patientData, { merge: true });
 
       setSubPage(null);
       return true;
@@ -933,7 +972,7 @@ export default function App() {
       return <PatientFormView onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'Editar' && activePage === 'Pacientes' && selectedPatientId) {
-      return <PatientFormView isEdit patientName={selectedPatientId} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <PatientFormView isEdit patientId={selectedPatientId} patients={patients} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'NovoAgendamento' && activePage === 'Agenda') {
       return <AppointmentFormView patients={patients} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
@@ -2832,14 +2871,26 @@ function MedicalChartView({ patientName, data, onBack }: { patientName: string; 
   );
 }
 
-function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: { isEdit?: boolean; patientName?: string; onBack: () => void; onSave: (p: any) => Promise<boolean> }) {
-  const [name, setName] = useState(patientName);
-  const [cpf, setCpf] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
+function PatientFormView({ isEdit = false, patientId = '', onBack, onSave, patients = [] }: { isEdit?: boolean; patientId?: string; onBack: () => void; onSave: (p: any, id?: string) => Promise<boolean>; patients?: any[] }) {
+  const patient = isEdit ? patients.find(p => p.id === patientId) : null;
+  
+  const [name, setName] = useState(patient?.name || '');
+  const [cpf, setCpf] = useState(patient?.cpf || '');
+  const [phone, setPhone] = useState(patient?.phone || patient?.telefone || patient?.celular || '');
+  const [email, setEmail] = useState(patient?.email || '');
   const [procedimento, setProcedimento] = useState('Avaliação Inicial');
   const [valor, setValor] = useState('150');
   const [isSaving, setIsSaving] = useState(false);
+
+  // Update state if patient data becomes available (syncing)
+  React.useEffect(() => {
+    if (isEdit && patient) {
+      if (!name) setName(patient.name || '');
+      if (!cpf) setCpf(patient.cpf || '');
+      if (!phone) setPhone(patient.phone || patient.telefone || patient.celular || '');
+      if (!email) setEmail(patient.email || '');
+    }
+  }, [patient, isEdit]);
 
   const handleProcedureChange = (procName: string) => {
     setProcedimento(procName);
@@ -2855,7 +2906,7 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
         <button onClick={onBack} disabled={isSaving} className="p-2 hover:bg-slate-100 rounded-full cursor-pointer transition-colors disabled:opacity-50">
           <ArrowLeft className="w-5 h-5 text-slate-600" />
         </button>
-        <h2 className="text-xl font-bold text-slate-800">{isEdit ? `Editar: ${patientName}` : 'Novo Paciente'}</h2>
+        <h2 className="text-xl font-bold text-slate-800">{isEdit ? `Editar: ${patient?.name || patientId}` : 'Novo Paciente'}</h2>
       </div>
 
       <div className="bg-white border border-slate-200 p-8 space-y-6 shadow-sm">
@@ -2940,7 +2991,7 @@ function PatientFormView({ isEdit = false, patientName = '', onBack, onSave }: {
               if (name.trim()) {
                 setIsSaving(true);
                 try {
-                  await onSave({ name, cpf, phone, email, procedimento, valor });
+                  await onSave({ name, cpf, phone, email, procedimento, valor }, isEdit ? patientId : undefined);
                 } finally {
                   setIsSaving(false);
                 }
