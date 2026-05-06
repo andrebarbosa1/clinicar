@@ -63,5 +63,13 @@ service cloud.firestore {
     match /support_tickets/{ticketId} {
       allow read, write: if true;
     }
+
+    match /patients/{patientId} {
+      allow read, write: if true;
+    }
+
+    match /documents/{docId} {
+      allow read, write: if true;
+    }
   }
 }

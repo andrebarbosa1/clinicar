@@ -60,12 +60,51 @@
         "userAgent": { "type": "string" }
       },
       "required": ["id", "userId", "description", "status", "createdAt"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "A patient record with contact info",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "cpf": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "createdAt"]
+    },
+    "Document": {
+      "title": "Document",
+      "description": "A clinical document such as a certificate or prescription",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["Atestado", "Receita", "Exame", "Outro"] },
+        "patientId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "dentistId": { "type": "string" },
+        "dentistName": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["id", "type", "patientName", "content", "createdAt"]
     }
   },
   "firestore": {
     "/records/{recordId}": {
       "schema": "ClinicalRecord",
       "description": "Collection of dental records"
+    },
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Collection of patient contact info"
+    },
+    "/documents/{documentId}": {
+      "schema": "Document",
+      "description": "Collection of clinical documents"
     },
     "/users/{userId}": {
       "schema": "AppUser",

@@ -92,9 +92,13 @@ async function startServer() {
       }
 
       res.json({ success: true, message: "Email sent successfully" });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error sending email:", error);
-      res.status(500).json({ error: "Failed to send email" });
+      let errorMsg = "Failed to send email";
+      if (error.code === 'EAUTH' || error.responseCode === 535) {
+        errorMsg = "Erro de Autenticação: Verifique se suas credenciais (EMAIL_USER e EMAIL_PASS) estão corretas. Se usar Gmail, você DEVE usar uma 'Senha de Aplicativo'.";
+      }
+      res.status(500).json({ error: errorMsg, details: error.message });
     }
   });
 
