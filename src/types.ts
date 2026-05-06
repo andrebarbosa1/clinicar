@@ -16,6 +16,7 @@ export interface DentalRecord {
   status: ProcedureStatus;
   statusPagamento: PaymentStatus;
   valor: number;
+  observacao?: string;
   reminderSent?: boolean;
   reminderSentAt?: string;
 }
