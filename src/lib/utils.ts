@@ -10,11 +10,12 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number) {
+export function formatCurrency(value: any) {
+  const numericValue = typeof value === 'number' ? value : parseFloat(String(value || 0));
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
     currency: 'BRL',
-  }).format(value);
+  }).format(numericValue || 0);
 }
 
 export function formatPercent(value: number) {
