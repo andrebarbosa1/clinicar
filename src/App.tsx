@@ -87,6 +87,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
 import { 
   getFirestore, 
+  initializeFirestore,
+  getDocFromServer,
   collection, 
   onSnapshot, 
   setDoc, 
@@ -251,8 +253,31 @@ const SecurityUtils = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Use initializeFirestore with experimentalForceLongPolling to avoid connection timeouts in restricted environments
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+}, firebaseConfig.firestoreDatabaseId);
+
 export const auth = getAuth(app);
+
+// Connection test as required by integration guidelines
+async function testConnection() {
+  try {
+    // Only attempt the connection test if we're in a browser environment
+    if (typeof window !== 'undefined') {
+      await getDocFromServer(doc(db, '_connection_test_', 'ping'));
+      console.log("Firestore connection established successfully.");
+    }
+  } catch (error) {
+    if(error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Firestore connection failure: Please check your Firebase configuration or internet connection.");
+    } else {
+      console.warn("Firestore connection test completed with status:", error);
+    }
+  }
+}
+testConnection();
 
 // Configure Persistence
 setPersistence(auth, browserLocalPersistence).catch(err => {
@@ -349,6 +374,12 @@ export default function App() {
   const [documents, setDocuments] = useState<any[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editingPatientEmail, setEditingPatientEmail] = useState<{patientName: string; appointmentId: string} | null>(null);
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+  const [showTermsOfUse, setShowTermsOfUse] = useState(false);
+  const [cookieConsent, setCookieConsent] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return localStorage.getItem('odonto_cookie_consent') === 'true';
+  });
 
   const hasModule = React.useCallback((moduleName: string) => {
     if (!currentUser) return false;
@@ -1299,6 +1330,19 @@ export default function App() {
     setSubPage(null);
   };
 
+  const renderLegal = () => (
+    <>
+      <PrivacyPolicyModal isOpen={showPrivacyPolicy} onClose={() => setShowPrivacyPolicy(false)} />
+      <TermsOfUseModal isOpen={showTermsOfUse} onClose={() => setShowTermsOfUse(false)} />
+      {!cookieConsent && <CookieBanner onAccept={() => {
+        setCookieConsent(true);
+        localStorage.setItem('odonto_cookie_consent', 'true');
+      }} onDecline={() => {
+        setCookieConsent(true);
+      }} />}
+    </>
+  );
+
   if (!isAuthReady) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900">
@@ -1308,11 +1352,33 @@ export default function App() {
   }
 
   if (isPublicBooking) {
-    return <PublicBookingView onBack={() => setIsPublicBooking(false)} users={users} data={data} />;
+    return (
+      <>
+        <PublicBookingView 
+          onBack={() => setIsPublicBooking(false)} 
+          users={users} 
+          data={data} 
+          onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
+          onTerms={() => setShowTermsOfUse(true)}
+        />
+        {renderLegal()}
+      </>
+    );
   }
 
   if (!isAuthenticated) {
-    return <LoginView users={users} onLogin={handleLogin} onOpenBooking={() => setIsPublicBooking(true)} />;
+    return (
+      <>
+        <LoginView 
+          users={users} 
+          onLogin={handleLogin} 
+          onOpenBooking={() => setIsPublicBooking(true)} 
+          onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
+          onTerms={() => setShowTermsOfUse(true)}
+        />
+        {renderLegal()}
+      </>
+    );
   }
 
   const renderContent = () => {
@@ -1925,14 +1991,12 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      <footer className="mt-auto border-t border-slate-200 bg-white px-6 py-4 flex flex-col md:flex-row justify-between items-center text-[10px] text-slate-400 uppercase tracking-widest gap-2">
-        <div className="flex items-center gap-4">
-          <span>Dentista Responsável: Dra. Helena Vieira</span>
-          <span className="hidden md:inline">•</span>
-          <span>CRO-SP 123456</span>
-        </div>
-        <div>Atualizado em tempo real • Sincronizado com Looker Studio</div>
-      </footer>
+      <Footer 
+        onPrivacyPolicy={() => setShowPrivacyPolicy(true)} 
+        onTerms={() => setShowTermsOfUse(true)} 
+      />
+
+      {renderLegal()}
     </div>
   );
 }
@@ -6728,7 +6792,19 @@ function MetricCard({ label, value, description, icon, trend }: {
   );
 }
 
-function LoginView({ users, onLogin, onOpenBooking }: { users: any[]; onLogin: (user: any) => void; onOpenBooking: () => void }) {
+function LoginView({ 
+  users, 
+  onLogin, 
+  onOpenBooking,
+  onPrivacyPolicy,
+  onTerms
+}: { 
+  users: any[]; 
+  onLogin: (user: any) => void; 
+  onOpenBooking: () => void;
+  onPrivacyPolicy: () => void;
+  onTerms: () => void;
+}) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -6913,11 +6989,12 @@ function LoginView({ users, onLogin, onOpenBooking }: { users: any[]; onLogin: (
           </div>
         </motion.div>
         
-        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-6">
+        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-6 mb-12">
           <Shield className="w-3 h-3 text-brand-cyan/40" />
-          SSL Ativo | ClinicalGate 2026
+          Conexão Segura | ClinicalGate Cloud
         </p>
       </div>
+      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
     </div>
   );
 }
@@ -6943,7 +7020,19 @@ function StatusBadge({ status }: { status: DentalRecord['status'] }) {
   );
 }
 
-function PublicBookingView({ onBack, users, data }: { onBack: () => void; users: any[]; data: DentalRecord[] }) {
+function PublicBookingView({ 
+  onBack, 
+  users, 
+  data,
+  onPrivacyPolicy,
+  onTerms
+}: { 
+  onBack: () => void; 
+  users: any[]; 
+  data: DentalRecord[];
+  onPrivacyPolicy: () => void;
+  onTerms: () => void;
+}) {
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
     dentista: '',
@@ -7047,6 +7136,9 @@ function PublicBookingView({ onBack, users, data }: { onBack: () => void; users:
             Voltar ao Início
           </button>
         </motion.div>
+        <div className="fixed bottom-0 left-0 w-full z-10">
+           <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+        </div>
       </div>
     );
   }
@@ -7265,10 +7357,11 @@ function PublicBookingView({ onBack, users, data }: { onBack: () => void; users:
           </div>
         </motion.div>
         
-        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium">
+        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12">
           Ambiente Seguro | Agendamento via ClinicalGate Cloud
         </p>
       </div>
+      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
     </div>
   );
 }
@@ -7364,6 +7457,188 @@ function EmailModal({
         </div>
       </motion.div>
     </div>
+  );
+}
+
+// --- LEGAL COMPONENTS ---
+
+function PrivacyPolicyModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+      >
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Política de Privacidade</h2>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Última atualização: Maio 2026</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-6 h-6 text-slate-400" />
+          </button>
+        </div>
+        <div className="p-8 overflow-y-auto text-slate-600 text-sm leading-relaxed space-y-6">
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">1. Coleta de Dados</h3>
+            <p>Coletamos dados pessoais como nome, e-mail, telefone e CPF para fins exclusívos de agendamento e prestação de serviços odontológicos em nossa clínica.</p>
+          </section>
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">2. Uso das Informações</h3>
+            <p>Suas informações são utilizadas para:</p>
+            <ul className="list-disc ml-5 mt-2 space-y-1">
+              <li>Confirmar agendamentos via WhatsApp ou E-mail.</li>
+              <li>Manter seu histórico clínico (prontuário) atualizado.</li>
+              <li>Processar pagamentos e emissão de recibos.</li>
+            </ul>
+          </section>
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">3. Proteção de Dados (LGPD)</h3>
+            <p>Em conformidade com a LGPD, garantimos que seus dados são armazenados de forma segura e não são compartilhados com terceiros para fins de marketing sem seu consentimento explícito.</p>
+          </section>
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">4. Contato do DPO (Encarregado de Dados)</h3>
+            <p>Para dúvidas sobre seus dados, entre em contato com nosso DPO através do e-mail: <strong>dpo@clinica-odonto.com</strong> ou pelo telefone da clínica.</p>
+          </section>
+        </div>
+        <div className="p-6 border-t border-slate-100 bg-slate-50/50 text-right">
+          <button 
+            onClick={onClose}
+            className="px-8 py-3 bg-brand-cyan text-white font-bold rounded-xl shadow-lg shadow-brand-cyan/20 hover:scale-105 active:scale-95 transition-all"
+          >
+            Entendido
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function TermsOfUseModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+      >
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Termos de Uso</h2>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Vigência: 2026</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-6 h-6 text-slate-400" />
+          </button>
+        </div>
+        <div className="p-8 overflow-y-auto text-slate-600 text-sm leading-relaxed space-y-6">
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">1. Aceitação dos Termos</h3>
+            <p>Ao utilizar este sistema de agendamento, você concorda em fornecer informações verídicas e atualizadas.</p>
+          </section>
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">2. Agendamentos</h3>
+            <p>As solicitações feitas online são pré-agendamentos e dependem de confirmação manual pela nossa equipe de recepção.</p>
+          </section>
+          <section>
+            <h3 className="text-slate-800 font-bold mb-2">3. Cancelamentos</h3>
+            <p>Solicitamos que cancelamentos sejam feitos com pelo menos 24 horas de antecedência para permitir que outros pacientes utilizem o horário.</p>
+          </section>
+        </div>
+        <div className="p-4 border-t border-slate-100 flex justify-end">
+          <button 
+            onClick={onClose}
+            className="px-6 py-2 bg-slate-100 text-slate-600 font-bold rounded-lg hover:bg-slate-200 transition-colors"
+          >
+            Fechar
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function CookieBanner({ onAccept, onDecline }: { onAccept: () => void, onDecline: () => void }) {
+  return (
+    <motion.div 
+      initial={{ y: 100, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      className="fixed bottom-6 left-6 right-6 md:left-auto md:max-w-md bg-white rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-slate-100 p-6 z-[999]"
+    >
+      <div className="flex items-start gap-4">
+        <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center shrink-0">
+          <ShieldCheck className="w-6 h-6 text-indigo-500" />
+        </div>
+        <div className="flex-1">
+          <h4 className="text-sm font-bold text-slate-800 mb-1">Nós respeitamos sua privacidade</h4>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Utilizamos cookies para melhorar sua experiência de agendamento e segurança do site. Ao continuar, você concorda com nossa política.
+          </p>
+        </div>
+      </div>
+      <div className="flex gap-3 mt-6">
+        <button 
+          onClick={onAccept}
+          className="flex-1 py-3 bg-brand-cyan text-white text-xs font-bold rounded-xl shadow-lg shadow-brand-cyan/20 hover:bg-brand-cyan/90 transition-all"
+        >
+          Aceitar Cookies
+        </button>
+        <button 
+          onClick={onDecline}
+          className="flex-1 py-3 bg-slate-50 text-slate-500 text-xs font-bold rounded-xl border border-slate-100 hover:bg-slate-100 transition-all"
+        >
+          Recusar
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+function Footer({ 
+  onPrivacyPolicy, 
+  onTerms 
+}: { 
+  onPrivacyPolicy: () => void; 
+  onTerms: () => void;
+}) {
+  return (
+    <footer className="mt-auto py-8 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+        <div className="text-center md:text-left">
+          <span className="text-brand-cyan font-black tracking-tighter text-lg">Sorriso & Saúde</span>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">© 2026 Todos os direitos reservados</p>
+        </div>
+        
+        <div className="flex flex-wrap justify-center gap-6">
+          <button 
+            type="button"
+            onClick={onPrivacyPolicy}
+            className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors"
+          >
+            Política de Privacidade
+          </button>
+          <button 
+            type="button"
+            onClick={onTerms}
+            className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors"
+          >
+            Termos de Uso
+          </button>
+          <a href="#" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors">Segurança</a>
+          <a href="#" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors">Ajuda</a>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+            <Shield className="w-4 h-4 text-emerald-500" />
+          </div>
+          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ClinicalGate Security</span>
+        </div>
+      </div>
+    </footer>
   );
 }
 
