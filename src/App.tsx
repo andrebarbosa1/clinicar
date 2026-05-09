@@ -1490,7 +1490,7 @@ export default function App() {
           onEditEmail={(record) => setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id })}
         />;
       case 'Financeiro':
-        return canAccessFinance ? <FinanceView data={filteredData} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
+        return canAccessFinance ? <FinanceView data={filteredData} patients={patients} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Equipe':
         return <TeamView 
           data={filteredData} 
@@ -2962,7 +2962,9 @@ function AgendaView({
   );
 }
 
-function FinanceView({ data, onUpdatePayment }: { data: DentalRecord[]; onUpdatePayment: (id: string, status: any) => void }) {
+function FinanceView({ data, patients, onUpdatePayment }: { data: DentalRecord[]; patients: any[]; onUpdatePayment: (id: string, status: any) => void }) {
+  const [selectedReceipt, setSelectedReceipt] = useState<DentalRecord | null>(null);
+  
   const stats = useMemo(() => {
     const paid = data.filter(r => r.statusPagamento === 'Pago').reduce((s, r) => s + (Number(r.valor) || 0), 0);
     const pending = data.filter(r => r.statusPagamento === 'Pendente').reduce((s, r) => s + (Number(r.valor) || 0), 0);
@@ -2970,8 +2972,49 @@ function FinanceView({ data, onUpdatePayment }: { data: DentalRecord[]; onUpdate
     return { paid, pending, overdue };
   }, [data]);
 
-  const handleViewReceipt = (patient: string) => {
-    alert(`Gerando recibo para ${patient}...\nRecibo #RC-${Math.floor(Math.random() * 10000)} disponível para impressão.`);
+  const handlePrint = () => {
+    const printContent = document.getElementById('receipt-content');
+    if (!printContent) return;
+    
+    const originalContent = document.body.innerHTML;
+    const printWindow = window.open('', '', 'height=600,width=800');
+    
+    if (printWindow) {
+      printWindow.document.write('<html><head><title>Recibo</title>');
+      printWindow.document.write('<style>');
+      printWindow.document.write(`
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body { font-family: "Inter", sans-serif; padding: 40px; color: #334155; }
+        .receipt-container { max-width: 800px; margin: 0 auto; border: 1px solid #e2e8f0; padding: 40px; border-radius: 8px; }
+        .header { display: flex; justify-content: space-between; align-items: start; border-bottom: 2px solid #0891b2; padding-bottom: 20px; margin-bottom: 30px; }
+        .logo { font-size: 24px; font-weight: 800; color: #0891b2; }
+        .receipt-title { font-size: 32px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #1e293b; }
+        .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 30px; }
+        .info-label { font-size: 10px; text-transform: uppercase; font-weight: 700; color: #94a3b8; margin-bottom: 4px; }
+        .info-value { font-size: 14px; font-weight: 600; color: #334155; }
+        .main-content { background: #f8fafc; padding: 30px; border-radius: 12px; margin-bottom: 30px; }
+        .amount-section { border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .amount-label { font-size: 16px; font-weight: 700; color: #64748b; }
+        .amount-value { font-size: 24px; font-weight: 800; color: #0891b2; }
+        .signature-section { margin-top: 60px; display: flex; flex-direction: column; align-items: center; }
+        .signature-line { width: 300px; border-top: 1px solid #334155; margin-bottom: 8px; }
+        .signature-text { font-size: 12px; color: #64748b; }
+        .footer { margin-top: 40px; font-size: 10px; color: #94a3b8; text-align: center; }
+        @media print {
+          body { padding: 0; }
+          .receipt-container { border: none; padding: 0; }
+        }
+      `);
+      printWindow.document.write('</style></head><body>');
+      printWindow.document.write(printContent.innerHTML);
+      printWindow.document.write('</body></html>');
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 500);
+    }
   };
 
   return (
@@ -3030,8 +3073,12 @@ function FinanceView({ data, onUpdatePayment }: { data: DentalRecord[]; onUpdate
                   </td>
                   <td className="px-4 py-3 text-center">
                     <button 
-                      onClick={() => handleViewReceipt(r.paciente)}
-                      className="text-[10px] text-brand-cyan underline font-sans cursor-pointer hover:font-bold"
+                      onClick={() => setSelectedReceipt(r)}
+                      disabled={r.statusPagamento !== 'Pago'}
+                      className={cn(
+                        "text-[10px] underline font-sans cursor-pointer hover:font-bold transition-all",
+                        r.statusPagamento === 'Pago' ? "text-brand-cyan" : "text-slate-300 pointer-events-none"
+                      )}
                     >
                       Ver Recibo
                     </button>
@@ -3042,6 +3089,102 @@ function FinanceView({ data, onUpdatePayment }: { data: DentalRecord[]; onUpdate
           </table>
         </div>
       </section>
+
+      <AnimatePresence>
+        {selectedReceipt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedReceipt(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-2xl bg-white rounded-[32px] shadow-2xl overflow-hidden"
+            >
+              <div className="p-8 border-b border-slate-100 flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-brand-cyan/10 rounded-xl">
+                    <Printer className="w-5 h-5 text-brand-cyan" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 tracking-tight">Visualização do Recibo</h3>
+                </div>
+                <button onClick={() => setSelectedReceipt(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              </div>
+
+              <div className="p-10">
+                <div id="receipt-content" className="bg-white">
+                  <div className="receipt-container border border-slate-200 rounded-2xl p-10 max-h-[60vh] overflow-y-auto">
+                    <div className="header flex justify-between items-start border-bottom pb-6 mb-8">
+                       <div className="logo text-brand-cyan font-extrabold text-2xl tracking-tighter">CLINIC<span className="text-slate-800">DENT</span></div>
+                       <div className="receipt-title text-3xl font-black text-slate-900 leading-none">RECIBO</div>
+                    </div>
+
+                    <div className="info-grid grid grid-cols-2 gap-8 mb-10">
+                       <div>
+                         <p className="info-label text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Paciente</p>
+                         <p className="info-value text-sm font-bold text-slate-800">{selectedReceipt.paciente}</p>
+                         {patients.find(p => p.name === selectedReceipt.paciente)?.cpf && (
+                           <p className="text-[10px] text-slate-400 font-mono mt-1">CPF: {patients.find(p => p.name === selectedReceipt.paciente)?.cpf}</p>
+                         )}
+                       </div>
+                       <div className="text-right">
+                         <p className="info-label text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Data</p>
+                         <p className="info-value text-sm font-bold text-slate-800">{selectedReceipt.data ? format(parseISO(selectedReceipt.data), "dd 'de' MMMM 'de' yyyy", { locale: ptBR }) : 'N/A'}</p>
+                       </div>
+                    </div>
+
+                    <div className="main-content bg-slate-50/50 rounded-2xl p-8 mb-8 border border-slate-100">
+                       <p className="text-slate-600 text-sm leading-relaxed">
+                         Recebemos de <strong className="text-slate-900">{selectedReceipt.paciente}</strong>, 
+                         a importância de <strong className="text-brand-cyan">{formatCurrency(selectedReceipt.valor)}</strong>, 
+                         referente aos serviços odontológicos de: <strong className="text-slate-800">{selectedReceipt.procedimento}</strong>, 
+                         realizado pelo profissional <strong className="text-slate-800">{selectedReceipt.dentista}</strong>.
+                       </p>
+                       
+                       <div className="amount-section mt-10 pt-6 border-t border-slate-200 flex justify-between items-center">
+                          <span className="amount-label text-sm font-bold text-slate-400 uppercase tracking-widest">Valor Total</span>
+                          <span className="amount-value text-3xl font-black text-brand-cyan">{formatCurrency(selectedReceipt.valor)}</span>
+                       </div>
+                    </div>
+
+                    <div className="signature-section pt-10 flex flex-col items-center">
+                       <div className="signature-line w-64 border-t-2 border-slate-200 mb-2"></div>
+                       <p className="signature-text text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Assinatura Responsável</p>
+                    </div>
+
+                    <div className="footer mt-10 pt-6 border-t border-slate-50 text-[10px] text-slate-400 text-center uppercase tracking-widest">
+                       Este recibo é um documento digital gerado em {new Date().toLocaleDateString('pt-BR')}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-10 flex gap-4">
+                  <button 
+                    onClick={() => setSelectedReceipt(null)}
+                    className="flex-1 py-4 text-slate-400 font-bold uppercase text-[10px] tracking-widest hover:bg-slate-50 rounded-2xl transition-all"
+                  >
+                    Fechar
+                  </button>
+                  <button 
+                    onClick={handlePrint}
+                    className="flex-1 py-4 bg-brand-cyan text-white font-bold uppercase text-[10px] tracking-widest rounded-2xl shadow-xl shadow-brand-cyan/20 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    <Printer className="w-4 h-4" />
+                    Imprimir Recibo
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
