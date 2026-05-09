@@ -53,6 +53,7 @@ import {
   MessageCircle,
   Phone,
   AlertCircle,
+  Loader2,
   Trash2,
   FileUp,
   Download,
@@ -2334,7 +2335,7 @@ function DashboardView({
       });
   }, [filteredData]);
 
-  const COLORS = ['#0891b2', '#0ea5e9', '#22d3ee', '#38bdf8', '#7dd3fc'];
+  const COLORS = ['#0ea5e9', '#6366f1', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6'];
 
   return (
     <div className="space-y-6">
@@ -2487,7 +2488,7 @@ function DashboardView({
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest">Crescimento</h2>
               <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-brand-cyan"></div>
+                <div className="w-2 h-2 rounded-full bg-indigo-500"></div>
                 <span className="text-[9px] text-slate-500 uppercase font-black">Faturamento</span>
               </div>
             </div>
@@ -2496,8 +2497,8 @@ function DashboardView({
                 <AreaChart data={monthlyData}>
                   <defs>
                     <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0891b2" stopOpacity={0.1}/>
-                      <stop offset="95%" stopColor="#0891b2" stopOpacity={0}/>
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.1}/>
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -2507,7 +2508,7 @@ function DashboardView({
                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px' }} 
                     formatter={(val: number) => [formatCurrency(val), 'Faturamento']} 
                   />
-                  <Area type="monotone" dataKey="value" stroke="#0891b2" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
+                  <Area type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorValue)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -2530,7 +2531,11 @@ function DashboardView({
                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px' }}
                     formatter={(val: number) => [formatCurrency(val), 'Produção']} 
                   />
-                  <Bar dataKey="value" fill="#0f172a" barSize={12} radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="value" barSize={12} radius={[0, 4, 4, 0]}>
+                    {dentistProductivity.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -6871,37 +6876,22 @@ function LoginView({
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#f8fafc] flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      {/* Floating Support Info */}
-      <div className="absolute top-0 left-0 w-full p-4 flex justify-start items-center z-20">
-        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500 bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full border border-slate-100 shadow-sm">
-          <Phone className="w-3 h-3 text-brand-cyan" />
-          <span>Suporte: 22-998530971</span>
-        </div>
-      </div>
-
+    <div className="h-screen w-screen bg-[#f8fafc] flex flex-col items-center justify-center relative overflow-hidden font-sans">
       {/* Background decorations */}
       <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
         <div className="absolute top-[-10%] right-[-5%] w-[600px] h-[600px] rounded-full bg-brand-cyan/20 blur-[120px]" />
         <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-blue-400/10 blur-[100px]" />
       </div>
 
-      <div className="w-full max-w-[360px] relative z-10">
+      <div className="w-full max-w-[400px] px-6 relative z-10">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white/40 backdrop-blur-lg rounded-[32px] shadow-2xl shadow-slate-200/40 p-6 border border-white/40"
+          className="bg-white/80 backdrop-blur-xl rounded-[40px] shadow-2xl shadow-slate-200/40 p-8 border border-white"
         >
-          <div className="flex flex-col items-center mb-6 text-center">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
-                <Plus className="w-6 h-6" />
-              </div>
-              <h1 className="text-xl font-bold text-slate-800 tracking-tight">
-                Clinical<span className="text-brand-cyan">Gate</span>
-              </h1>
-            </div>
-            <p className="text-sm text-slate-400">Acesse sua conta para continuar</p>
+          <div className="mb-8 text-center text-slate-800">
+            <h3 className="text-2xl font-bold tracking-tight mb-2 text-slate-900">Bem-vindo de volta</h3>
+            <p className="text-sm text-slate-500">Insira suas credenciais para continuar.</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -6914,7 +6904,7 @@ function LoginView({
                 value={username}
                 disabled={isLoading}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-white/20 border border-white/30 text-slate-800 text-sm py-3 px-4 pl-11 outline-none focus:bg-white/40 focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-xl placeholder:text-slate-500 backdrop-blur-sm"
+                className="w-full bg-white border border-slate-100 text-slate-800 text-sm py-4 px-4 pl-11 outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-2xl placeholder:text-slate-400"
                 placeholder="Nome de usuário"
                 autoFocus
               />
@@ -6929,7 +6919,7 @@ function LoginView({
                 value={password}
                 disabled={isLoading}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white/20 border border-white/30 text-slate-800 text-sm py-3 px-4 pl-11 outline-none focus:bg-white/40 focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-xl placeholder:text-slate-500 backdrop-blur-sm"
+                className="w-full bg-white border border-slate-100 text-slate-800 text-sm py-4 px-4 pl-11 outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-2xl placeholder:text-slate-400"
                 placeholder="Sua senha"
               />
             </div>
@@ -6940,9 +6930,10 @@ function LoginView({
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
-                  className="bg-rose-50 text-rose-500 text-[11px] p-3 text-center rounded-xl font-medium border border-rose-100 overflow-hidden"
+                  className="bg-red-50 text-red-600 text-[11px] p-4 rounded-2xl flex items-center gap-2 font-bold overflow-hidden"
                 >
-                  {error}
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{error}</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -6950,48 +6941,47 @@ function LoginView({
             <button
               type="submit"
               disabled={isLoading}
-              className={cn(
-                "w-full py-3.5 text-sm font-bold mt-2 shadow-xl active:scale-[0.98] transition-all flex items-center justify-center gap-2 rounded-xl",
-                isLoading ? "bg-slate-100 text-slate-400" : "bg-brand-cyan text-white hover:bg-brand-cyan/90 cursor-pointer shadow-brand-cyan/20"
-              )}
+              className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group flex items-center justify-center gap-2"
             >
               {isLoading ? (
-                <motion.div 
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                  className="w-4 h-4 border-2 border-slate-400 border-t-transparent rounded-full"
-                />
-              ) : 'Entrar na Plataforma'}
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <>
+                  Entrar no Sistema
+                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
             </button>
+            
             <button
               type="button"
               onClick={onOpenBooking}
-              className="w-full py-3 text-sm font-bold mt-2 text-slate-500 hover:text-brand-cyan transition-colors flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/40 hover:border-brand-cyan bg-white/10"
+              className="w-full py-3 text-xs font-bold text-slate-500 hover:text-brand-cyan transition-colors flex items-center justify-center gap-2"
             >
               <Calendar className="w-4 h-4" />
               Agendar Consulta Online
             </button>
           </form>
 
-          <div className="mt-4 pt-4 border-t border-white/20">
+          {/* Quick Access for Demo */}
+          <div className="mt-8 pt-6 border-t border-slate-50">
             <div className="flex flex-wrap justify-center gap-2">
               {['ana.admin', 'roberto', 'mariana'].map(u => (
                 <button 
                   key={u}
                   onClick={() => { setUsername(u); setPassword('123'); }}
-                  className="text-[10px] text-slate-500 font-bold bg-white/30 px-2.5 py-1 rounded-lg border border-white/40 hover:border-brand-cyan hover:text-brand-cyan transition-all cursor-pointer backdrop-blur-sm"
+                  className="text-[10px] text-slate-500 font-bold bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 hover:border-brand-cyan hover:text-brand-cyan transition-all"
                 >
                   {u}
                 </button>
               ))}
             </div>
-            <p className="text-[9px] text-slate-300 text-center mt-2 uppercase font-medium">Senha: 123</p>
           </div>
         </motion.div>
         
-        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-6 mb-12">
+        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8">
           <Shield className="w-3 h-3 text-brand-cyan/40" />
-          Conexão Segura | ClinicalGate Cloud
+          Conexão Segura | DentalCloud Protocol
         </p>
       </div>
       <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
