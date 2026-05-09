@@ -24,6 +24,58 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Security Middleware to block sensitive paths and files
+  app.use((req, res, next) => {
+    const blockedPatterns = [
+      /\.env.*/i,
+      /\.sql$/i,
+      /\.htpasswd$/i,
+      /^\/wp-json\//i,
+      /^\/server-status/i,
+      /^\/admin/i,
+      /^\/cpanel/i
+    ];
+
+    if (blockedPatterns.some(pattern => pattern.test(req.path))) {
+      console.warn(`[Security] Blocked access to restricted path: ${req.path} (IP: ${req.ip})`);
+      return res.status(403).json({
+        error: "Forbidden",
+        message: "Access to this resource is restricted for security reasons."
+      });
+    }
+    next();
+  });
+
+  // Security Headers Middleware
+  app.use((req, res, next) => {
+    // Content Security Policy
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.firebaseapp.com https://apis.google.com https://www.gstatic.com; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "img-src 'self' data: https://*.googleusercontent.com https://*.gstatic.com https://*.firebaseusercontent.com; " +
+      "font-src 'self' https://fonts.gstatic.com; " +
+      "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.cloudfunctions.net wss://*.firebaseio.com; " +
+      "frame-src 'self' https://*.firebaseapp.com https://*.firebase.com; " +
+      "upgrade-insecure-requests;"
+    );
+
+    // X-Frame-Options
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+
+    // Permissions-Policy
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), interest-cohort=()');
+
+    // Referrer-Policy
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+    // X-Content-Type-Options
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    next();
+  });
+
   app.use(express.json());
 
   // Email Transporter (Lazy)
