@@ -79,7 +79,7 @@ import {
   PieChart,
   Pie
 } from 'recharts';
-import { format, parseISO, isToday, startOfMonth, subMonths, isWithinInterval, differenceInYears, isValid } from 'date-fns';
+import { format, parseISO, isToday, startOfMonth, subMonths, isWithinInterval, differenceInYears, isValid, addDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { MOCK_DATA } from './mockData';
 import { DentalRecord } from './types';
@@ -102,7 +102,15 @@ import {
   deleteDoc,
   updateDoc
 } from 'firebase/firestore';
-import { getAuth, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signOut, 
+  setPersistence, 
+  browserLocalPersistence,
+  signInWithPopup,
+  GoogleAuthProvider
+} from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // --- SECURITY UTILS ---
@@ -381,6 +389,7 @@ export default function App() {
     if (typeof window === 'undefined') return true;
     return localStorage.getItem('odonto_cookie_consent') === 'true';
   });
+  const [clinicName, setClinicName] = useState('OdontoDash');
 
   const hasModule = React.useCallback((moduleName: string) => {
     if (!currentUser) return false;
@@ -400,8 +409,22 @@ export default function App() {
 
   React.useEffect(() => {
     if (!isAuthReady) return;
+    if (!currentUser?.name) {
+      console.log("Aguardando nome do usuário para carregar pacientes...");
+      return;
+    }
 
-    const q = query(collection(db, 'patients'));
+    let q;
+    if (currentUser?.role === 'Dentista') {
+      q = query(collection(db, 'patients'), where('dentistaResponsavel', '==', currentUser.name));
+    } else if (currentUser?.role === 'Admin' || hasModule('Pacientes')) {
+      q = query(collection(db, 'patients'));
+    } else {
+      // If none of the above, don't listen to patients or listen to empty set
+      setPatients([]);
+      return;
+    }
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setPatients(list);
@@ -411,7 +434,16 @@ export default function App() {
     });
 
     const docsPath = 'documents';
-    const docsQuery = collection(db, docsPath);
+    let docsQuery;
+    if (currentUser?.role === 'Dentista') {
+      docsQuery = query(collection(db, docsPath), where('dentista', '==', currentUser.name));
+    } else if (currentUser?.role === 'Admin' || hasModule('Agenda')) {
+      docsQuery = collection(db, docsPath);
+    } else {
+      setDocuments([]);
+      return;
+    }
+
     const unsubscribeDocs = onSnapshot(docsQuery, (snapshot) => {
       const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setDocuments(docsData);
@@ -426,6 +458,17 @@ export default function App() {
     };
   }, [isAuthReady]);
 
+  React.useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
+      if (docSnap.exists()) {
+        setClinicName(docSnap.data().clinicName || 'OdontoDash');
+      }
+    }, (error) => {
+      console.warn("Settings sync error (clinicName):", error);
+    });
+    return unsub;
+  }, []);
+
   const procedures = useMemo(() => ['Todos', ...Array.from(new Set(data.map(r => r.procedimento)))], [data]);
   const statuses = ['Todos', 'Realizado', 'Agendado', 'Pendente', 'Cancelado'];
   const paymentStatuses = ['Todos', 'Pago', 'Pendente', 'Atrasado'];
@@ -436,11 +479,12 @@ export default function App() {
     if (!currentUser) return [];
     // Only Admin and users with 'Financeiro' or 'Pacientes' module (depending on what data is being filtered)
     // Actually, filteredRecords is used for almost everything.
-    // If it's for general schedule/patients, users with Agenda/Pacientes and Admin see all.
-    if (currentUser.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) return data;
     if (currentUser.role === 'Dentista') {
       return data.filter(r => r.dentista === currentUser.name);
     }
+    
+    // If it's for general schedule/patients, users with Agenda/Pacientes and Admin see all.
+    if (currentUser.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes') || currentUser.role === 'Recepcionista') return data;
     return [];
   }, [data, currentUser]);
 
@@ -569,11 +613,25 @@ export default function App() {
                 finalUserData = { ...userSnap.data(), id: userSnap.id, firebaseUid: user.uid };
               }
             } else {
-              // Check by email as fallback
+              // Check by email in the 'users' collection for anyone (not just initial users)
+              console.log("No mapping found, searching for user by email:", user.email);
               const usersRef = collection(db, 'users');
-              const qEmail = query(usersRef, where('email', '==', user.email));
-              const emailResult = await getDoc(doc(db, 'patients', 'dummy')); // Just getting permissions early
-              // Note: actual query might be better but let's assume mapping is the standard
+              const qEmail = query(usersRef, where('email', '==', user.email), limit(1));
+              const emailSnap = await getDocs(qEmail);
+              
+              if (!emailSnap.empty) {
+                const docFound = emailSnap.docs[0];
+                finalUserData = { ...docFound.data(), id: docFound.id, firebaseUid: user.uid };
+                
+                // Create the missing mapping
+                await setDoc(doc(db, 'users_by_uid', user.uid), {
+                  userDocId: finalUserData.id,
+                  name: finalUserData.name,
+                  role: finalUserData.role,
+                  updatedAt: new Date().toISOString()
+                });
+                console.log("Auto-mapped new user:", finalUserData.name);
+              }
             }
           } catch(err) {
             console.error("Error during background session recovery:", err);
@@ -660,12 +718,16 @@ export default function App() {
     });
 
     let unsubRecords = () => {};
-    if (isAuthenticated && currentUser) {
+    if (isAuthenticated && currentUser && currentUser.name) {
       let recordsQuery;
-      if (currentUser.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) {
+      if (currentUser.role === 'Admin') {
         recordsQuery = collection(db, 'records');
       } else if (currentUser.role === 'Dentista') {
         recordsQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
+      } else if (hasModule('Agenda') || hasModule('Agenda') || hasModule('Pacientes')) {
+        recordsQuery = collection(db, 'records');
+      } else if (currentUser.role === 'Recepcionista') {
+        recordsQuery = collection(db, 'records');
       }
 
       if (recordsQuery) {
@@ -725,45 +787,25 @@ export default function App() {
   }, [currentUser]);
 
   const handleCreatePatient = async (newPatient: any, existingId?: string): Promise<boolean> => {
+    console.log("handleCreatePatient called with:", { name: newPatient.name, existingId });
     if (!newPatient.name) {
       alert('Por favor, informe o nome do paciente.');
       return false;
     }
 
-    // Only create a record for NEW patients
-    if (!existingId) {
-      const record: DentalRecord = {
-        id: `rec-pat-${Date.now()}`,
-        data: format(new Date(), 'yyyy-MM-dd'),
-        paciente: newPatient.name,
-        procedimento: newPatient.procedimento || 'Avaliação Inicial',
-        dentista: currentUser?.name || 'Dra. Ana Silveira',
-        status: 'Pendente',
-        statusPagamento: 'Pendente',
-        valor: Number(newPatient.valor) || 0,
-      };
-      
-      try {
-        await setDoc(doc(db, 'records', record.id), record);
-      } catch (e) {
-        console.warn("Error creating initial record:", e);
-      }
-    }
-    
     try {
-      console.log(existingId ? `Updating patient ${existingId}...` : "Creating new patient...");
       const patientId = (existingId && existingId.trim() !== '') ? existingId : `pat-${Date.now()}`;
+      console.log(existingId ? `Updating patient ${existingId}...` : `Creating new patient ${patientId}...`);
 
-      // Extra safety check for duplicates in the handler
       const trimmedName = newPatient.name.trim();
-      const trimmedEmail = newPatient.email?.trim();
+      const trimmedEmail = newPatient.email?.trim() || '';
 
       if (!existingId) {
         const isDuplicateEmail = trimmedEmail && patients.some(p => p.email?.toLowerCase() === trimmedEmail.toLowerCase());
         const isDuplicateName = patients.some(p => p.name?.toLowerCase() === trimmedName.toLowerCase());
         
         if (isDuplicateEmail) {
-           alert(`O e-mail "${trimmedEmail}" já está cadastrado.`);
+           alert(`O e-mail "${trimmedEmail}" já está cadastrado para outro paciente.`);
            return false;
         }
         if (isDuplicateName) {
@@ -773,25 +815,59 @@ export default function App() {
       }
       
       const patientData: any = {
+        id: patientId,
         name: trimmedName,
         email: trimmedEmail,
-        phone: newPatient.phone,
-        cpf: newPatient.cpf,
+        phone: newPatient.phone || '',
+        cpf: newPatient.cpf || '',
+        dentistaResponsavel: currentUser?.role === 'Dentista' ? (currentUser.name || '') : (newPatient.dentistaResponsavel || ''),
         updatedAt: new Date().toISOString()
       };
       
       if (!existingId || existingId.trim() === '') {
-        patientData.id = patientId;
         patientData.createdAt = new Date().toISOString();
       }
 
-      await setDoc(doc(db, 'patients', patientId), patientData, { merge: true });
-
+      console.log("Saving patient document to Firestore...");
+      try {
+        await setDoc(doc(db, 'patients', patientId), patientData, { merge: true });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `patients/${patientId}`);
+      }
+      
+      // 2. Create initial record for NEW patients (optional/background)
+      if (!existingId) {
+        const record: DentalRecord = {
+          id: `rec-pat-${Date.now()}`,
+          data: format(new Date(), 'yyyy-MM-dd'),
+          paciente: trimmedName,
+          procedimento: newPatient.procedimento || 'Avaliação Inicial',
+          dentista: currentUser?.name || 'Dra. Ana Silveira',
+          status: 'Pendente',
+          statusPagamento: 'Pendente',
+          valor: Number(newPatient.valor) || 0,
+        };
+        console.log(`Creating initial record for new patient... ${record.id}`);
+        setDoc(doc(db, 'records', record.id), record).catch(e => {
+          console.warn("Background record creation failed:", e);
+        });
+      }
+      
+      alert(existingId ? 'Paciente atualizado com sucesso!' : 'Paciente cadastrado com sucesso!');
       setSubPage(null);
       return true;
     } catch (e: any) {
       console.error("Falha ao salvar paciente:", e);
-      alert("Erro ao salvar paciente: " + (e.message || "Permissão negada ou erro de conexão."));
+      let errorMsg = "Permissão negada ou falha na rede.";
+      try {
+        if (e.message && e.message.startsWith('{')) {
+          const errObj = JSON.parse(e.message);
+          errorMsg = errObj.error || errorMsg;
+        }
+      } catch {
+        errorMsg = e.message || errorMsg;
+      }
+      alert(`Erro ao salvar paciente: ${errorMsg}`);
       return false;
     }
   };
@@ -895,6 +971,7 @@ export default function App() {
     const docData = {
       id,
       ...newDoc,
+      dentista: currentUser?.name || newDoc.dentista || newDoc.dentistName || 'Administrador',
       createdAt: new Date().toISOString()
     };
 
@@ -1249,23 +1326,41 @@ export default function App() {
 
   const handleStartConsultation = async (recordId: string) => {
     const record = data.find(r => r.id === recordId);
-    if (!record) return;
+    if (!record) {
+      console.error("Agendamento não encontrado para iniciar:", recordId);
+      return;
+    }
 
     try {
+      // Optimistic update
+      setData(prev => prev.map(r => r.id === recordId ? { ...r, status: 'Em Atendimento' } : r));
+
       // 1. Update record status
       await setDoc(doc(db, 'records', recordId), {
-        status: 'Em Atendimento'
+        status: 'Em Atendimento',
+        startedAt: new Date().toISOString()
       }, { merge: true });
 
       // 2. Update current doctor status
       const doctor = users.find(u => u.name === record.dentista);
       if (doctor) {
-        await setDoc(doc(db, 'users', doctor.id), {
-          availability: 'em_atendimento',
-          currentPatient: record.paciente
-        }, { merge: true });
+        try {
+          await setDoc(doc(db, 'users', doctor.id), {
+            availability: 'em_atendimento',
+            currentPatient: record.paciente
+          }, { merge: true });
+        } catch (doctorErr) {
+          console.warn("Could not update doctor status (continuing anyway):", doctorErr);
+        }
       }
+      console.log(`Consulta iniciada para ${record.paciente}`);
     } catch (e) {
+      console.error("Erro ao iniciar consulta:", e);
+      // Revert optimistic
+      const original = data.find(r => r.id === recordId);
+      if (original) {
+        setData(prev => prev.map(r => r.id === recordId ? original : r));
+      }
       handleFirestoreError(e, OperationType.UPDATE, 'records/' + recordId);
     }
   };
@@ -1294,16 +1389,11 @@ export default function App() {
   };
 
   const handleLogin = async (userProfile: any) => {
-    // Link the logical user to the current Firebase Auth session
+    // Link the logical user to the current Firebase Auth session if present
     if (auth.currentUser) {
       try {
-        // 1. Update the main user document
-        await setDoc(doc(db, 'users', userProfile.id), {
-          firebaseUid: auth.currentUser.uid,
-          lastLogin: new Date().toISOString()
-        }, { merge: true });
-        
-        // 2. Create/Update a security mapping using UID as key for Rules lookup
+        console.log("Sincronizando perfil com Firebase...");
+        // Link logical ID to UID
         await setDoc(doc(db, 'users_by_uid', auth.currentUser.uid), {
           userDocId: userProfile.id,
           name: userProfile.name,
@@ -1311,10 +1401,15 @@ export default function App() {
           updatedAt: new Date().toISOString()
         });
 
-        // Add firebaseUid to userProfile so currentUser has it
+        // Update main user record
+        await setDoc(doc(db, 'users', userProfile.id), {
+          firebaseUid: auth.currentUser.uid,
+          lastLogin: new Date().toISOString()
+        }, { merge: true });
+
         userProfile.firebaseUid = auth.currentUser.uid;
       } catch (e) {
-        console.error("Error linking Firebase UID:", e);
+        console.error("Erro ao vincular UID:", e);
       }
     }
 
@@ -1329,6 +1424,62 @@ export default function App() {
     setIsAuthenticated(false);
     setActivePage('Dashboard');
     setSubPage(null);
+  };
+
+  const handleUpdateClinicName = async (newName: string) => {
+    try {
+      await setDoc(doc(db, 'settings', 'clinic'), {
+        clinicName: newName,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (e: any) {
+      handleFirestoreError(e, OperationType.UPDATE, 'settings/clinic');
+    }
+  };
+
+  const handleResetDatabase = async () => {
+    console.log("handleResetDatabase requested by:", currentUser?.name, "Role:", currentUser?.role);
+    
+    if (currentUser?.role?.toLowerCase() !== 'admin') {
+      alert("Apenas administradores podem resetar o sistema. Seu cargo atual: " + currentUser?.role);
+      return;
+    }
+
+    try {
+      setIsLoadingData(true);
+      const collectionsToClear = ['records', 'patients', 'documents', 'odontograms', 'users', 'users_by_uid', 'notifications', 'support_tickets'];
+      
+      let successCount = 0;
+      let errorCount = 0;
+
+      console.log("Iniciando limpeza total do banco...");
+      
+      for (const collName of collectionsToClear) {
+        try {
+          const snap = await getDocs(collection(db, collName));
+          console.log(`Limpando ${snap.size} documentos de ${collName}...`);
+          
+          const batchPromises = snap.docs.map(d => deleteDoc(doc(db, collName, d.id)));
+          await Promise.all(batchPromises);
+          
+          successCount++;
+        } catch (err: any) {
+          console.error(`Erro ao limpar coleção ${collName}:`, err);
+          errorCount++;
+        }
+      }
+      
+      if (errorCount > 0) {
+        alert(`O sistema foi parcialmente limpo. ${successCount} coleções removidas, ${errorCount} erros encontrados. Verifique o console para detalhes.`);
+      } else {
+        alert("Sistema limpo com sucesso! Os usuários padrão foram restaurados automaticamente na interface.");
+      }
+    } catch (e: any) {
+      console.error("Erro fatal ao resetar banco:", e);
+      alert("Erro ao limpar dados: " + e.message);
+    } finally {
+      setIsLoadingData(false);
+    }
   };
 
   const renderLegal = () => (
@@ -1361,6 +1512,7 @@ export default function App() {
           data={data} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
+          clinicName={clinicName}
         />
         {renderLegal()}
       </>
@@ -1376,6 +1528,7 @@ export default function App() {
           onOpenBooking={() => setIsPublicBooking(true)} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
+          clinicName={clinicName}
         />
         {renderLegal()}
       </>
@@ -1465,7 +1618,7 @@ export default function App() {
       );
     }
     if (subPage === 'Cadastrar' && activePage === 'Pacientes') {
-      return <PatientFormView onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <PatientFormView patients={patients} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'Editar' && activePage === 'Pacientes' && selectedPatientId) {
       return <PatientFormView isEdit patientId={selectedPatientId} patients={patients} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
@@ -1501,9 +1654,9 @@ export default function App() {
           </div>
         );
       case 'Retorno':
-        return <RecallView data={data} />;
+        return <RecallView data={data} clinicName={clinicName} />;
       case 'Documentos':
-        return <DocumentsView data={data} users={users} currentUser={currentUser} />;
+        return <DocumentsView data={data} users={users} currentUser={currentUser} clinicName={clinicName} />;
       case 'Pacientes':
         return (
           <PatientsView 
@@ -1576,7 +1729,10 @@ export default function App() {
             onAddUser={handleCreateUser} 
             onUpdateUser={handleUpdateUser} 
             onDeleteUser={handleDeleteUser}
-            currentUser={currentUser} 
+            currentUser={currentUser}
+            clinicName={clinicName}
+            onUpdateClinicName={handleUpdateClinicName}
+            onResetDatabase={handleResetDatabase}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
@@ -1658,7 +1814,7 @@ export default function App() {
             <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
               <Stethoscope className="h-5 w-5 text-white" />
             </div>
-            <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">OdontoDash <span className="text-brand-cyan font-normal">Analytics</span></h1>
+            <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">{clinicName} <span className="text-brand-cyan font-normal">Analytics</span></h1>
           </div>
           
           {currentUser && (
@@ -2002,7 +2158,7 @@ export default function App() {
   );
 }
 
-function RecallView({ data }: { data: DentalRecord[] }) {
+function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: string }) {
   const recallList = useMemo(() => {
     const lastVisits: { [key: string]: string } = {};
     data.forEach(r => {
@@ -2063,7 +2219,7 @@ function RecallView({ data }: { data: DentalRecord[] }) {
             
             <button 
               onClick={() => {
-                const msg = encodeURIComponent(`Olá ${p.name}, aqui é da OdontoDash Analytics! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
+                const msg = encodeURIComponent(`Olá ${p.name}, aqui é da ${clinicName}! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
                 window.open(`https://wa.me/5511999999999?text=${msg}`, '_blank');
               }}
               className="w-full py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-600 transition-colors"
@@ -2078,7 +2234,7 @@ function RecallView({ data }: { data: DentalRecord[] }) {
   );
 }
 
-function DocumentsView({ data, users, currentUser }: { data: DentalRecord[], users: any[], currentUser: any }) {
+function DocumentsView({ data, users, currentUser, clinicName }: { data: DentalRecord[], users: any[], currentUser: any, clinicName: string }) {
   const [docType, setDocType] = useState<'Receita' | 'Atestado'>('Receita');
   const [selectedPatient, setSelectedPatient] = useState('');
   const [content, setContent] = useState('');
@@ -2168,7 +2324,7 @@ function DocumentsView({ data, users, currentUser }: { data: DentalRecord[], use
             <h1 className="text-xl font-bold text-slate-800 uppercase tracking-tighter">
               {docType === 'Receita' ? 'Receituário Odontológico' : 'Atestado de Comparecimento'}
             </h1>
-            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">Sorriso & Saúde • CRO-SP 123456</p>
+            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">{clinicName} • CRO-SP 123456</p>
           </div>
 
           {/* Document Body */}
@@ -2418,8 +2574,8 @@ function DashboardView({
                         <p className="text-sm font-bold text-slate-900 leading-tight">{record.paciente}</p>
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[10px] font-black text-brand-cyan uppercase font-mono tracking-wider">
-                            {record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), 'HH:mm') : '--:--'}
-                          </span>
+                          {record.horario || '--:--'}
+                        </span>
                           <span className="text-slate-300">•</span>
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate max-w-[120px]">{record.procedimento}</span>
                         </div>
@@ -2910,17 +3066,26 @@ function AgendaView({
   onSendWhatsApp: (record: DentalRecord) => void;
   onEditEmail: (record: DentalRecord) => void;
 }) {
-  const upcoming = data.filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento');
+  const upcoming = data
+    .filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento')
+    .sort((a, b) => {
+      const dateA = new Date(`${a.data}T${a.horario || '00:00'}`).getTime();
+      const dateB = new Date(`${b.data}T${b.horario || '00:00'}`).getTime();
+      return dateA - dateB;
+    });
   const cancelled = fullData.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
   return (
     <section className="bg-white border border-slate-200 overflow-hidden flex flex-col">
-      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex justify-between items-center">
-        <h2 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Próximos Agendamentos</h2>
+      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex justify-between items-center text-xs">
+        <h2 className="font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2">
+          <Calendar className="w-3.5 h-3.5 text-brand-cyan" />
+          Próximos Agendamentos
+        </h2>
         <div className="flex gap-2">
           <button 
             onClick={onAdd}
-            className="text-[10px] bg-brand-cyan text-white px-3 py-1 font-bold rounded cursor-pointer"
+            className="text-[10px] bg-brand-cyan text-white px-3 py-1 font-bold rounded cursor-pointer hover:bg-brand-cyan-dark transition-colors shadow-sm active:scale-95"
           >
             Novo Agendamento
           </button>
@@ -2932,15 +3097,18 @@ function AgendaView({
         ) : (
           upcoming.slice(0, 12).map((apt) => (
             <div key={apt.id} className={cn(
-              "border p-3 rounded flex gap-3 items-start relative hover:border-brand-cyan transition-colors",
+              "border p-3 rounded flex gap-3 items-start relative hover:border-brand-cyan transition-all group",
               apt.status === 'Em Atendimento' ? "bg-cyan-50/50 border-brand-cyan shadow-sm" : "bg-slate-50/50 border-slate-100"
             )}>
-              <div className="bg-white p-2 border border-slate-100 rounded text-center min-w-[50px]">
-                <div className="text-[10px] text-slate-400 uppercase">
+              <div className="bg-white p-2 border border-slate-100 rounded text-center min-w-[55px] shadow-sm flex flex-col items-center">
+                <div className="text-[10px] text-slate-400 uppercase font-black tracking-tighter">
                   {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'MMM', { locale: ptBR }) : '...'}
                 </div>
-                <div className="text-lg font-bold text-slate-800">
+                <div className="text-base font-black text-slate-800 leading-none my-0.5">
                   {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'dd') : '-'}
+                </div>
+                <div className="text-[9px] font-bold bg-brand-cyan/10 text-brand-cyan px-1 rounded-sm mt-1 ring-1 ring-brand-cyan/20">
+                  {apt.horario || '--:--'}
                 </div>
               </div>
               <div className="flex-1 min-w-0">
@@ -3514,9 +3682,41 @@ function ImportView({ onImport }: { onImport: (records: any[]) => Promise<void> 
   );
 }
 
-function SettingsView() {
+function SettingsView({ 
+  clinicName, 
+  onUpdateClinicName, 
+  onResetDatabase,
+  isAdmin 
+}: { 
+  clinicName: string; 
+  onUpdateClinicName: (n: string) => Promise<void>;
+  onResetDatabase?: () => Promise<void>;
+  isAdmin?: boolean;
+}) {
+  const [localClinicName, setLocalClinicName] = useState(clinicName);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showConfirmReset, setShowConfirmReset] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+
+  useEffect(() => {
+    setLocalClinicName(clinicName);
+  }, [clinicName]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      await onUpdateClinicName(localClinicName);
+      alert('Configurações salvas com sucesso!');
+    } catch (e) {
+      console.error("Erro ao salvar:", e);
+      alert('Erro ao salvar as configurações. Verifique suas permissões.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <div className="bg-white border border-slate-200 p-8 max-w-2xl mx-auto space-y-8 shadow-sm">
+    <div className="bg-white border border-slate-200 p-8 max-w-2xl mx-auto space-y-8 shadow-sm overflow-y-auto max-h-[calc(100vh-200px)]">
       <div className="flex justify-between items-center border-b border-slate-100 pb-4">
         <h2 className="text-xl font-bold text-slate-800">Configurações do Sistema</h2>
         <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest">v2.4.0-build</span>
@@ -3528,7 +3728,12 @@ function SettingsView() {
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400">Nome da Clínica</label>
-              <input type="text" defaultValue="Sorriso & Saúde" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
+              <input 
+                type="text" 
+                value={localClinicName} 
+                onChange={(e) => setLocalClinicName(e.target.value)}
+                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all" 
+              />
             </div>
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400">CRO Responsável</label>
@@ -3558,10 +3763,85 @@ function SettingsView() {
              </div>
           </div>
         </section>
+        
+        {isAdmin && onResetDatabase && (
+          <section className="pt-8 border-t-2 border-rose-100 mt-8 space-y-4">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-3 h-3 text-rose-500" />
+              <h3 className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Zona de Perigo</h3>
+            </div>
+            <div className="bg-rose-50 p-6 border border-rose-100 rounded-lg space-y-4">
+              {!showConfirmReset ? (
+                <>
+                  <p className="text-[10px] text-rose-700 leading-relaxed font-medium">
+                    Limpar o sistema irá remover permanentemente todos os registros, pacientes e documentos do banco de dados. 
+                    Esta ação é irreversível e apagará todos os dados inseridos por Admins, Dentistas e Recepcionistas.
+                  </p>
+                  <button 
+                    onClick={() => setShowConfirmReset(true)}
+                    className="bg-rose-500 text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-rose-600 transition-all rounded shadow-sm flex items-center gap-2"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Limpar Todo o Sistema
+                  </button>
+                </>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-[11px] text-rose-800 font-bold">
+                    VOCÊ TEM CERTEZA ABSOLUTA? Esta ação NÃO pode ser desfeita.
+                  </p>
+                  <p className="text-[10px] text-rose-600">
+                    Digite <span className="font-mono bg-rose-100 px-1 rounded">LIMPAR AGORA</span> para confirmar a exclusão total.
+                  </p>
+                  <input 
+                    type="text" 
+                    value={confirmText}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    className="w-full text-xs p-2 border border-rose-200 outline-none focus:border-rose-500"
+                    placeholder="Digite LIMPAR AGORA"
+                  />
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => {
+                        if (confirmText === 'LIMPAR AGORA') {
+                          onResetDatabase();
+                          setShowConfirmReset(false);
+                          setConfirmText('');
+                        } else {
+                          alert("Digite o texto de confirmação corretamente.");
+                        }
+                      }}
+                      disabled={confirmText !== 'LIMPAR AGORA'}
+                      className="flex-1 bg-rose-600 text-white py-2 text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed rounded"
+                    >
+                      Confirmar Exclusão Total
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowConfirmReset(false);
+                        setConfirmText('');
+                      }}
+                      className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-800"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
           <button className="text-[10px] font-bold uppercase text-slate-400">Restaurar Padrões</button>
-          <button className="bg-slate-900 text-white px-8 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-brand-cyan transition-all cursor-pointer">Salvar Preferências</button>
+          <button 
+            disabled={isSaving}
+            onClick={handleSave}
+            className="bg-slate-900 text-white px-8 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-brand-cyan transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+          >
+            {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
+            Salvar Preferências
+          </button>
         </div>
       </div>
     </div>
@@ -3605,9 +3885,11 @@ function Tooth({
 
 function Odontogram({ 
   patientName,
+  currentUser,
   onUpdate 
 }: { 
   patientName: string;
+  currentUser: any;
   onUpdate?: () => void;
 }) {
   const [data, setData] = useState<Record<number, string>>({});
@@ -3620,6 +3902,9 @@ function Odontogram({
       if (docSnap.exists()) {
         setData(docSnap.data().teeth || {});
       }
+      setLoading(false);
+    }, (error) => {
+      console.warn("Odontogram sync error:", error);
       setLoading(false);
     });
     return unsub;
@@ -3635,6 +3920,7 @@ function Odontogram({
       await setDoc(doc(db, 'odontograms', patientId), {
         patientName,
         teeth: newData,
+        dentista: currentUser?.name || '',
         updatedAt: new Date().toISOString()
       }, { merge: true });
       
@@ -5612,11 +5898,6 @@ function PatientFormView({ isEdit = false, patientId = '', onBack, onSave, patie
                   return;
                 }
 
-                if (words.length < 2) {
-                  alert('Por favor, preencha o nome e o sobrenome do paciente.');
-                  return;
-                }
-
                 if (!email) {
                   alert('O e-mail é obrigatório para o cadastro do paciente.');
                   return;
@@ -5666,7 +5947,22 @@ function PatientFormView({ isEdit = false, patientId = '', onBack, onSave, patie
 
                 setIsSaving(true);
                 try {
-                  await onSave({ name: trimmedName, cpf, phone, email, procedimento, valor }, isEdit ? patientId : undefined);
+                  const success = await onSave({ 
+                    name: trimmedName, 
+                    cpf, 
+                    phone, 
+                    email, 
+                    procedimento, 
+                    valor,
+                    dentistaResponsavel: isEdit ? patient?.dentistaResponsavel : ''
+                  }, isEdit ? patientId : undefined);
+                  
+                  if (success) {
+                    onBack();
+                  }
+                } catch (err: any) {
+                  console.error("Error saving patient in view:", err);
+                  alert("Houve um problema ao processar os dados. Verifique os campos e tente novamente.");
                 } finally {
                   setIsSaving(false);
                 }
@@ -5699,8 +5995,21 @@ function AppointmentFormView({
   presetPatient?: string;
   isClinicalRecord?: boolean;
 }) {
+  const OPENING_HOUR = "08:00";
+  const CLOSING_HOUR = "17:00";
+
+  const getInitialDate = () => {
+    const now = new Date();
+    if (!isClinicalRecord && format(now, 'HH:mm') >= CLOSING_HOUR) {
+      return format(addDays(now, 1), 'yyyy-MM-dd');
+    }
+    return format(now, 'yyyy-MM-dd');
+  };
+
+  const minSelectableDate = !isClinicalRecord ? getInitialDate() : undefined;
+
   const [paciente, setPaciente] = useState(presetPatient);
-  const [dataVal, setDataVal] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [dataVal, setDataVal] = useState(getInitialDate());
   const [horario, setHorario] = useState('');
   const [dentista, setDentista] = useState('');
   const [procedimento, setProcedimento] = useState('Avaliação Inicial');
@@ -5732,8 +6041,26 @@ function AppointmentFormView({
   }, [users]);
 
   const handleSave = async () => {
-    if (!paciente || !dentista || !dataVal) {
+    if (!paciente || !dentista || !dataVal || !horario) {
       alert('Por favor, preencha todos os campos.');
+      return;
+    }
+
+    if (!isClinicalRecord) {
+      if (horario < OPENING_HOUR || horario > CLOSING_HOUR) {
+        alert(`A clínica atende apenas entre ${OPENING_HOUR} e ${CLOSING_HOUR}.`);
+        return;
+      }
+    }
+
+    // Prevents scheduling for past date/time (with buffer for appointments, none for clinical records)
+    const selectedDateTime = parseISO(`${dataVal}T${horario}`);
+    const now = new Date();
+    const bufferMinutes = 15; // 15 minute buffer for current appointments
+    const limitDate = new Date(now.getTime() - bufferMinutes * 60000);
+
+    if (!isClinicalRecord && selectedDateTime < limitDate) {
+      alert('O horário selecionado já passou (limite de 15 min de atraso para novos agendamentos). Para registrar atendimentos passados, utilize a Evolução Clínica no Prontuário.');
       return;
     }
 
@@ -5790,8 +6117,17 @@ function AppointmentFormView({
               <input 
                 disabled={isSaving}
                 type="date" 
+                min={minSelectableDate}
                 value={dataVal}
-                onChange={(e) => setDataVal(e.target.value)}
+                onChange={(e) => {
+                  const newData = e.target.value;
+                  setDataVal(newData);
+                  // Clear time if it becomes invalid with new date
+                  if (!isClinicalRecord && newData === format(new Date(), 'yyyy-MM-dd') && horario) {
+                    const nowStr = format(new Date(), 'HH:mm');
+                    if (horario < nowStr) setHorario('');
+                  }
+                }}
                 className="w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50" 
               />
             </div>
@@ -5803,6 +6139,21 @@ function AppointmentFormView({
                 value={horario}
                 onChange={(e) => {
                   const newTime = e.target.value;
+                  
+                  if (!isClinicalRecord) {
+                    const isTodaySelected = dataVal === format(new Date(), 'yyyy-MM-dd');
+                    const nowStr = format(new Date(), 'HH:mm');
+                    if (isTodaySelected && newTime < nowStr) {
+                      alert('Este horário já passou. Por favor, escolha um horário futuro.');
+                      return;
+                    }
+
+                    if (newTime < OPENING_HOUR || newTime > CLOSING_HOUR) {
+                      alert(`A clínica atende apenas entre ${OPENING_HOUR} e ${CLOSING_HOUR}.`);
+                      return;
+                    }
+                  }
+
                   const isTaken = data.some(r => 
                     r.dentista === dentista && 
                     r.data === dataVal && 
@@ -5817,11 +6168,21 @@ function AppointmentFormView({
                 }}
                 className={cn(
                   "w-full p-2 border border-slate-200 rounded text-xs font-mono focus:border-brand-cyan outline-none cursor-pointer disabled:bg-slate-50",
-                  data.some(r => r.dentista === dentista && r.data === dataVal && r.horario === horario && r.status !== 'Cancelado') && "border-rose-300 bg-rose-50"
+                  (!isClinicalRecord && ((dataVal === format(new Date(), 'yyyy-MM-dd') && horario && horario < format(new Date(), 'HH:mm')) || (dataVal < format(new Date(), 'yyyy-MM-dd')))) && "border-rose-300 bg-rose-50"
                 )} 
               />
               {data.some(r => r.dentista === dentista && r.data === dataVal && r.horario === horario && r.status !== 'Cancelado') && (
                 <p className="text-[9px] text-rose-500 font-bold mt-1">Horário já ocupado!</p>
+              )}
+              {!isClinicalRecord && (
+                <>
+                  {dataVal < format(new Date(), 'yyyy-MM-dd') && (
+                    <p className="text-[9px] text-rose-500 font-bold mt-1">Data no passado!</p>
+                  )}
+                  {dataVal === format(new Date(), 'yyyy-MM-dd') && horario && horario < format(new Date(), 'HH:mm') && (
+                    <p className="text-[9px] text-amber-500 font-bold mt-1">Horário no passado!</p>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -6248,13 +6609,19 @@ function AdminView({
   onAddUser, 
   onUpdateUser,
   onDeleteUser,
-  currentUser
+  currentUser,
+  clinicName,
+  onUpdateClinicName,
+  onResetDatabase
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
   onUpdateUser: (id: string, u: any) => Promise<boolean>;
   onDeleteUser: (id: string) => Promise<boolean>;
   currentUser: any;
+  clinicName: string;
+  onUpdateClinicName: (n: string) => Promise<void>;
+  onResetDatabase: () => Promise<void>;
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -6324,7 +6691,14 @@ function AdminView({
       </div>
 
       <div className="min-h-[500px]">
-        {activeTab === 'settings' && <SettingsView />}
+        {activeTab === 'settings' && (
+          <SettingsView 
+            clinicName={clinicName} 
+            onUpdateClinicName={onUpdateClinicName} 
+            onResetDatabase={onResetDatabase}
+            isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
+          />
+        )}
         
         {activeTab === 'import' && (
           <ImportView 
@@ -6802,13 +7176,15 @@ function LoginView({
   onLogin, 
   onOpenBooking,
   onPrivacyPolicy,
-  onTerms
+  onTerms,
+  clinicName
 }: { 
   users: any[]; 
   onLogin: (user: any) => void; 
   onOpenBooking: () => void;
   onPrivacyPolicy: () => void;
   onTerms: () => void;
+  clinicName: string;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -6890,6 +7266,14 @@ function LoginView({
           className="bg-white/80 backdrop-blur-xl rounded-[40px] shadow-2xl shadow-slate-200/40 p-8 border border-white"
         >
           <div className="mb-8 text-center text-slate-800">
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
+                <Plus className="w-6 h-6" />
+              </div>
+              <h1 className="text-xl font-black text-slate-800 tracking-tighter">
+                {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
+              </h1>
+            </div>
             <h3 className="text-2xl font-bold tracking-tight mb-2 text-slate-900">Bem-vindo de volta</h3>
             <p className="text-sm text-slate-500">Insira suas credenciais para continuar.</p>
           </div>
@@ -6981,7 +7365,7 @@ function LoginView({
         
         <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8">
           <Shield className="w-3 h-3 text-brand-cyan/40" />
-          Conexão Segura | DentalCloud Protocol
+          Conexão Segura | {clinicName} Protocol
         </p>
       </div>
       <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
@@ -7015,18 +7399,35 @@ function PublicBookingView({
   users, 
   data,
   onPrivacyPolicy,
-  onTerms
+  onTerms,
+  clinicName
 }: { 
   onBack: () => void; 
   users: any[]; 
   data: DentalRecord[];
   onPrivacyPolicy: () => void;
   onTerms: () => void;
+  clinicName: string;
 }) {
+  const OPENING_HOUR = "08:00";
+  const CLOSING_HOUR = "17:00";
+
+  // Calculate minimum selectable date based on current time
+  const getMinDate = () => {
+    const now = new Date();
+    const currentHour = format(now, 'HH:mm');
+    if (currentHour >= CLOSING_HOUR) {
+      return format(addDays(now, 1), 'yyyy-MM-dd');
+    }
+    return format(now, 'yyyy-MM-dd');
+  };
+
+  const minDate = getMinDate();
+
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
     dentista: '',
-    data: format(new Date(), 'yyyy-MM-dd'),
+    data: minDate,
     horario: '',
     paciente: '',
     telefone: '',
@@ -7048,6 +7449,15 @@ function PublicBookingView({
 
     if (!trimmedName || !bookingData.telefone || !bookingData.dentista || !bookingData.horario) {
       alert('Por favor, preencha todos os campos.');
+      return;
+    }
+
+    const selectedDateTime = parseISO(`${bookingData.data}T${bookingData.horario}`);
+    const now = new Date();
+    const bufferMinutes = 15;
+    if (selectedDateTime < new Date(now.getTime() - bufferMinutes * 60000)) {
+      alert('O horário selecionado já passou. Por favor, escolha um horário futuro.');
+      setStep(2);
       return;
     }
 
@@ -7143,8 +7553,8 @@ function PublicBookingView({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div>
-            <h1 className="text-xl font-bold text-slate-800">Agendamento Online</h1>
+          <div className="flex-1">
+            <h1 className="text-xl font-bold text-slate-800">{clinicName} <span className="text-brand-cyan font-normal">Agendamento</span></h1>
             <p className="text-xs text-slate-400 uppercase tracking-widest font-bold">Passo {step} de 3</p>
           </div>
         </div>
@@ -7220,10 +7630,23 @@ function PublicBookingView({
                       Escolha o Dia
                     </h2>
                     <input 
+                      id="booking-date"
                       type="date" 
-                      min={format(new Date(), 'yyyy-MM-dd')}
+                      min={minDate}
                       value={bookingData.data}
-                      onChange={(e) => setBookingData(prev => ({ ...prev, data: e.target.value }))}
+                      onChange={(e) => {
+                        const newData = e.target.value;
+                        setBookingData(prev => {
+                          const newBookingData = { ...prev, data: newData };
+                          // If today is selected, and current time is past selected time, clear time
+                          if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
+                            if (prev.horario < format(new Date(), 'HH:mm')) {
+                              newBookingData.horario = '';
+                            }
+                          }
+                          return newBookingData;
+                        });
+                      }}
                       className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all"
                     />
                   </div>
@@ -7240,23 +7663,35 @@ function PublicBookingView({
                           r.horario === time &&
                           r.status !== 'Cancelado'
                         );
+
+                        const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
+                        const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
                         
                         return (
                           <button
                             key={time}
-                            disabled={isTaken}
-                            onClick={() => setBookingData(prev => ({ ...prev, horario: time }))}
+                            disabled={isTaken || isPast}
+                            onClick={() => {
+                          if (bookingData.data === format(new Date(), 'yyyy-MM-dd')) {
+                            if (time < format(new Date(), 'HH:mm')) {
+                              alert('Este horário já passou. Por favor, escolha um horário futuro.');
+                              return;
+                            }
+                          }
+                          setBookingData(prev => ({ ...prev, horario: time }));
+                        }}
                             className={cn(
                               "py-2 text-xs font-bold rounded-lg border transition-all",
                               bookingData.horario === time
                                 ? "bg-brand-cyan text-white border-brand-cyan shadow-md shadow-brand-cyan/20"
-                                : isTaken 
+                                : (isTaken || isPast)
                                   ? "bg-slate-100 text-slate-300 border-slate-100 cursor-not-allowed italic"
                                   : "bg-white text-slate-500 border-slate-100 hover:border-brand-cyan"
                             )}
                           >
                             {time}
                             {isTaken && <span className="block text-[8px] opacity-60">Ocupado</span>}
+                            {isPast && !isTaken && <span className="block text-[8px] opacity-60">Passou</span>}
                           </button>
                         );
                       })}
@@ -7348,7 +7783,7 @@ function PublicBookingView({
         </motion.div>
         
         <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12">
-          Ambiente Seguro | Agendamento via ClinicalGate Cloud
+          Ambiente Seguro | Agendamento via {clinicName} Cloud
         </p>
       </div>
       <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
