@@ -43,6 +43,7 @@ import {
   Cpu,
   Upload,
   Menu,
+  Monitor,
   Mail,
   MailOpen,
   ImageIcon,
@@ -61,6 +62,7 @@ import {
   Folder,
   Image,
   Share2,
+  Link,
   Heart,
   ShieldCheck,
   ChevronDown
@@ -376,6 +378,16 @@ export default function App() {
   const [users, setUsers] = useState<any[]>(INITIAL_USERS);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isPublicBooking, setIsPublicBooking] = useState(false);
+
+  // Handle public booking URL
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('booking') === 'true') {
+        setIsPublicBooking(true);
+      }
+    }
+  }, []);
   const [activePage, setActivePage] = useState('Dashboard');
   const [subPage, setSubPage] = useState<string | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -450,6 +462,35 @@ export default function App() {
     let unsubRecords = () => {};
     let unsubDocs = () => {};
 
+    // 2.3 Records Query (Needed for Agenda and for checking availability in Public Booking)
+    if (isAuthenticated || isPublicBooking) {
+      let rQuery;
+      if (!isAuthenticated) {
+        // Public booking only needs to know occupied slots
+        rQuery = collection(db, 'records');
+      } else {
+        const role = (currentUser?.role || '').toLowerCase();
+        if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
+          rQuery = collection(db, 'records');
+        } else if (role === 'dentista') {
+          rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
+        }
+      }
+
+      if (rQuery) {
+        setIsLoadingData(true);
+        unsubRecords = onSnapshot(rQuery, (snapshot) => {
+          const records = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as DentalRecord));
+          console.log(`[RecordsSync] ${records.length} registros carregados. (Auth: ${isAuthenticated})`);
+          setData(records);
+          setIsLoadingData(false);
+        }, (err) => {
+          console.error("Records sync error:", err);
+          setIsLoadingData(false);
+        });
+      }
+    }
+
     if (isAuthenticated && currentUser && currentUser.name) {
       const role = (currentUser.role || '').toLowerCase();
       
@@ -469,27 +510,6 @@ export default function App() {
         }, (err) => console.warn("Patients sync error:", err));
       }
 
-      // 2.3 Records Query
-      let rQuery;
-      if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
-        rQuery = collection(db, 'records');
-      } else if (role === 'dentista') {
-        rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
-      }
-
-      if (rQuery) {
-        setIsLoadingData(true);
-        unsubRecords = onSnapshot(rQuery, (snapshot) => {
-          const records = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as DentalRecord));
-          console.log(`[RecordsSync] ${records.length} registros carregados.`);
-          setData(records);
-          setIsLoadingData(false);
-        }, (err) => {
-          console.error("Records sync error:", err);
-          setIsLoadingData(false);
-        });
-      }
-
       // 2.4 Documents Query
       let dQuery;
       if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda')) {
@@ -505,7 +525,7 @@ export default function App() {
           setDocuments(docs);
         }, (err) => console.warn("Docs sync error:", err));
       }
-    } else {
+    } else if (!isPublicBooking) {
       setIsLoadingData(false);
     }
 
@@ -515,7 +535,7 @@ export default function App() {
       unsubRecords();
       unsubDocs();
     };
-  }, [isAuthReady, isAuthenticated, currentUser?.id, currentUser?.role, currentUser?.name]);
+  }, [isAuthReady, isAuthenticated, isPublicBooking, currentUser?.id, currentUser?.role, currentUser?.name]);
 
   React.useEffect(() => {
     const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
@@ -1860,98 +1880,18 @@ export default function App() {
           <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
           
           <div className="flex items-center gap-2">
-            <div className="relative shrink-0">
-              <button 
-                onClick={() => setShowNotifications(!showNotifications)}
-                className={cn(
-                  "p-2 rounded-lg bg-slate-50 border border-slate-100 hover:border-brand-cyan transition-colors cursor-pointer relative group",
-                  showNotifications ? "border-brand-cyan text-brand-cyan" : "text-slate-400"
-                )}
-              >
-                <Bell className={cn(
-                  "w-4 h-4 transition-transform group-hover:rotate-12",
-                  notifications.some(n => !n.read) && "animate-[bell-ring_1s_infinite]"
-                )} />
-                {notifications.some(n => !n.read) && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full border-2 border-white ring-2 ring-rose-500/20" />
-                )}
-              </button>
-
-            <AnimatePresence>
-              {showNotifications && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute right-0 mt-3 w-72 bg-white border border-slate-200 shadow-2xl rounded-2xl overflow-hidden z-[60]"
-                >
-                  <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
-                    <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Notificações</h3>
-                    <span className="text-[9px] bg-brand-cyan text-white px-1.5 rounded-full">{notifications.filter(n => !n.read).length} Novas</span>
-                  </div>
-                  <div className="max-h-80 overflow-y-auto">
-                    {notifications.length === 0 ? (
-                      <div className="p-8 text-center text-slate-300">
-                        <Bell className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                        <p className="text-[10px] uppercase font-bold tracking-tighter">Nenhuma notificação</p>
-                      </div>
-                    ) : (
-                      notifications.map(notif => (
-                        <div 
-                          key={notif.id} 
-                          onClick={async () => {
-                            if (!notif.read) {
-                              await setDoc(doc(db, 'notifications', notif.id), { read: true }, { merge: true });
-                            }
-                          }}
-                          className={cn(
-                            "p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors cursor-pointer group",
-                            !notif.read ? "bg-cyan-50/20" : ""
-                          )}
-                        >
-                          <div className="flex gap-3">
-                            <div className={cn(
-                              "w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 transition-all",
-                              !notif.read ? "scale-125 shadow-[0_0_8px_rgba(6,182,212,0.5)]" : "opacity-30",
-                              notif.type === 'warning' ? "bg-amber-500" : 
-                              notif.type === 'success' ? "bg-emerald-500" : 
-                              "bg-brand-cyan"
-                            )} />
-                            <div className="flex-1 min-w-0">
-                              <p className={cn(
-                                "text-[11px] leading-tight mb-1 transition-colors",
-                                !notif.read ? "text-slate-900 font-bold" : "text-slate-500"
-                              )}>
-                                {notif.message}
-                              </p>
-                      <p className="text-[9px] text-slate-400 font-medium">
-                                {notif.createdAt && isValid(parseISO(notif.createdAt)) ? format(parseISO(notif.createdAt), 'HH:mm - dd MMM', { locale: ptBR }) : 'Agora'}
-                              </p>
-                            </div>
-                            {!notif.read && (
-                              <div className="w-1 h-1 bg-brand-cyan rounded-full mt-1.5" />
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  {notifications.length > 0 && (
-                    <button 
-                      onClick={async () => {
-                        const batch = notifications.filter(n => !n.read);
-                        for (const n of batch) {
-                          await setDoc(doc(db, 'notifications', n.id), { read: true }, { merge: true });
-                        }
-                      }}
-                      className="w-full py-2.5 bg-slate-50 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:bg-brand-cyan hover:text-white transition-colors"
-                    >
-                      Marcar como lidas
-                    </button>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <button 
+              onClick={() => {
+                const url = window.location.origin + window.location.pathname + '?booking=true';
+                navigator.clipboard.writeText(url);
+                alert('Link de agendamento online copiado!');
+                setIsPublicBooking(true);
+              }}
+              className="p-2 bg-brand-cyan/10 border border-brand-cyan/20 rounded-xl text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shadow-sm hover:shadow-md"
+              title="Copiar Link e Ver Tela de Agendamento"
+            >
+              <Monitor className="w-5 h-5 transition-transform group-hover:scale-110" />
+            </button>
           </div>
         </div>
 
@@ -1963,7 +1903,6 @@ export default function App() {
             <LogOut className="w-4 h-4 group-hover:scale-110 transition-transform" />
             <span className="text-[8px] uppercase font-black tracking-widest mt-1">Sair</span>
           </button>
-        </div>
       </header>
 
       {/* Mobile Menu Overlay */}
