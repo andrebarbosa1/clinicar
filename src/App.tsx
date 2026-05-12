@@ -411,6 +411,29 @@ export default function App() {
     return localStorage.getItem('odonto_cookie_consent') === 'true';
   });
   const [clinicName, setClinicName] = useState('OdontoDash');
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  React.useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
 
   const hasModule = React.useCallback((moduleName: string) => {
     if (!currentUser) return false;
@@ -1706,6 +1729,8 @@ export default function App() {
             clinicName={clinicName}
             onUpdateClinicName={handleUpdateClinicName}
             onResetDatabase={handleResetDatabase}
+            deferredPrompt={deferredPrompt}
+            onInstallPWA={handleInstallPWA}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
@@ -3578,12 +3603,16 @@ function SettingsView({
   clinicName, 
   onUpdateClinicName, 
   onResetDatabase,
-  isAdmin 
+  isAdmin,
+  deferredPrompt,
+  onInstallPWA
 }: { 
   clinicName: string; 
   onUpdateClinicName: (n: string) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   isAdmin?: boolean;
+  deferredPrompt: any;
+  onInstallPWA: () => void;
 }) {
   const [localClinicName, setLocalClinicName] = useState(clinicName);
   const [isSaving, setIsSaving] = useState(false);
@@ -3639,6 +3668,29 @@ function SettingsView({
           <div className="space-y-1">
             <label className="text-[9px] uppercase font-bold text-slate-400">Endereço Principal</label>
             <input type="text" defaultValue="Av. Paulista, 1000 - São Paulo, SP" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Aplicativo (PWA)</h3>
+          <div className="bg-slate-50 p-6 border border-slate-100 rounded-lg space-y-3">
+            <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
+              Transforme o sistema em um aplicativo desktop ou mobile. Isso permite acesso rápido pela área de trabalho e funcionamento offline básico.
+            </p>
+            {deferredPrompt ? (
+              <button 
+                onClick={onInstallPWA}
+                className="bg-brand-cyan text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-cyan-600 transition-all rounded shadow-sm flex items-center gap-2"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                Instalar Aplicativo
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 text-emerald-500">
+                <ShieldCheck className="w-4 h-4" />
+                <span className="text-[10px] font-bold uppercase tracking-widest">Aplicativo já instalado ou não suportado</span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -6493,7 +6545,9 @@ function AdminView({
   currentUser,
   clinicName,
   onUpdateClinicName,
-  onResetDatabase
+  onResetDatabase,
+  deferredPrompt,
+  onInstallPWA
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
@@ -6502,7 +6556,9 @@ function AdminView({
   currentUser: any;
   clinicName: string;
   onUpdateClinicName: (n: string) => Promise<void>;
-  onResetDatabase: () => Promise<void>;
+  onResetDatabase?: () => Promise<void>;
+  deferredPrompt: any;
+  onInstallPWA: () => void;
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -6578,6 +6634,8 @@ function AdminView({
             onUpdateClinicName={onUpdateClinicName} 
             onResetDatabase={onResetDatabase}
             isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
+            deferredPrompt={deferredPrompt}
+            onInstallPWA={onInstallPWA}
           />
         )}
         
@@ -6791,6 +6849,19 @@ function AdminView({
                       />
                     </div>
                   </div>
+
+                  {currentUser?.role?.toLowerCase() === 'admin' && (
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold text-slate-400">Nova Senha (ou atual)</label>
+                      <input 
+                        type="password" 
+                        value={editingUser.password || ''}
+                        onChange={(e) => setEditingUser({...editingUser, password: SecurityUtils.limit(e.target.value, 20)})}
+                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
+                        placeholder="Deixe como está ou mude a senha"
+                      />
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <label className="text-[9px] uppercase font-bold text-slate-400 block ml-1">Módulos Acessíveis</label>
@@ -7218,30 +7289,7 @@ function LoginView({
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenBooking}
-              className="w-full py-3 text-xs font-bold text-slate-500 hover:text-brand-cyan transition-colors flex items-center justify-center gap-2"
-            >
-              <Calendar className="w-4 h-4" />
-              Agendar Consulta Online
-            </button>
           </form>
-
-          {/* Quick Access for Demo */}
-          <div className="mt-8 pt-6 border-t border-slate-50">
-            <div className="flex flex-wrap justify-center gap-2">
-              {['ana.admin', 'roberto', 'mariana'].map(u => (
-                <button 
-                  key={u}
-                  onClick={() => { setUsername(u); setPassword('123'); }}
-                  className="text-[10px] text-slate-500 font-bold bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 hover:border-brand-cyan hover:text-brand-cyan transition-all"
-                >
-                  {u}
-                </button>
-              ))}
-            </div>
-          </div>
         </motion.div>
         
         <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8">

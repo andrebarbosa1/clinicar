@@ -11,35 +11,21 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function getUserData() {
-      return get(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)).data;
+    function isStaff() {
+      // In this version, we allow staff operations even without Google Login 
+      // primarily for the simulated environment. 
+      // Security is minimal without Firebase Auth.
+      return true; 
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        (request.auth.token.email == 'andreb202121@gmail.com' && request.auth.token.email_verified == true) ||
-        exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Admin'
-      );
+      // For full security, re-enable Google Login and use:
+      // return isSignedIn() && (request.auth.token.email == 'andreb202121@gmail.com');
+      return true; 
     }
 
-    function isDentista() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Dentista';
-    }
-
-    function isRecepcionista() {
-      return isSignedIn() && exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)) && getUserData().role == 'Recepcionista';
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
+    function getUserName() {
+      return "Sistema"; // Fallback when not using Google Login
     }
 
     // Records Rules
@@ -69,6 +55,14 @@ service cloud.firestore {
     }
 
     match /documents/{docId} {
+      allow read, write: if true;
+    }
+
+    match /odontograms/{odoId} {
+      allow read, write: if true;
+    }
+
+    match /settings/{settingId} {
       allow read, write: if true;
     }
   }

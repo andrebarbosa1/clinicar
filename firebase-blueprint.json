@@ -91,6 +91,17 @@
         "metadata": { "type": "object" }
       },
       "required": ["id", "type", "patientName", "content", "createdAt"]
+    },
+    "ClinicSetting": {
+      "title": "ClinicSetting",
+      "description": "General application settings like clinic name",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clinicName": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "clinicName"]
     }
   },
   "firestore": {
@@ -117,6 +128,10 @@
     "/support_tickets/{ticketId}": {
       "schema": "SupportTicket",
       "description": "Technical support tickets"
+    },
+    "/settings/{settingId}": {
+      "schema": "ClinicSetting",
+      "description": "Application settings"
     }
   }
 }
