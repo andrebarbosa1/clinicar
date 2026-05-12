@@ -458,15 +458,31 @@ export default function App() {
 
     // 2.1 Users sync (Always active if authenticated or about to be)
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const u = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
-      if (u.length === 0) {
-        setUsers(INITIAL_USERS);
-      } else {
-        setUsers(u);
+      const dbUsers = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
+      console.log(`[UsersSync] ${dbUsers.length} usuários em Firestore. Sincronizando...`);
+      
+      // Use INITIAL_USERS as base, override with Firestore data, and add any new ones
+      const merged = INITIAL_USERS.map(iu => {
+        const found = dbUsers.find(du => du.id === iu.id);
+        if (found) {
+          return { ...iu, ...found };
+        }
+        return iu;
+      });
+
+      dbUsers.forEach(du => {
+        if (!merged.find(m => m.id === du.id)) {
+          merged.push(du);
+        }
+      });
+
+      setUsers(merged);
+
+      if (merged.length > 0) {
         const sessionUser = JSON.parse(localStorage.getItem('odonto_session') || '{}');
         const selfId = currentUser?.id || sessionUser?.id;
         if (selfId) {
-          const updatedSelf = u.find(user => user.id === selfId);
+          const updatedSelf = merged.find(user => user.id === selfId);
           if (updatedSelf) {
             if (updatedSelf.modules !== currentUser?.modules || updatedSelf.role !== currentUser?.role || updatedSelf.name !== currentUser?.name) {
               console.log("[DataSync] Perfil do usuário atualizado, sincronizando estado local...");
@@ -621,24 +637,17 @@ export default function App() {
             try {
               const userRef = doc(db, 'users', initialUser.id);
               
-              // For ID '1' (ana.admin), we ALWAYS overwrite to ensure credentials are correct
-              if (initialUser.id === '1') {
-                const userSnap = await getDoc(userRef);
-                console.log(`FORCING update for admin: ${initialUser.name}`);
+              // Seed initial user if it doesn't exist
+              const userSnap = await getDoc(userRef);
+              if (!userSnap.exists()) {
+                console.log(`Seeding initial user: ${initialUser.name}`);
                 await setDoc(userRef, {
                   ...initialUser,
-                  updatedAt: new Date().toISOString(),
-                  createdAt: userSnap.exists() ? (userSnap.data()?.createdAt || new Date().toISOString()) : new Date().toISOString()
-                }); 
-              } else if (!seedFlag) {
-                const userSnap = await getDoc(userRef);
-                if (!userSnap.exists()) {
-                  console.log(`Seeding initial user: ${initialUser.name}`);
-                  await setDoc(userRef, {
-                    ...initialUser,
-                    createdAt: new Date().toISOString()
-                  });
-                }
+                  createdAt: new Date().toISOString()
+                });
+              } else if (initialUser.id === '1' && !seedFlag) {
+                // Special case for first run only if needed, but usually we just want the seed
+                console.log(`Initial admin ${initialUser.name} already exists.`);
               }
             } catch (err) {
               console.warn(`Failed to seed user ${initialUser.name}:`, err);
@@ -1103,9 +1112,19 @@ export default function App() {
   const handleUpdateUser = async (userId: string, updatedData: any): Promise<boolean> => {
     try {
       const userRef = doc(db, 'users', userId);
-      await updateDoc(userRef, {
-        ...updatedData,
+      // Remove id from the data to be updated in the document content
+      const { id, ...dataToUpdate } = updatedData;
+      
+      // Update with exact data from UI
+      await setDoc(userRef, {
+        ...dataToUpdate,
         updatedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      console.log(`[Users] Usuário ${userId} salvo em Firestore com sucesso.`, {
+        username: dataToUpdate.username,
+        hasPassword: !!dataToUpdate.password,
+        pwdLength: dataToUpdate.password?.length
       });
       return true;
     } catch (e: any) {
@@ -6850,18 +6869,28 @@ function AdminView({
                     </div>
                   </div>
 
-                  {currentUser?.role?.toLowerCase() === 'admin' && (
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Nova Senha (ou atual)</label>
+                      <label className="text-[9px] uppercase font-bold text-slate-400">Usuário (Login)</label>
+                      <input 
+                        type="text" 
+                        value={editingUser.username || ''}
+                        onChange={(e) => setEditingUser({...editingUser, username: SecurityUtils.limit(e.target.value.toLowerCase().trim(), 30)})}
+                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg font-mono" 
+                        placeholder="nome.usuario"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold text-slate-400">Nova Senha</label>
                       <input 
                         type="password" 
                         value={editingUser.password || ''}
-                        onChange={(e) => setEditingUser({...editingUser, password: SecurityUtils.limit(e.target.value, 20)})}
+                        onChange={(e) => setEditingUser({...editingUser, password: e.target.value})}
                         className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
-                        placeholder="Deixe como está ou mude a senha"
+                        placeholder="Senha de acesso"
                       />
                     </div>
-                  )}
+                  </div>
 
                   <div className="space-y-2">
                     <label className="text-[9px] uppercase font-bold text-slate-400 block ml-1">Módulos Acessíveis</label>
@@ -6917,6 +6946,7 @@ function AdminView({
                         try {
                           const success = await onUpdateUser(editingUser.id, editingUser); 
                           if (success) {
+                            alert('Usuário atualizado com sucesso!');
                             setEditingUser(null);
                           }
                         } finally {
@@ -7179,12 +7209,24 @@ function LoginView({
     let user = users.find(u => {
       const dbUsername = (u.username || "").toString().trim().toLowerCase();
       const dbPassword = (u.password || "").toString().trim();
-      return dbUsername === cleanUsername && dbPassword === cleanPassword;
+      
+      const userMatch = dbUsername === cleanUsername;
+      const pwdMatch = dbPassword === cleanPassword;
+      
+      if (userMatch && !pwdMatch) {
+         console.warn(`[Login] Usuário ${cleanUsername} encontrado, mas senha não coincide.`);
+      }
+      
+      return userMatch && pwdMatch;
     });
 
-    // ABSOLUTE FALLBACK: If reactive list fails but credentials match the original constants
+    // ABSOLUTE FALLBACK ONLY if not found in ANY reactive list and using original default
     if (!user && cleanUsername === 'ana.admin' && cleanPassword === '123') {
-      user = INITIAL_USERS.find(u => u.username === 'ana.admin');
+       const initialAna = INITIAL_USERS.find(u => u.username === 'ana.admin');
+       // Only fallback if INITIAL_USERS ana still has '123'
+       if (initialAna && initialAna.password === '123') {
+         user = initialAna;
+       }
     }
 
     if (user) {
