@@ -418,54 +418,104 @@ export default function App() {
 
   React.useEffect(() => {
     if (!isAuthReady) return;
-    if (!currentUser?.name) {
-      console.log("Aguardando nome do usuário para carregar pacientes...");
-      return;
-    }
 
-    let q;
-    if (currentUser?.role === 'Dentista') {
-      q = query(collection(db, 'patients'), where('dentistaResponsavel', '==', currentUser.name));
-    } else if (currentUser?.role === 'Admin' || hasModule('Pacientes')) {
-      q = query(collection(db, 'patients'));
-    } else {
-      // If none of the above, don't listen to patients or listen to empty set
-      setPatients([]);
-      return;
-    }
+    console.log("[DataSync] Iniciando monitoramento de dados...", { isAuthenticated, role: currentUser?.role, name: currentUser?.name });
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPatients(list);
+    // 2.1 Users sync (Always active if authenticated or about to be)
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const u = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
+      if (u.length === 0) {
+        setUsers(INITIAL_USERS);
+      } else {
+        setUsers(u);
+        const sessionUser = JSON.parse(localStorage.getItem('odonto_session') || '{}');
+        const selfId = currentUser?.id || sessionUser?.id;
+        if (selfId) {
+          const updatedSelf = u.find(user => user.id === selfId);
+          if (updatedSelf) {
+            if (updatedSelf.modules !== currentUser?.modules || updatedSelf.role !== currentUser?.role || updatedSelf.name !== currentUser?.name) {
+              console.log("[DataSync] Perfil do usuário atualizado, sincronizando estado local...");
+              setCurrentUser((prev: any) => ({ ...prev, ...updatedSelf }));
+              localStorage.setItem('odonto_session', JSON.stringify({ ...(currentUser || sessionUser), ...updatedSelf }));
+            }
+          }
+        }
+      }
     }, (error) => {
       if (error.message.includes('Quota exceeded')) setQuotaExceeded(true);
-      console.warn("Patients sync error:", error);
+      console.warn("Users sync error:", error);
     });
 
-    const docsPath = 'documents';
-    let docsQuery;
-    if (currentUser?.role === 'Dentista') {
-      docsQuery = query(collection(db, docsPath), where('dentista', '==', currentUser.name));
-    } else if (currentUser?.role === 'Admin' || hasModule('Agenda')) {
-      docsQuery = collection(db, docsPath);
+    let unsubPatients = () => {};
+    let unsubRecords = () => {};
+    let unsubDocs = () => {};
+
+    if (isAuthenticated && currentUser && currentUser.name) {
+      const role = (currentUser.role || '').toLowerCase();
+      
+      // 2.2 Patients Query
+      let pQuery;
+      if (role === 'dentista') {
+        pQuery = query(collection(db, 'patients'), where('dentistaResponsavel', '==', currentUser.name));
+      } else if (role === 'admin' || role === 'recepcionista' || hasModule('Pacientes')) {
+        pQuery = collection(db, 'patients');
+      }
+
+      if (pQuery) {
+        unsubPatients = onSnapshot(pQuery, (snapshot) => {
+          const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          console.log(`[PatientsSync] ${list.length} pacientes carregados para ${currentUser.name}`);
+          setPatients(list);
+        }, (err) => console.warn("Patients sync error:", err));
+      }
+
+      // 2.3 Records Query
+      let rQuery;
+      if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
+        rQuery = collection(db, 'records');
+      } else if (role === 'dentista') {
+        rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
+      }
+
+      if (rQuery) {
+        setIsLoadingData(true);
+        unsubRecords = onSnapshot(rQuery, (snapshot) => {
+          const records = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as DentalRecord));
+          console.log(`[RecordsSync] ${records.length} registros carregados.`);
+          setData(records);
+          setIsLoadingData(false);
+        }, (err) => {
+          console.error("Records sync error:", err);
+          setIsLoadingData(false);
+        });
+      }
+
+      // 2.4 Documents Query
+      let dQuery;
+      if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda')) {
+        dQuery = collection(db, 'documents');
+      } else if (role === 'dentista') {
+        dQuery = query(collection(db, 'documents'), where('dentista', '==', currentUser.name));
+      }
+
+      if (dQuery) {
+        unsubDocs = onSnapshot(dQuery, (snapshot) => {
+          const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+          console.log(`[DocsSync] ${docs.length} documentos carregados.`);
+          setDocuments(docs);
+        }, (err) => console.warn("Docs sync error:", err));
+      }
     } else {
-      setDocuments([]);
-      return;
+      setIsLoadingData(false);
     }
-
-    const unsubscribeDocs = onSnapshot(docsQuery, (snapshot) => {
-      const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setDocuments(docsData);
-    }, (error) => {
-      if (error.message.includes('Quota exceeded')) setQuotaExceeded(true);
-      console.warn("Documents sync error:", error);
-    });
 
     return () => {
-      unsubscribe();
-      unsubscribeDocs();
+      unsubUsers();
+      unsubPatients();
+      unsubRecords();
+      unsubDocs();
     };
-  }, [isAuthReady]);
+  }, [isAuthReady, isAuthenticated, currentUser?.id, currentUser?.role, currentUser?.name]);
 
   React.useEffect(() => {
     const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
@@ -689,88 +739,6 @@ export default function App() {
     return () => unsubAuth();
   }, []);
 
-  // 2. Data Listeners (Reactive to Auth Readiness and User Role)
-  React.useEffect(() => {
-    if (!isAuthReady) return;
-
-    // Users sync (Always active if authenticated or about to be)
-    console.log("Starting users monitor...");
-    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const u = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
-      // Fallback to INITIAL_USERS if the collection is empty
-      if (u.length === 0) {
-        setUsers(INITIAL_USERS);
-      } else {
-        setUsers(u);
-        
-        // Reactive update for current user profile to apply permission changes instantly
-        const sessionUser = JSON.parse(localStorage.getItem('odonto_session') || '{}');
-        const selfId = currentUser?.id || sessionUser?.id;
-        
-        if (selfId) {
-          const updatedSelf = u.find(user => user.id === selfId);
-          if (updatedSelf) {
-            // Check if modules or role changed
-            if (updatedSelf.modules !== currentUser?.modules || updatedSelf.role !== currentUser?.role) {
-              console.log("Permissions updated for current user, applying changes...");
-              setCurrentUser((prev: any) => ({ ...prev, ...updatedSelf }));
-              localStorage.setItem('odonto_session', JSON.stringify({ ...(currentUser || sessionUser), ...updatedSelf }));
-            }
-          }
-        }
-      }
-    }, (error) => {
-      if (error.message.includes('Quota exceeded')) setQuotaExceeded(true);
-      console.warn("Users sync error:", error);
-      // Fallback to INITIAL_USERS if firestore fails completely
-      if (users.length === 0) setUsers(INITIAL_USERS);
-    });
-
-    let unsubRecords = () => {};
-    if (isAuthenticated && currentUser && currentUser.name) {
-      let recordsQuery;
-      if (currentUser.role === 'Admin') {
-        recordsQuery = collection(db, 'records');
-      } else if (currentUser.role === 'Dentista') {
-        recordsQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
-      } else if (hasModule('Agenda') || hasModule('Agenda') || hasModule('Pacientes')) {
-        recordsQuery = collection(db, 'records');
-      } else if (currentUser.role === 'Recepcionista') {
-        recordsQuery = collection(db, 'records');
-      }
-
-      if (recordsQuery) {
-        setIsLoadingData(true);
-        // Safety timeout to prevent infinite loading if Firebase hangs
-        const timeout = setTimeout(() => {
-          setIsLoadingData(false);
-        }, 8000);
-
-        unsubRecords = onSnapshot(recordsQuery, (snapshot) => {
-          clearTimeout(timeout);
-          const records = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as DentalRecord));
-          console.log(`Records sync: ${records.length} items loaded`);
-          setData(records);
-          setIsLoadingData(false);
-          setQuotaExceeded(false); // Clear error if successful
-        }, (error) => {
-          clearTimeout(timeout);
-          if (error.message.includes('Quota exceeded')) setQuotaExceeded(true);
-          console.error("Records sync error:", error);
-          setIsLoadingData(false);
-        });
-      } else {
-        setIsLoadingData(false);
-      }
-    } else if (isAuthReady) {
-      setIsLoadingData(false);
-    }
-
-    return () => {
-      unsubUsers();
-      unsubRecords();
-    };
-  }, [isAuthReady, isAuthenticated, currentUser?.role, currentUser?.name]);
 
   // Notifications Listener
   React.useEffect(() => {
@@ -833,31 +801,10 @@ export default function App() {
         patientData.createdAt = new Date().toISOString();
       }
 
-      console.log("[handleCreatePatient] Salvando no Firestore...");
+      console.log("[handleCreatePatient] Salvando no Firestore:", patientData);
       const patientRef = doc(db, 'patients', patientId);
       await setDoc(patientRef, patientData, { merge: true });
-      console.log("[handleCreatePatient] Paciente salvo com sucesso.");
-      
-      // 2. Create initial record for NEW patients
-      if (!existingId) {
-        try {
-          const record: DentalRecord = {
-            id: `rec-pat-${Date.now()}`,
-            data: getSystemInitialDate(),
-            paciente: trimmedName,
-            procedimento: newPatient.procedimento || 'Avaliação Inicial',
-            dentista: currentUser?.name || 'Dra. Ana Silveira',
-            status: 'Pendente',
-            statusPagamento: 'Pendente',
-            valor: Number(newPatient.valor) || 0,
-          };
-          console.log(`[handleCreatePatient] Criando registro inicial: ${record.id}`);
-          await setDoc(doc(db, 'records', record.id), record);
-          console.log("[handleCreatePatient] Registro inicial salvo.");
-        } catch (recordError) {
-          console.warn("[handleCreatePatient] Erro ao criar registro inicial (não impede o cadastro do paciente):", recordError);
-        }
-      }
+      console.log("[handleCreatePatient] Sucesso ao gravar no Firestore.");
       
       alert(existingId ? 'Paciente atualizado com sucesso!' : 'Paciente cadastrado com sucesso!');
       setSubPage(null);
