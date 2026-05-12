@@ -465,6 +465,9 @@ export default function App() {
       const merged = INITIAL_USERS.map(iu => {
         const found = dbUsers.find(du => du.id === iu.id);
         if (found) {
+          if (iu.id === '1') {
+            console.log(`[UsersSync] Sincronizando Admin (ID:1). Login: ${found.username}, PWD matches default? ${found.password === iu.password}`);
+          }
           return { ...iu, ...found };
         }
         return iu;
@@ -779,10 +782,27 @@ export default function App() {
         }
       } else {
         // User is NOT logged into Firebase
-        console.log("Cleaning up session - no Firebase user found");
-        localStorage.removeItem('odonto_session');
-        setCurrentUser(null);
-        setIsAuthenticated(false);
+        console.log("Cleaning up session check - Firebase: no user");
+        const savedSessionStr = localStorage.getItem('odonto_session');
+        if (savedSessionStr) {
+          try {
+            const savedSession = JSON.parse(savedSessionStr);
+            // ONLY clean if it was a Firebase session. Custom login sessions (no firebaseUid) are preserved.
+            if (savedSession.firebaseUid) {
+              console.log("Cleaning up Firebase session");
+              localStorage.removeItem('odonto_session');
+              setCurrentUser(null);
+              setIsAuthenticated(false);
+            } else {
+              console.log("Preserving custom login session");
+              // Ensure state matches localStorage
+              setCurrentUser(savedSession);
+              setIsAuthenticated(true);
+            }
+          } catch (e) {
+            localStorage.removeItem('odonto_session');
+          }
+        }
       }
       
       setIsAuthReady(true);
@@ -7213,8 +7233,11 @@ function LoginView({
       const userMatch = dbUsername === cleanUsername;
       const pwdMatch = dbPassword === cleanPassword;
       
-      if (userMatch && !pwdMatch) {
-         console.warn(`[Login] Usuário ${cleanUsername} encontrado, mas senha não coincide.`);
+      if (userMatch) {
+         console.log(`[LoginCheck] Usuário ${cleanUsername} encontrado. Senha coincide? ${pwdMatch}`);
+         if (!pwdMatch) {
+            console.warn(`[LoginCheck] Senha para ${cleanUsername} em memória: "${dbPassword}" (len: ${dbPassword.length}). Digitada: "${cleanPassword}" (len: ${cleanPassword.length})`);
+         }
       }
       
       return userMatch && pwdMatch;
@@ -8018,7 +8041,7 @@ function Footer({
           <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
             <Shield className="w-4 h-4 text-emerald-500" />
           </div>
-          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ClinicalGate Security</span>
+          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ABsistemas Security</span>
         </div>
       </div>
     </footer>
