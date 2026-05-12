@@ -102,14 +102,23 @@ import {
   deleteDoc,
   updateDoc
 } from 'firebase/firestore';
+
+const OPENING_HOUR = "08:00";
+const CLOSING_HOUR = "17:00";
+
+const getSystemInitialDate = () => {
+    const now = new Date();
+    if (format(now, 'HH:mm') >= CLOSING_HOUR) {
+        return format(addDays(now, 1), 'yyyy-MM-dd');
+    }
+    return format(now, 'yyyy-MM-dd');
+};
 import { 
   getAuth, 
   onAuthStateChanged, 
   signOut, 
   setPersistence, 
-  browserLocalPersistence,
-  signInWithPopup,
-  GoogleAuthProvider
+  browserLocalPersistence
 } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -787,7 +796,7 @@ export default function App() {
   }, [currentUser]);
 
   const handleCreatePatient = async (newPatient: any, existingId?: string): Promise<boolean> => {
-    console.log("handleCreatePatient called with:", { name: newPatient.name, existingId });
+    console.log("[handleCreatePatient] Início:", { name: newPatient.name, existingId });
     if (!newPatient.name) {
       alert('Por favor, informe o nome do paciente.');
       return false;
@@ -795,21 +804,17 @@ export default function App() {
 
     try {
       const patientId = (existingId && existingId.trim() !== '') ? existingId : `pat-${Date.now()}`;
-      console.log(existingId ? `Updating patient ${existingId}...` : `Creating new patient ${patientId}...`);
+      console.log(existingId ? `[handleCreatePatient] Atualizando paciente ${existingId}...` : `[handleCreatePatient] Criando novo paciente ${patientId}...`);
 
       const trimmedName = newPatient.name.trim();
       const trimmedEmail = newPatient.email?.trim() || '';
 
       if (!existingId) {
+        // Validation is already done in the view, but we keep a final check here
         const isDuplicateEmail = trimmedEmail && patients.some(p => p.email?.toLowerCase() === trimmedEmail.toLowerCase());
-        const isDuplicateName = patients.some(p => p.name?.toLowerCase() === trimmedName.toLowerCase());
-        
         if (isDuplicateEmail) {
-           alert(`O e-mail "${trimmedEmail}" já está cadastrado para outro paciente.`);
-           return false;
-        }
-        if (isDuplicateName) {
-           alert(`O paciente "${trimmedName}" já está cadastrado.`);
+           console.warn(`[handleCreatePatient] E-mail duplicado detectado para: ${trimmedEmail}`);
+           alert(`O e-mail "${trimmedEmail}" já está cadastrado.`);
            return false;
         }
       }
@@ -828,36 +833,37 @@ export default function App() {
         patientData.createdAt = new Date().toISOString();
       }
 
-      console.log("Saving patient document to Firestore...");
-      try {
-        await setDoc(doc(db, 'patients', patientId), patientData, { merge: true });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `patients/${patientId}`);
-      }
+      console.log("[handleCreatePatient] Salvando no Firestore...");
+      const patientRef = doc(db, 'patients', patientId);
+      await setDoc(patientRef, patientData, { merge: true });
+      console.log("[handleCreatePatient] Paciente salvo com sucesso.");
       
-      // 2. Create initial record for NEW patients (optional/background)
+      // 2. Create initial record for NEW patients
       if (!existingId) {
-        const record: DentalRecord = {
-          id: `rec-pat-${Date.now()}`,
-          data: format(new Date(), 'yyyy-MM-dd'),
-          paciente: trimmedName,
-          procedimento: newPatient.procedimento || 'Avaliação Inicial',
-          dentista: currentUser?.name || 'Dra. Ana Silveira',
-          status: 'Pendente',
-          statusPagamento: 'Pendente',
-          valor: Number(newPatient.valor) || 0,
-        };
-        console.log(`Creating initial record for new patient... ${record.id}`);
-        setDoc(doc(db, 'records', record.id), record).catch(e => {
-          console.warn("Background record creation failed:", e);
-        });
+        try {
+          const record: DentalRecord = {
+            id: `rec-pat-${Date.now()}`,
+            data: getSystemInitialDate(),
+            paciente: trimmedName,
+            procedimento: newPatient.procedimento || 'Avaliação Inicial',
+            dentista: currentUser?.name || 'Dra. Ana Silveira',
+            status: 'Pendente',
+            statusPagamento: 'Pendente',
+            valor: Number(newPatient.valor) || 0,
+          };
+          console.log(`[handleCreatePatient] Criando registro inicial: ${record.id}`);
+          await setDoc(doc(db, 'records', record.id), record);
+          console.log("[handleCreatePatient] Registro inicial salvo.");
+        } catch (recordError) {
+          console.warn("[handleCreatePatient] Erro ao criar registro inicial (não impede o cadastro do paciente):", recordError);
+        }
       }
       
       alert(existingId ? 'Paciente atualizado com sucesso!' : 'Paciente cadastrado com sucesso!');
       setSubPage(null);
       return true;
     } catch (e: any) {
-      console.error("Falha ao salvar paciente:", e);
+      console.error("[handleCreatePatient] Falha crítica:", e);
       let errorMsg = "Permissão negada ou falha na rede.";
       try {
         if (e.message && e.message.startsWith('{')) {
@@ -2614,7 +2620,7 @@ function DashboardView({
         )}>
           <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6">Mix de Procedimentos</h2>
           <div className="h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <PieChart>
                 <Pie data={procedureDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={65} paddingAngle={4} dataKey="value">
                   {procedureDistribution.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -2649,7 +2655,7 @@ function DashboardView({
               </div>
             </div>
             <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <AreaChart data={monthlyData}>
                   <defs>
                     <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
@@ -2677,7 +2683,7 @@ function DashboardView({
           <section className="bg-white p-6 border border-slate-200 rounded-[32px] shadow-sm h-[320px] lg:col-span-4">
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6">Produção por Equipe</h2>
             <div className="h-[200px]">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                 <BarChart data={dentistProductivity} layout="vertical" margin={{ left: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                   <XAxis type="number" hide />
@@ -5995,21 +6001,10 @@ function AppointmentFormView({
   presetPatient?: string;
   isClinicalRecord?: boolean;
 }) {
-  const OPENING_HOUR = "08:00";
-  const CLOSING_HOUR = "17:00";
-
-  const getInitialDate = () => {
-    const now = new Date();
-    if (!isClinicalRecord && format(now, 'HH:mm') >= CLOSING_HOUR) {
-      return format(addDays(now, 1), 'yyyy-MM-dd');
-    }
-    return format(now, 'yyyy-MM-dd');
-  };
-
-  const minSelectableDate = !isClinicalRecord ? getInitialDate() : undefined;
+  const minSelectableDate = !isClinicalRecord ? getSystemInitialDate() : undefined;
 
   const [paciente, setPaciente] = useState(presetPatient);
-  const [dataVal, setDataVal] = useState(getInitialDate());
+  const [dataVal, setDataVal] = useState(getSystemInitialDate());
   const [horario, setHorario] = useState('');
   const [dentista, setDentista] = useState('');
   const [procedimento, setProcedimento] = useState('Avaliação Inicial');
@@ -7336,7 +7331,7 @@ function LoginView({
                 </>
               )}
             </button>
-            
+
             <button
               type="button"
               onClick={onOpenBooking}
@@ -7409,20 +7404,7 @@ function PublicBookingView({
   onTerms: () => void;
   clinicName: string;
 }) {
-  const OPENING_HOUR = "08:00";
-  const CLOSING_HOUR = "17:00";
-
-  // Calculate minimum selectable date based on current time
-  const getMinDate = () => {
-    const now = new Date();
-    const currentHour = format(now, 'HH:mm');
-    if (currentHour >= CLOSING_HOUR) {
-      return format(addDays(now, 1), 'yyyy-MM-dd');
-    }
-    return format(now, 'yyyy-MM-dd');
-  };
-
-  const minDate = getMinDate();
+  const minDate = getSystemInitialDate();
 
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
@@ -8066,5 +8048,7 @@ function Footer({
     </footer>
   );
 }
+
+
 
 
