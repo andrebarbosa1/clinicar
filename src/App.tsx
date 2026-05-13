@@ -66,7 +66,8 @@ import {
   Heart,
   ShieldCheck,
   ChevronDown,
-  ImagePlus
+  ImagePlus,
+  Info
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -3827,10 +3828,18 @@ function SettingsView({
 
         <section className="space-y-4">
           <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Aplicativo (PWA)</h3>
-          <div className="bg-slate-50 p-6 border border-slate-100 rounded-lg space-y-3">
+          <div className="bg-slate-50 p-6 border border-slate-100 rounded-lg space-y-4">
             <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
               Transforme o sistema em um aplicativo desktop ou mobile. Isso permite acesso rápido pela área de trabalho e funcionamento offline básico.
             </p>
+            
+            <div className="bg-amber-50 border border-amber-100 p-3 rounded text-[9px] text-amber-700 flex items-start gap-2">
+              <Info className="w-3 h-3 shrink-0 mt-0.5" />
+              <p>
+                <strong>Nota:</strong> Para instalar, você deve estar acessando o sistema diretamente em uma aba do navegador (fora do visualizador do editor). Abra o "Shared App URL" ou use o botão de abrir em nova aba.
+              </p>
+            </div>
+
             {deferredPrompt ? (
               <button 
                 onClick={onInstallPWA}
@@ -3840,9 +3849,9 @@ function SettingsView({
                 Instalar Aplicativo
               </button>
             ) : (
-              <div className="flex items-center gap-2 text-emerald-500">
+              <div className="flex items-center gap-2 text-slate-400">
                 <ShieldCheck className="w-4 h-4" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Aplicativo já instalado ou não suportado</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Pendente de sinal do navegador ou já instalado</span>
               </div>
             )}
           </div>

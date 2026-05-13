@@ -28,6 +28,11 @@ service cloud.firestore {
       return "Sistema"; // Fallback when not using Google Login
     }
 
+    // Connection Test
+    match /test/connection {
+      allow read: if true;
+    }
+
     // Records Rules
     match /records/{recordId} {
       allow read, write: if true;
