@@ -7539,285 +7539,394 @@ function PublicBookingView({
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+      <div className="min-h-screen bg-white md:bg-slate-50 flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
+        {/* Background blobs */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-cyan/5 blur-[100px] pointer-events-none rounded-full" />
+        <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500/5 blur-[100px] pointer-events-none rounded-full" />
+
         <motion.div 
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-[32px] shadow-2xl p-10 text-center max-w-md w-full border border-slate-100"
+          className="bg-white md:rounded-[40px] md:shadow-2xl md:shadow-slate-200/50 p-8 md:p-12 text-center max-w-lg w-full md:border border-slate-100 relative z-10"
         >
-          <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+          <div className="w-24 h-24 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500 -rotate-3" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">Solicitação Enviada!</h2>
-          <p className="text-slate-500 text-sm leading-relaxed mb-8">
-            Seu pré-agendamento foi recebido. Nossa equipe entrará em contato via WhatsApp ({bookingData.telefone}) para confirmar seu horário.
+          <h2 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Tudo pronto!</h2>
+          <p className="text-slate-500 text-base leading-relaxed mb-10">
+            Sua solicitação de agendamento foi enviada. Nossa equipe entrará em contato via WhatsApp 
+            <span className="font-bold text-slate-800"> ({bookingData.telefone})</span> para confirmar seu horário.
           </p>
           <button 
             onClick={onBack}
-            className="w-full py-4 bg-brand-cyan text-white font-bold rounded-2xl hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
+            className="w-full py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98]"
           >
-            Voltar ao Início
+            Voltar para a home
           </button>
         </motion.div>
-        <div className="fixed bottom-0 left-0 w-full z-10">
-           <Footer 
-          onPrivacyPolicy={onPrivacyPolicy} 
-          onTerms={onTerms} 
-          footerText={footerText}
-        />
+        
+        <div className="mt-12 text-center relative z-10">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mb-4">Ambiente Seguro por ClinicalGate</p>
+          <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-      <div className="w-full max-w-2xl">
-        <div className="flex items-center gap-4 mb-6">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      {/* Dynamic Header */}
+      <header className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-50 py-4 px-6">
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-4">
+             {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-8 md:h-10 w-auto object-contain" />
+            ) : (
+              <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tighter">
+                {clinicName} <span className="text-brand-cyan font-normal">Agendamento</span>
+              </h1>
+            )}
+          </div>
+          <div className="hidden md:flex items-center gap-2">
+            {[1, 2, 3].map((s) => (
+              <div 
+                key={s} 
+                className={cn(
+                  "w-8 h-1 rounded-full transition-all duration-500",
+                  step === s ? "bg-brand-cyan w-12" : (step > s ? "bg-emerald-400" : "bg-slate-100")
+                )} 
+              />
+            ))}
+          </div>
           <button 
             onClick={onBack}
-            className="p-3 bg-white rounded-2xl text-slate-400 hover:text-brand-cyan shadow-sm border border-slate-100 transition-all"
+            className="text-xs font-bold text-slate-400 hover:text-brand-cyan uppercase tracking-widest transition-colors flex items-center gap-2"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
+            <span className="hidden sm:inline">Sair</span>
           </button>
-          <div className="flex-1">
-            {clinicLogo ? (
-              <img src={clinicLogo} alt={clinicName} className="h-10 w-auto object-contain mb-2" />
-            ) : (
-              <h1 className="text-xl font-bold text-slate-800">{clinicName} <span className="text-brand-cyan font-normal">Agendamento</span></h1>
-            )}
-            <p className="text-xs text-slate-400 uppercase tracking-widest font-bold">Passo {step} de 3</p>
-          </div>
         </div>
+      </header>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-[32px] shadow-xl shadow-slate-200/50 p-8 border border-slate-100 overflow-hidden relative"
-        >
-          {/* Progress Bar */}
-          <div className="absolute top-0 left-0 w-full h-1 bg-slate-50">
-            <motion.div 
-              className="h-full bg-brand-cyan"
-              initial={{ width: '0%' }}
-              animate={{ width: `${(step / 3) * 100}%` }}
-            />
+      <main className="flex-1 flex items-center justify-center p-4 py-8 md:py-16">
+        <div className="w-full max-w-4xl">
+          <div className="text-center mb-8 md:mb-12">
+            <h2 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight mb-2">
+              {step === 1 && "Com qual profissional deseja agendar?"}
+              {step === 2 && "Quando você prefere vir?"}
+              {step === 3 && "Só mais alguns detalhes..."}
+            </h2>
+            <p className="text-slate-500 text-sm md:text-base">
+              Passo {step} de 3 — {step === 1 ? "Escolha do Especialista" : step === 2 ? "Dia e Horário" : "Confirmação"}
+            </p>
           </div>
 
-          <div className="pt-4">
-            {step === 1 && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                    <Stethoscope className="w-5 h-5 text-brand-cyan" />
-                    Selecione o Profissional
-                  </h2>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {doctors.map(doc => (
-                      <button
-                        key={doc.id}
-                        onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
-                        className={cn(
-                          "p-4 rounded-2xl border text-left transition-all group",
-                          bookingData.dentista === doc.name 
-                            ? "border-brand-cyan bg-cyan-50/30 ring-4 ring-brand-cyan/5" 
-                            : "border-slate-100 hover:border-slate-200 bg-white"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
+          <div className="bg-white md:rounded-[40px] shadow-2xl shadow-slate-200/40 p-6 md:p-12 border border-white relative overflow-hidden">
+            {/* Background pattern */}
+            <div className="absolute top-0 right-0 p-12 opacity-[0.03] pointer-events-none">
+              <Calendar className="w-64 h-64 text-slate-900" />
+            </div>
+
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={step}
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                transition={{ duration: 0.3 }}
+              >
+                {step === 1 && (
+                  <div className="space-y-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {doctors.map(doc => (
+                        <button
+                          key={doc.id}
+                          onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
+                          className={cn(
+                            "p-6 rounded-3xl border-2 text-left transition-all relative group flex flex-col items-center text-center",
+                            bookingData.dentista === doc.name 
+                              ? "border-brand-cyan bg-cyan-50/20 shadow-xl shadow-brand-cyan/10" 
+                              : "border-slate-50 hover:border-slate-200 bg-white"
+                          )}
+                        >
+                          {bookingData.dentista === doc.name && (
+                            <div className="absolute top-4 right-4 bg-brand-cyan text-white p-1 rounded-full">
+                              <CheckCircle2 className="w-4 h-4" />
+                            </div>
+                          )}
                           <div className={cn(
-                            "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-colors",
-                            bookingData.dentista === doc.name ? "bg-brand-cyan text-white" : "bg-slate-100 text-slate-400"
+                            "w-20 h-20 rounded-2xl flex items-center justify-center text-2xl font-black mb-4 transition-transform group-hover:scale-105",
+                            bookingData.dentista === doc.name ? "bg-brand-cyan text-white shadow-lg shadow-brand-cyan/20" : "bg-slate-100 text-slate-400"
                           )}>
                             {doc.name[0]}
                           </div>
-                          <div>
-                            <p className="text-sm font-bold text-slate-800">{doc.name}</p>
-                            <p className="text-[10px] text-slate-400 uppercase tracking-tighter font-bold">
-                              {doc.role === 'Admin' ? 'Especialista' : 'Clínico Geral'}
+                          <div className="space-y-1">
+                            <p className="text-lg font-black text-slate-900">{doc.name}</p>
+                            <div className="flex flex-col gap-1 items-center">
+                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                {doc.role === 'Admin' ? 'Especialista Sênior' : 'Clínico Geral'}
+                              </span>
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600">
+                                Disponível hoje
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    
+                    <div className="flex justify-center pt-4">
+                      <button 
+                        disabled={!bookingData.dentista}
+                        onClick={() => setStep(2)}
+                        className="w-full max-w-sm py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        Continuar para data e hora
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 2 && (
+                  <div className="space-y-10">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                      <div className="space-y-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-brand-cyan/10 rounded-xl flex items-center justify-center">
+                            <Calendar className="w-5 h-5 text-brand-cyan" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Selecione o melhor dia</h3>
+                        </div>
+                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          <input 
+                            id="booking-date"
+                            type="date" 
+                            min={minDate}
+                            value={bookingData.data}
+                            onChange={(e) => {
+                              const newData = e.target.value;
+                              setBookingData(prev => {
+                                const newBookingData = { ...prev, data: newData };
+                                if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
+                                  if (prev.horario < format(new Date(), 'HH:mm')) {
+                                    newBookingData.horario = '';
+                                  }
+                                }
+                                return newBookingData;
+                              });
+                            }}
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all font-bold text-slate-800"
+                          />
+                          <p className="mt-4 text-xs text-slate-500 flex items-center gap-2 px-1">
+                            <Info className="w-3.5 h-3.5" />
+                            Exibindo horários para {format(parseISO(bookingData.data), "eeee, dd 'de' MMMM", { locale: ptBR })}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                            <Clock className="w-5 h-5 text-indigo-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Horários disponíveis</h3>
+                        </div>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          {timeSlots.map(time => {
+                            const isTaken = data.some(r => 
+                              r.dentista === bookingData.dentista && 
+                              r.data === bookingData.data && 
+                              r.horario === time &&
+                              r.status !== 'Cancelado'
+                            );
+
+                            const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
+                            const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
+                            
+                            return (
+                              <button
+                                key={time}
+                                disabled={isTaken || isPast}
+                                onClick={() => setBookingData(prev => ({ ...prev, horario: time }))}
+                                className={cn(
+                                  "py-3 text-sm font-black rounded-xl border transition-all flex flex-col items-center justify-center gap-0.5",
+                                  bookingData.horario === time
+                                    ? "bg-brand-cyan text-white border-brand-cyan shadow-lg shadow-brand-cyan/20 scale-105 z-10"
+                                    : (isTaken || isPast)
+                                      ? "bg-slate-100/50 text-slate-300 border-transparent cursor-not-allowed grayscale"
+                                      : "bg-white text-slate-600 border-white hover:border-brand-cyan hover:shadow-md"
+                                )}
+                              >
+                                {time}
+                                {isTaken && <span className="text-[7px] uppercase opacity-50">Ocupado</span>}
+                                {isPast && !isTaken && <span className="text-[7px] uppercase opacity-50">Passou</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
+                      <button 
+                        onClick={() => setStep(1)}
+                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
+                      >
+                        Voltar
+                      </button>
+                      <button 
+                        disabled={!bookingData.horario}
+                        onClick={() => setStep(3)}
+                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        Próximo passo
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 3 && (
+                  <div className="space-y-10">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                      <div className="space-y-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center">
+                            <User className="w-5 h-5 text-emerald-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Seus dados para contato</h3>
+                        </div>
+
+                        <div className="space-y-6 bg-slate-50 p-8 rounded-[40px] border border-slate-100">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
+                            <input 
+                              type="text"
+                              placeholder="Como devemos lhe chamar?"
+                              value={bookingData.paciente}
+                              onChange={(e) => setBookingData(prev => ({ ...prev, paciente: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100) }))}
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-bold placeholder:font-normal"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">WhatsApp / Telefone</label>
+                            <input 
+                              type="tel"
+                              placeholder="(00) 00000-0000"
+                              value={bookingData.telefone}
+                              onChange={(e) => setBookingData(prev => ({ ...prev, telefone: SecurityUtils.maskPhone(e.target.value) }))}
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-mono font-bold placeholder:font-normal"
+                            />
+                          </div>
+                          <div className="flex items-start gap-3 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                             <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                             <p className="text-[10px] text-blue-600 leading-relaxed font-medium">
+                              Ao finalizar, você autoriza o contato de nossa equipe via WhatsApp para confirmação definitiva do seu horário.
                             </p>
                           </div>
                         </div>
+                      </div>
+
+                      <div className="space-y-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
+                            <ClipboardList className="w-5 h-5 text-amber-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Resumo da solicitação</h3>
+                        </div>
+
+                        <div className="bg-slate-900 rounded-[40px] p-8 text-white relative overflow-hidden shadow-2xl shadow-slate-900/20">
+                          <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                            <CheckCircle2 className="w-32 h-32 text-white" />
+                          </div>
+                          
+                          <div className="space-y-6 relative z-10">
+                            <div className="pb-4 border-b border-white/10">
+                              <p className="text-[10px] text-white/40 uppercase font-black tracking-widest mb-1 text-center">Especialista</p>
+                              <p className="text-xl font-black text-brand-cyan text-center">{bookingData.dentista}</p>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="text-center p-3 rounded-2xl bg-white/5">
+                                <p className="text-[8px] text-white/40 uppercase font-bold tracking-widest mb-1">Data</p>
+                                <p className="text-xs font-bold">{format(parseISO(bookingData.data), 'dd/MM/yyyy')}</p>
+                              </div>
+                              <div className="text-center p-3 rounded-2xl bg-white/5">
+                                <p className="text-[8px] text-white/40 uppercase font-bold tracking-widest mb-1">Horário</p>
+                                <p className="text-xs font-bold">{bookingData.horario}</p>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                                <p className="text-[10px] text-white/40 uppercase font-black tracking-widest text-center">Procedimento</p>
+                                <p className="text-sm font-bold text-center">Consulta Inicial Odontológica</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
+                      <button 
+                        onClick={() => setStep(2)}
+                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
+                      >
+                        Voltar
                       </button>
-                    ))}
-                  </div>
-                </div>
-                <button 
-                  disabled={!bookingData.dentista}
-                  onClick={() => setStep(2)}
-                  className="w-full py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
-                >
-                  Continuar para Data e Hora
-                </button>
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-slate-800">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <Calendar className="w-5 h-5 text-brand-cyan" />
-                      Escolha o Dia
-                    </h2>
-                    <input 
-                      id="booking-date"
-                      type="date" 
-                      min={minDate}
-                      value={bookingData.data}
-                      onChange={(e) => {
-                        const newData = e.target.value;
-                        setBookingData(prev => {
-                          const newBookingData = { ...prev, data: newData };
-                          // If today is selected, and current time is past selected time, clear time
-                          if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
-                            if (prev.horario < format(new Date(), 'HH:mm')) {
-                              newBookingData.horario = '';
-                            }
-                          }
-                          return newBookingData;
-                        });
-                      }}
-                      className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all"
-                    />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <Clock className="w-5 h-5 text-brand-cyan" />
-                      Escolha o Horário
-                    </h2>
-                    <div className="grid grid-cols-3 gap-2">
-                      {timeSlots.map(time => {
-                        const isTaken = data.some(r => 
-                          r.dentista === bookingData.dentista && 
-                          r.data === bookingData.data && 
-                          r.horario === time &&
-                          r.status !== 'Cancelado'
-                        );
-
-                        const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
-                        const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
-                        
-                        return (
-                          <button
-                            key={time}
-                            disabled={isTaken || isPast}
-                            onClick={() => {
-                          if (bookingData.data === format(new Date(), 'yyyy-MM-dd')) {
-                            if (time < format(new Date(), 'HH:mm')) {
-                              alert('Este horário já passou. Por favor, escolha um horário futuro.');
-                              return;
-                            }
-                          }
-                          setBookingData(prev => ({ ...prev, horario: time }));
-                        }}
-                            className={cn(
-                              "py-2 text-xs font-bold rounded-lg border transition-all",
-                              bookingData.horario === time
-                                ? "bg-brand-cyan text-white border-brand-cyan shadow-md shadow-brand-cyan/20"
-                                : (isTaken || isPast)
-                                  ? "bg-slate-100 text-slate-300 border-slate-100 cursor-not-allowed italic"
-                                  : "bg-white text-slate-500 border-slate-100 hover:border-brand-cyan"
-                            )}
-                          >
-                            {time}
-                            {isTaken && <span className="block text-[8px] opacity-60">Ocupado</span>}
-                            {isPast && !isTaken && <span className="block text-[8px] opacity-60">Passou</span>}
-                          </button>
-                        );
-                      })}
+                      <button 
+                        disabled={isSubmitting || !bookingData.paciente || !bookingData.telefone}
+                        onClick={handleSubmit}
+                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        {isSubmitting ? (
+                          <motion.div 
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+                          />
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5" />
+                            Finalizar agora
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-                </div>
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setStep(1)}
-                    className="flex-1 py-4 text-slate-400 font-bold border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    disabled={!bookingData.horario}
-                    onClick={() => setStep(3)}
-                    className="flex-[2] py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
-                  >
-                    Próximo Passo
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                    <User className="w-5 h-5 text-brand-cyan" />
-                    Seus Dados
-                  </h2>
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
-                      <input 
-                        type="text"
-                        placeholder="Como devemos lhe chamar?"
-                        value={bookingData.paciente}
-                        onChange={(e) => setBookingData(prev => ({ ...prev, paciente: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100) }))}
-                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">WhatsApp / Telefone</label>
-                      <input 
-                        type="tel"
-                        placeholder="(00) 00000-0000"
-                        value={bookingData.telefone}
-                        onChange={(e) => setBookingData(prev => ({ ...prev, telefone: SecurityUtils.maskPhone(e.target.value) }))}
-                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-mono"
-                      />
-                    </div>
-                    <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
-                      <p className="text-[10px] text-blue-600 leading-relaxed italic">
-                        * Ao finalizar, você concorda que entraremos em contato para confirmar a disponibilidade do horário selecionado.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setStep(2)}
-                    className="flex-1 py-4 text-slate-400 font-bold border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    disabled={isSubmitting || !bookingData.paciente || !bookingData.telefone}
-                    onClick={handleSubmit}
-                    className="flex-[2] py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20 flex items-center justify-center gap-2"
-                  >
-                    {isSubmitting ? (
-                      <motion.div 
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
-                      />
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-5 h-5" />
-                        Finalizar Agendamento
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
+                )}
+              </motion.div>
+            </AnimatePresence>
           </div>
-        </motion.div>
-        
-        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12 px-4">
-          Ambiente Seguro | {footerText}
-        </p>
-      </div>
-      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
+
+          <p className="text-center text-slate-400 text-[10px] mt-12 uppercase tracking-[0.3em] font-black opacity-40">
+            ClinicalGate Security Protocol 2.0
+          </p>
+        </div>
+      </main>
+
+      <footer className="py-12 bg-white border-t border-slate-100 px-6">
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+           <div className="text-center md:text-left">
+            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">{footerText}</p>
+          </div>
+          <div className="flex gap-8">
+            <button 
+              onClick={onPrivacyPolicy} 
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
+            >
+              Privacidade
+            </button>
+            <button 
+              onClick={onTerms} 
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
+            >
+              Termos
+            </button>
+            <span className="text-[10px] font-black uppercase tracking-widest text-brand-cyan/50">Brasil</span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
