@@ -65,7 +65,8 @@ import {
   Link,
   Heart,
   ShieldCheck,
-  ChevronDown
+  ChevronDown,
+  ImagePlus
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -411,6 +412,8 @@ export default function App() {
     return localStorage.getItem('odonto_cookie_consent') === 'true';
   });
   const [clinicName, setClinicName] = useState('OdontoDash');
+  const [clinicLogo, setClinicLogo] = useState<string | null>(null);
+  const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   React.useEffect(() => {
@@ -582,10 +585,13 @@ export default function App() {
   React.useEffect(() => {
     const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
       if (docSnap.exists()) {
-        setClinicName(docSnap.data().clinicName || 'OdontoDash');
+        const d = docSnap.data();
+        setClinicName(d.clinicName || 'OdontoDash');
+        setClinicLogo(d.clinicLogo || null);
+        setFooterText(d.footerText || `© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
       }
     }, (error) => {
-      console.warn("Settings sync error (clinicName):", error);
+      console.warn("Settings sync error (branding):", error);
     });
     return unsub;
   }, []);
@@ -1461,10 +1467,10 @@ export default function App() {
     setSubPage(null);
   };
 
-  const handleUpdateClinicName = async (newName: string) => {
+  const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => {
     try {
       await setDoc(doc(db, 'settings', 'clinic'), {
-        clinicName: newName,
+        ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
     } catch (e: any) {
@@ -1548,6 +1554,8 @@ export default function App() {
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
           clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
         />
         {renderLegal()}
       </>
@@ -1564,6 +1572,8 @@ export default function App() {
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
           clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
         />
         {renderLegal()}
       </>
@@ -1692,7 +1702,14 @@ export default function App() {
       case 'Retorno':
         return <RecallView data={data} clinicName={clinicName} />;
       case 'Documentos':
-        return <DocumentsView data={data} users={users} currentUser={currentUser} clinicName={clinicName} />;
+        return <DocumentsView 
+          data={data} 
+          users={users} 
+          currentUser={currentUser} 
+          clinicName={clinicName} 
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+        />;
       case 'Pacientes':
         return (
           <PatientsView 
@@ -1767,7 +1784,9 @@ export default function App() {
             onDeleteUser={handleDeleteUser}
             currentUser={currentUser}
             clinicName={clinicName}
-            onUpdateClinicName={handleUpdateClinicName}
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+            onUpdateSettings={handleUpdateSettings}
             onResetDatabase={handleResetDatabase}
             deferredPrompt={deferredPrompt}
             onInstallPWA={handleInstallPWA}
@@ -1849,9 +1868,13 @@ export default function App() {
           </button>
 
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-              <Stethoscope className="h-5 w-5 text-white" />
-            </div>
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain" />
+            ) : (
+              <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+                <Stethoscope className="h-5 w-5 text-white" />
+              </div>
+            )}
             <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">{clinicName} <span className="text-brand-cyan font-normal">Analytics</span></h1>
           </div>
           
@@ -2108,6 +2131,7 @@ export default function App() {
       <Footer 
         onPrivacyPolicy={() => setShowPrivacyPolicy(true)} 
         onTerms={() => setShowTermsOfUse(true)} 
+        footerText={footerText}
       />
 
       {renderLegal()}
@@ -2191,7 +2215,7 @@ function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: st
   );
 }
 
-function DocumentsView({ data, users, currentUser, clinicName }: { data: DentalRecord[], users: any[], currentUser: any, clinicName: string }) {
+function DocumentsView({ data, users, currentUser, clinicName, clinicLogo, footerText }: { data: DentalRecord[], users: any[], currentUser: any, clinicName: string, clinicLogo: string | null, footerText: string }) {
   const [docType, setDocType] = useState<'Receita' | 'Atestado'>('Receita');
   const [selectedPatient, setSelectedPatient] = useState('');
   const [content, setContent] = useState('');
@@ -2277,11 +2301,16 @@ function DocumentsView({ data, users, currentUser, clinicName }: { data: DentalR
           !isGenerated ? "opacity-20 blur-sm scale-95 pointer-events-none" : "opacity-100 blur-0 scale-100"
         )}>
           {/* Document Header */}
-          <div className="text-center border-b-2 border-slate-100 pb-6 mb-8">
+          <div className="text-center border-b-2 border-slate-100 pb-6 mb-8 flex flex-col items-center">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain mb-2" />
+            ) : (
+              <Stethoscope className="w-8 h-8 text-brand-cyan mb-2" />
+            )}
             <h1 className="text-xl font-bold text-slate-800 uppercase tracking-tighter">
               {docType === 'Receita' ? 'Receituário Odontológico' : 'Atestado de Comparecimento'}
             </h1>
-            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">{clinicName} • CRO-SP 123456</p>
+            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">{footerText}</p>
           </div>
 
           {/* Document Body */}
@@ -3661,32 +3690,59 @@ function ImportView({ onImport }: { onImport: (records: any[]) => Promise<void> 
 
 function SettingsView({ 
   clinicName, 
-  onUpdateClinicName, 
+  clinicLogo,
+  footerText,
+  onUpdateSettings, 
   onResetDatabase,
   isAdmin,
   deferredPrompt,
   onInstallPWA
 }: { 
   clinicName: string; 
-  onUpdateClinicName: (n: string) => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   isAdmin?: boolean;
   deferredPrompt: any;
   onInstallPWA: () => void;
 }) {
   const [localClinicName, setLocalClinicName] = useState(clinicName);
+  const [localFooterText, setLocalFooterText] = useState(footerText);
+  const [localLogo, setLocalLogo] = useState<string | null>(clinicLogo);
   const [isSaving, setIsSaving] = useState(false);
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
   useEffect(() => {
     setLocalClinicName(clinicName);
-  }, [clinicName]);
+    setLocalFooterText(footerText);
+    setLocalLogo(clinicLogo);
+  }, [clinicName, footerText, clinicLogo]);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 500000) {
+        alert("A imagem deve ter no máximo 500KB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLocalLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onUpdateClinicName(localClinicName);
+      await onUpdateSettings({
+        clinicName: localClinicName,
+        clinicLogo: localLogo,
+        footerText: localFooterText
+      });
       alert('Configurações salvas com sucesso!');
     } catch (e) {
       console.error("Erro ao salvar:", e);
@@ -3705,8 +3761,36 @@ function SettingsView({
       
       <div className="space-y-8">
         <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Institucional</h3>
-          <div className="grid grid-cols-2 gap-6">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Identidade Visual</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            <div className="space-y-3">
+              <label className="text-[9px] uppercase font-bold text-slate-400">Logotipo da Clínica</label>
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center overflow-hidden">
+                  {localLogo ? (
+                    <img src={localLogo} alt="Logo Preview" className="w-full h-full object-contain" />
+                  ) : (
+                    <ImagePlus className="w-6 h-6 text-slate-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label className="bg-white border border-slate-200 px-4 py-1.5 text-[10px] font-bold uppercase rounded cursor-pointer hover:bg-slate-50 transition-colors">
+                    Fazer Upload
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                  </label>
+                  {localLogo && (
+                    <button 
+                      onClick={() => setLocalLogo(null)}
+                      className="text-rose-500 text-[10px] font-bold uppercase text-left hover:underline"
+                    >
+                      Remover Logo
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400">Formato recomendado: PNG transparente ou SVG. Máx 500KB.</p>
+            </div>
+
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400">Nome da Clínica</label>
               <input 
@@ -3716,10 +3800,20 @@ function SettingsView({
                 className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all" 
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400">CRO Responsável</label>
-              <input type="text" defaultValue="SP-123456" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
-            </div>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Rodapé & Rodapé de Documentos</h3>
+          <div className="space-y-1">
+            <label className="text-[9px] uppercase font-bold text-slate-400">Informações Institucionais</label>
+            <textarea 
+              value={localFooterText}
+              onChange={(e) => setLocalFooterText(e.target.value)}
+              placeholder="Ex: Av. Paulista, 1000 - São Paulo, SP | Tel: (11) 9999-9999 | CRO-SP 123456"
+              className="w-full text-xs p-3 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan min-h-[80px] resize-none"
+            />
+            <p className="text-[9px] text-slate-400 italic">Essas informações aparecerão no rodapé da plataforma e em documentos gerados.</p>
           </div>
         </section>
 
@@ -6502,7 +6596,9 @@ function AdminView({
   onDeleteUser,
   currentUser,
   clinicName,
-  onUpdateClinicName,
+  clinicLogo,
+  footerText,
+  onUpdateSettings,
   onResetDatabase,
   deferredPrompt,
   onInstallPWA
@@ -6513,7 +6609,9 @@ function AdminView({
   onDeleteUser: (id: string) => Promise<boolean>;
   currentUser: any;
   clinicName: string;
-  onUpdateClinicName: (n: string) => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   deferredPrompt: any;
   onInstallPWA: () => void;
@@ -6589,7 +6687,9 @@ function AdminView({
         {activeTab === 'settings' && (
           <SettingsView 
             clinicName={clinicName} 
-            onUpdateClinicName={onUpdateClinicName} 
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+            onUpdateSettings={onUpdateSettings} 
             onResetDatabase={onResetDatabase}
             isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
             deferredPrompt={deferredPrompt}
@@ -7098,7 +7198,9 @@ function LoginView({
   onOpenBooking,
   onPrivacyPolicy,
   onTerms,
-  clinicName
+  clinicName,
+  clinicLogo,
+  footerText
 }: { 
   users: any[]; 
   onLogin: (user: any) => void; 
@@ -7106,6 +7208,8 @@ function LoginView({
   onPrivacyPolicy: () => void;
   onTerms: () => void;
   clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -7203,12 +7307,18 @@ function LoginView({
         >
           <div className="mb-8 text-center text-slate-800">
             <div className="flex items-center justify-center gap-2 mb-4">
-              <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
-                <Plus className="w-6 h-6" />
-              </div>
-              <h1 className="text-xl font-black text-slate-800 tracking-tighter">
-                {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
-              </h1>
+              {clinicLogo ? (
+                <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain" />
+              ) : (
+                <>
+                  <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
+                    <Plus className="w-6 h-6" />
+                  </div>
+                  <h1 className="text-xl font-black text-slate-800 tracking-tighter">
+                    {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
+                  </h1>
+                </>
+              )}
             </div>
             <h3 className="text-2xl font-bold tracking-tight mb-2 text-slate-900">Bem-vindo de volta</h3>
             <p className="text-sm text-slate-500">Insira suas credenciais para continuar.</p>
@@ -7276,12 +7386,12 @@ function LoginView({
           </form>
         </motion.div>
         
-        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8">
+        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8 px-4 text-center">
           <Shield className="w-3 h-3 text-brand-cyan/40" />
-          Conexão Segura | {clinicName} Protocol
+          {footerText}
         </p>
       </div>
-      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
     </div>
   );
 }
@@ -7313,7 +7423,9 @@ function PublicBookingView({
   data,
   onPrivacyPolicy,
   onTerms,
-  clinicName
+  clinicName,
+  clinicLogo,
+  footerText
 }: { 
   onBack: () => void; 
   users: any[]; 
@@ -7321,6 +7433,8 @@ function PublicBookingView({
   onPrivacyPolicy: () => void;
   onTerms: () => void;
   clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
 }) {
   const minDate = getSystemInitialDate();
 
@@ -7437,7 +7551,11 @@ function PublicBookingView({
           </button>
         </motion.div>
         <div className="fixed bottom-0 left-0 w-full z-10">
-           <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+           <Footer 
+          onPrivacyPolicy={onPrivacyPolicy} 
+          onTerms={onTerms} 
+          footerText={footerText}
+        />
         </div>
       </div>
     );
@@ -7454,7 +7572,11 @@ function PublicBookingView({
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="flex-1">
-            <h1 className="text-xl font-bold text-slate-800">{clinicName} <span className="text-brand-cyan font-normal">Agendamento</span></h1>
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-10 w-auto object-contain mb-2" />
+            ) : (
+              <h1 className="text-xl font-bold text-slate-800">{clinicName} <span className="text-brand-cyan font-normal">Agendamento</span></h1>
+            )}
             <p className="text-xs text-slate-400 uppercase tracking-widest font-bold">Passo {step} de 3</p>
           </div>
         </div>
@@ -7682,11 +7804,11 @@ function PublicBookingView({
           </div>
         </motion.div>
         
-        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12">
-          Ambiente Seguro | Agendamento via {clinicName} Cloud
+        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12 px-4">
+          Ambiente Seguro | {footerText}
         </p>
       </div>
-      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
     </div>
   );
 }
@@ -7924,17 +8046,18 @@ function CookieBanner({ onAccept, onDecline }: { onAccept: () => void, onDecline
 
 function Footer({ 
   onPrivacyPolicy, 
-  onTerms 
+  onTerms,
+  footerText
 }: { 
   onPrivacyPolicy: () => void; 
   onTerms: () => void;
+  footerText: string;
 }) {
   return (
     <footer className="mt-auto py-8 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
         <div className="text-center md:text-left">
-          <span className="text-brand-cyan font-black tracking-tighter text-lg">Sorriso & Saúde</span>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">© 2026 Todos os direitos reservados</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">{footerText}</p>
         </div>
         
         <div className="flex flex-wrap justify-center gap-6">
