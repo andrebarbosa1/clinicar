@@ -1571,6 +1571,7 @@ export default function App() {
   }
 
   const renderContent = () => {
+    console.log(`[renderContent] Active Page: ${activePage}, SubPage: ${subPage}, SelectedPatient: ${selectedPatientId}`);
     if (subPage === 'Prontuario' && activePage === 'Pacientes' && selectedPatientId) {
       return (
         <MedicalChartView 
@@ -2389,7 +2390,7 @@ function DashboardView({
   // Metrics
   const metrics = useMemo(() => {
     const totalValue = filteredData.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
-    const uniquePatients = new Set(filteredData.map(r => r.paciente)).size;
+    const uniquePatients = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size;
     const realized = filteredData.filter(r => r.status === 'Realizado').length;
     const scheduled = filteredData.filter(r => r.status === 'Agendado').length;
     
@@ -2412,7 +2413,7 @@ function DashboardView({
     filteredData.slice(0).reverse().forEach(r => {
       if (r.data && isValid(parseISO(r.data))) {
         const month = format(parseISO(r.data), 'MMM', { locale: ptBR });
-        months[month] = (months[month] || 0) + r.valor;
+        months[month] = (months[month] || 0) + (Number(r.valor) || 0);
       }
     });
     return Object.entries(months).map(([name, value]) => ({ name, value }));
@@ -2422,7 +2423,8 @@ function DashboardView({
   const dentistProductivity = useMemo(() => {
     const dentists: { [key: string]: number } = {};
     filteredData.forEach(r => {
-      dentists[r.dentista] = (dentists[r.dentista] || 0) + r.valor;
+      const dentista = r.dentista || 'Não definido';
+      dentists[dentista] = (dentists[dentista] || 0) + (Number(r.valor) || 0);
     });
     return Object.entries(dentists).map(([name, value]) => ({ name, value }));
   }, [filteredData]);
@@ -2740,6 +2742,7 @@ function PatientsView({
   currentUserRole?: string;
   canSeeFinancials?: boolean;
 }) {
+  console.log(`[PatientsView] Rendering with ${patients?.length} patients and ${data?.length} records`);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 7;
@@ -2747,12 +2750,17 @@ function PatientsView({
   const canDelete = currentUserRole?.toLowerCase() === 'admin' || currentUserRole?.toLowerCase() === 'dentista';
 
   const allPatients = useMemo(() => {
-    return patients.map(pat => {
-      const patientRecords = data.filter(r => r.paciente === pat.name);
+    return (patients || []).filter(p => p && typeof p === 'object').map(pat => {
+      const patientName = pat.name || 'Paciente Sem Nome';
+      const patientRecords = (data || []).filter(r => r && r.paciente === patientName);
       const totalSpent = patientRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
       const sortedByDate = [...patientRecords]
-        .filter(r => r.data && isValid(parseISO(r.data)))
-        .sort((a,b) => parseISO(b.data).getTime() - parseISO(a.data).getTime());
+        .filter(r => r && r.data && isValid(parseISO(r.data)))
+        .sort((a,b) => {
+          try {
+            return parseISO(b.data).getTime() - parseISO(a.data).getTime();
+          } catch(e) { return 0; }
+        });
 
       const lastVisit = sortedByDate.length > 0 
         ? sortedByDate[0].data 
@@ -2760,7 +2768,7 @@ function PatientsView({
       
       return {
         id: pat.id,
-        name: pat.name,
+        name: patientName,
         lastVisit,
         totalSpent,
         procedures: patientRecords.length,
@@ -2771,18 +2779,31 @@ function PatientsView({
 
   const filteredPatients = useMemo(() => {
     return allPatients
-      .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .filter(p => (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [allPatients, searchTerm]);
 
   const stats = useMemo(() => {
+    const now = new Date();
+    const sixMonthsAgo = now.getTime() - 6 * 30 * 24 * 60 * 60 * 1000;
+    const monthStart = startOfMonth(now);
+    
     return {
       total: allPatients.length,
-      active: allPatients.filter(p => p.lastVisit && isValid(parseISO(p.lastVisit)) && parseISO(p.lastVisit).getTime() > Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).length,
-      newThisMonth: allPatients.filter(p => isWithinInterval(parseISO(p.createdAt || new Date().toISOString()), {
-        start: startOfMonth(new Date()),
-        end: new Date()
-      })).length
+      active: allPatients.filter(p => {
+        if (!p.lastVisit) return false;
+        const d = parseISO(p.lastVisit);
+        return isValid(d) && d.getTime() > sixMonthsAgo;
+      }).length,
+      newThisMonth: allPatients.filter(p => {
+        const d = parseISO(p.createdAt || p.dataCadastro || new Date().toISOString());
+        if (!isValid(d)) return false;
+        try {
+          return isWithinInterval(d, { start: monthStart, end: now });
+        } catch (e) {
+          return false;
+        }
+      }).length
     };
   }, [allPatients]);
 
@@ -2863,7 +2884,7 @@ function PatientsView({
                     <td className="px-8 py-5">
                       <div className="flex items-center gap-4">
                         <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 font-semibold text-sm border-2 border-white shadow-sm ring-1 ring-slate-100">
-                          {p.name.charAt(0)}
+                          {(p.name || '?').charAt(0)}
                         </div>
                         <div className="flex flex-col">
                           <button 
@@ -3831,167 +3852,6 @@ function SettingsView({
   );
 }
 
-function Tooth({ 
-  number, 
-  status = 'Normal', 
-  onClick 
-}: { 
-  number: number; 
-  status?: string; 
-  onClick: () => void;
-  key?: number | string;
-}) {
-  const getStatusColor = (s: string) => {
-    switch(s) {
-      case 'Cárie': return 'bg-red-500 border-red-700';
-      case 'Extraído': return 'bg-slate-800 border-slate-900 opacity-20';
-      case 'Restauração': return 'bg-emerald-500 border-emerald-700';
-      case 'Endodontia': return 'bg-purple-500 border-purple-700';
-      default: return 'bg-white border-slate-200';
-    }
-  };
-
-  return (
-    <div 
-      onClick={onClick}
-      className={cn(
-        "w-8 h-10 border-2 rounded-sm cursor-pointer flex items-center justify-center text-[10px] font-bold transition-all hover:scale-110 shrink-0",
-        getStatusColor(status),
-        status === 'Normal' ? 'text-slate-400' : 'text-white'
-      )}
-      title={`Dente ${number}: ${status}`}
-    >
-      {number}
-    </div>
-  );
-}
-
-function Odontogram({ 
-  patientName,
-  currentUser,
-  onUpdate 
-}: { 
-  patientName: string;
-  currentUser: any;
-  onUpdate?: () => void;
-}) {
-  const [data, setData] = useState<Record<number, string>>({});
-  const [selectedTooth, setSelectedTooth] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  React.useEffect(() => {
-    const docRef = doc(db, 'odontograms', patientName.toLowerCase().replace(/\s+/g, '-'));
-    const unsub = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setData(docSnap.data().teeth || {});
-      }
-      setLoading(false);
-    }, (error) => {
-      console.warn("Odontogram sync error:", error);
-      setLoading(false);
-    });
-    return unsub;
-  }, [patientName]);
-
-  const handleUpdateTooth = async (status: string) => {
-    if (selectedTooth === null) return;
-    
-    const patientId = patientName.toLowerCase().replace(/\s+/g, '-');
-    const newData = { ...data, [selectedTooth]: status };
-    
-    try {
-      await setDoc(doc(db, 'odontograms', patientId), {
-        patientName,
-        teeth: newData,
-        dentista: currentUser?.name || '',
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-      
-      setData(newData);
-      setSelectedTooth(null);
-      if (onUpdate) onUpdate();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const upperRight = [18, 17, 16, 15, 14, 13, 12, 11];
-  const upperLeft = [21, 22, 23, 24, 25, 26, 27, 28];
-  const lowerRight = [48, 47, 46, 45, 44, 43, 42, 41];
-  const lowerLeft = [31, 32, 33, 34, 35, 36, 37, 38];
-
-  if (loading) return <div className="h-40 flex items-center justify-center text-slate-400 text-xs">Carregando Odontograma...</div>;
-
-  return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-200">
-      <div className="flex flex-col items-center gap-8 relative overflow-x-auto pb-4 custom-scrollbar">
-        
-        {/* Upper Arch */}
-        <div className="flex gap-4 min-w-max">
-          <div className="flex gap-1">
-            {upperRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-          <div className="w-[1px] bg-slate-200 h-10"></div>
-          <div className="flex gap-1">
-            {upperLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-        </div>
-
-        {/* Lower Arch */}
-        <div className="flex gap-4 min-w-max">
-          <div className="flex gap-1">
-            {lowerRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-          <div className="w-[1px] bg-slate-200 h-10"></div>
-          <div className="flex gap-1">
-            {lowerLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-        </div>
-
-        {/* Floating Menu for Selected Tooth */}
-        <AnimatePresence>
-          {selectedTooth && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 10 }}
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white shadow-2xl border border-slate-200 p-4 rounded-xl z-10 w-48"
-            >
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Dente {selectedTooth}</span>
-                <button onClick={() => setSelectedTooth(null)} className="p-1 hover:bg-slate-50 rounded-full transition-colors">
-                  <X className="w-3 h-3 text-slate-300 hover:text-slate-600" />
-                </button>
-              </div>
-              <div className="grid grid-cols-1 gap-1">
-                {['Normal', 'Cárie', 'Extraído', 'Restauração', 'Endodontia'].map(status => (
-                  <button 
-                    key={status}
-                    onClick={() => handleUpdateTooth(status)}
-                    className={cn(
-                      "text-left px-3 py-1.5 rounded text-[10px] font-bold transition-all",
-                      data[selectedTooth] === status ? "bg-brand-cyan text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"
-                    )}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="flex flex-wrap justify-center gap-4 text-[9px] uppercase font-bold text-slate-400 mt-4 border-t border-slate-50 pt-4 w-full">
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div> Cárie</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-slate-800 rounded-full opacity-20"></div> Extraído</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div> Restauração</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-purple-500 rounded-full"></div> Endodontia</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ConfirmDeleteModal({ patient, onConfirm, onCancel }: { patient: any, onConfirm: () => void, onCancel: () => void }) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 text-slate-900">
@@ -4221,28 +4081,80 @@ function PatientDetailModal({ patient, onClose, onDelete, currentUserRole, canSe
   );
 }
 
-function OdontogramView({ patientName }: { patientName: string }) {
+function OdontogramView({ patientName, currentUser }: { patientName: string; currentUser?: any }) {
   const [selectedTooth, setSelectedTooth] = useState<number | null>(null);
   const [teethData, setTeethData] = useState<Record<number, any>>({});
-  const [statusFilter, setStatusFilter] = useState<'todos' | 'cárie' | 'restaurado' | 'extraído'>('todos');
+  const [loading, setLoading] = useState(true);
+
+  // Sync with Firestore
+  useEffect(() => {
+    const docId = patientName.toLowerCase().replace(/\s+/g, '-');
+    const docRef = doc(db, 'odontograms', docId);
+    
+    const unsub = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setTeethData(docSnap.data().teethData || {});
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("Error syncing odontogram:", error);
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, [patientName]);
+
+  const updateFirestore = async (newData: Record<number, any>) => {
+    const docId = patientName.toLowerCase().replace(/\s+/g, '-');
+    try {
+      await setDoc(doc(db, 'odontograms', docId), {
+        patientName,
+        teethData: newData,
+        lastUpdatedBy: currentUser?.name || 'Sistema',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (e) {
+      console.error("Error saving tooth status:", e);
+    }
+  };
+
+  const toggleToothStatus = (num: number, status: string) => {
+    const newStatus = teethData[num]?.status === status ? null : status;
+    const newData = {
+      ...teethData,
+      [num]: { ...teethData[num], status: newStatus, updatedAt: new Date().toISOString() }
+    };
+    setTeethData(newData);
+    updateFirestore(newData);
+  };
+
+  const updateToothNotes = (num: number, notes: string) => {
+    const newData = {
+      ...teethData,
+      [num]: { ...teethData[num], notes, updatedAt: new Date().toISOString() }
+    };
+    setTeethData(newData);
+    updateFirestore(newData);
+  };
 
   const teethNumbersUpper = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
   const teethNumbersLower = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
-
-  const toggleToothStatus = (num: number, status: string) => {
-    setTeethData(prev => ({
-      ...prev,
-      [num]: { ...prev[num], status: prev[num]?.status === status ? null : status }
-    }));
-  };
 
   const getToothColor = (num: number) => {
     const status = teethData[num]?.status;
     if (status === 'cárie') return 'fill-rose-500 stroke-rose-600';
     if (status === 'restaurado') return 'fill-brand-cyan stroke-cyan-600';
     if (status === 'extraído') return 'fill-slate-200 stroke-slate-300 opacity-30';
+    if (status === 'hígido') return 'fill-emerald-500 stroke-emerald-600';
     return 'fill-white stroke-slate-300 hover:fill-slate-50';
   };
+
+  if (loading) return (
+    <div className="h-64 flex flex-col items-center justify-center gap-3 text-slate-400">
+      <Loader2 className="w-8 h-8 animate-spin text-brand-cyan" />
+      <p className="text-[10px] font-bold uppercase tracking-widest">Carregando Histórico Dental...</p>
+    </div>
+  );
 
   return (
     <div className="space-y-8 animate-in fade-in zoom-in-95 duration-500">
@@ -4369,6 +4281,8 @@ function OdontogramView({ patientName }: { patientName: string }) {
               <div className="pt-4 mt-4 border-t border-white/10">
                 <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3">Observação Clínica</p>
                 <textarea 
+                  value={teethData[selectedTooth]?.notes || ''}
+                  onChange={(e) => updateToothNotes(selectedTooth, e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs outline-none focus:border-brand-cyan/50 resize-none h-20"
                   placeholder="Descreva observações específicas para este dente..."
                 />
@@ -4389,8 +4303,10 @@ function OdontogramView({ patientName }: { patientName: string }) {
               Histórico de Procedimentos por Dente
             </h4>
             <div className="space-y-4">
-              {Object.entries(teethData).length > 0 ? (
-                Object.entries(teethData).map(([num, data]: [any, any]) => (
+              {Object.entries(teethData).filter(([_, d]: [any, any]) => d.status).length > 0 ? (
+                Object.entries(teethData)
+                  .filter(([_, d]: [any, any]) => d.status)
+                  .map(([num, data]: [any, any]) => (
                   <div key={num} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-black text-slate-400">
@@ -4398,7 +4314,10 @@ function OdontogramView({ patientName }: { patientName: string }) {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-slate-700 capitalize">{data.status || 'Hígido'}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">Atualizado em {format(new Date(), 'dd/MM/yyyy')}</p>
+                        <p className="text-[10px] text-slate-400 font-bold">
+                          {data.updatedAt && isValid(parseISO(data.updatedAt)) ? `Atualizado em ${format(parseISO(data.updatedAt), 'dd/MM/yyyy HH:mm')}` : 'Sem data'}
+                        </p>
+                        {data.notes && <p className="text-[10px] text-brand-cyan mt-1 italic">"{data.notes}"</p>}
                       </div>
                     </div>
                     <button className="p-2 text-slate-400 hover:text-brand-cyan">
@@ -4917,7 +4836,7 @@ function MedicalChartView({
           )}
 
           {activeTab === 'Odontograma' && (
-            <OdontogramView patientName={patientName} />
+            <OdontogramView patientName={patientName} currentUser={currentUser} />
           )}
 
           {activeTab === 'Anamnese' && (
@@ -8041,7 +7960,7 @@ function Footer({
           <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
             <Shield className="w-4 h-4 text-emerald-500" />
           </div>
-          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ABsistemas Security</span>
+          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ClinicalGate Security</span>
         </div>
       </div>
     </footer>
