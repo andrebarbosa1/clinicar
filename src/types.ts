@@ -11,6 +11,7 @@ export interface DentalRecord {
   data: string;
   horario?: string;
   paciente: string;
+  telefone?: string;
   procedimento: string;
   dentista: string;
   status: ProcedureStatus;

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Users, 
   TrendingUp, 
@@ -64,6 +64,11 @@ import {
   Share2,
   Link,
   Heart,
+  XCircle,
+  FileSearch,
+  LayoutGrid,
+  LayoutList,
+  Grid,
   ShieldCheck,
   ChevronDown,
   ImagePlus,
@@ -83,13 +88,21 @@ import {
   PieChart,
   Pie
 } from 'recharts';
-import { format, parseISO, isToday, startOfMonth, subMonths, isWithinInterval, differenceInYears, isValid, addDays } from 'date-fns';
+import { format, parseISO, isToday, startOfMonth, endOfMonth, startOfDay, endOfDay, subMonths, isWithinInterval, differenceInYears, isValid, addDays, getDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { MOCK_DATA } from './mockData';
 import { DentalRecord } from './types';
 import { cn, formatCurrency, formatPercent } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signOut, 
+  setPersistence, 
+  browserLocalPersistence
+} from 'firebase/auth';
+import firebaseConfig from '../firebase-applet-config.json';
 import { 
   getFirestore, 
   initializeFirestore,
@@ -111,22 +124,20 @@ const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
 
 const getSystemInitialDate = () => {
-    const now = new Date();
+    let now = new Date();
+    // Se passar do horário de fechamento, pula para o dia seguinte
     if (format(now, 'HH:mm') >= CLOSING_HOUR) {
-        return format(addDays(now, 1), 'yyyy-MM-dd');
+        now = addDays(now, 1);
     }
+    
+    // Se o dia cair no final de semana, pula para a próxima segunda-feira
+    while (getDay(now) === 0 || getDay(now) === 6) {
+        now = addDays(now, 1);
+    }
+    
     return format(now, 'yyyy-MM-dd');
 };
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  signOut, 
-  setPersistence, 
-  browserLocalPersistence
-} from 'firebase/auth';
-import firebaseConfig from '../firebase-applet-config.json';
 
-// --- SECURITY UTILS ---
 const RealTimeClock = () => {
   const [time, setTime] = useState(new Date());
 
@@ -169,6 +180,27 @@ const findPatientByRobustMatch = (name: string, patientsList: any[]) => {
   }
 
   return patient;
+};
+
+const sendWhatsAppDirectly = (phone: string, message: string) => {
+  if (!phone) return false;
+  const cleanPhone = phone.replace(/\D/g, '');
+  let finalPhone = cleanPhone;
+  
+  // Auto-add 55 for Brazil if it looks like a standard local number
+  if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+    finalPhone = '55' + cleanPhone;
+  }
+
+  if (finalPhone) {
+    const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodeURIComponent(message)}`;
+    const win = window.open(whatsappUrl, '_blank');
+    if (!win) {
+      alert("O WhatsApp não pôde ser aberto automaticamente. Verifique se o seu navegador bloqueou o pop-up.");
+    }
+    return true;
+  }
+  return false;
 };
 
 const SecurityUtils = {
@@ -400,6 +432,12 @@ export default function App() {
   const [filterPayment, setFilterPayment] = useState<string>('Todos');
   const [filterDentista, setFilterDentista] = useState<string>('Todos');
   const [searchPatient, setSearchPatient] = useState('');
+  
+  // Date Filters
+  const [filterDateRange, setFilterDateRange] = useState<'month' | 'last_month' | 'today' | 'custom'>('month');
+  const [filterStartDate, setFilterStartDate] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [filterEndDate, setFilterEndDate] = useState<string>(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [patients, setPatients] = useState<any[]>([]);
@@ -624,9 +662,19 @@ export default function App() {
       const matchesPayment = filterPayment === 'Todos' || record.statusPagamento === filterPayment;
       const matchesDentista = filterDentista === 'Todos' || record.dentista === filterDentista;
       const matchesSearch = (record.paciente || "").toLowerCase().includes((searchPatient || "").toLowerCase());
-      return matchesProcedure && matchesStatus && matchesPayment && matchesDentista && matchesSearch;
+      
+      // Date Filter logic
+      let matchesDate = true;
+      if (record.data && isValid(parseISO(record.data))) {
+        const d = parseISO(record.data);
+        const start = startOfDay(parseISO(filterStartDate));
+        const end = endOfDay(parseISO(filterEndDate));
+        matchesDate = isWithinInterval(d, { start, end });
+      }
+
+      return matchesProcedure && matchesStatus && matchesPayment && matchesDentista && matchesSearch && matchesDate;
     });
-  }, [filteredRecords, filterProcedure, filterStatus, filterPayment, filterDentista, searchPatient]);
+  }, [filteredRecords, filterProcedure, filterStatus, filterPayment, filterDentista, searchPatient, filterStartDate, filterEndDate]);
 
   // Seeding Logic (Optimized to avoid quota drain)
   React.useEffect(() => {
@@ -910,11 +958,15 @@ export default function App() {
       return;
     }
 
+    const matchedPatient = findPatientByRobustMatch(newAppt.paciente, patients);
+    const patientPhone = newAppt.telefone || matchedPatient?.phone;
+
     const record: DentalRecord = {
       id: `rec-new-${Date.now()}`,
       data: newAppt.data,
       horario: newAppt.horario || '',
       paciente: newAppt.paciente,
+      telefone: patientPhone || '',
       procedimento: newAppt.procedimento || 'Avaliação',
       dentista: newAppt.dentista,
       status: 'Agendado',
@@ -942,7 +994,6 @@ export default function App() {
       const dentist = users.find(u => u.name === newAppt.dentista);
       if (dentist) {
         // Important: we target the dentist specifically.
-        // The notification listener in App already uses where('userId', '==', currentUserId)
         const dentistId = dentist.id || dentist.uid || dentist.firebaseUid;
         const notifId = `notif-appt-${Date.now()}`;
         await setDoc(doc(db, 'notifications', notifId), {
@@ -1347,12 +1398,33 @@ export default function App() {
       // Optimistic update for better UX
       setData(prev => prev.map(r => r.id === recordId ? { ...r, status: 'Cancelado' } : r));
 
-      // 1. Update Firestore - Using setDoc with merge to ensure it works even if doc wasn't found (seeding issues)
+      // 1. Update Firestore
       await setDoc(doc(db, 'records', recordId), {
         status: 'Cancelado'
       }, { merge: true });
 
-      // 2. Clear state and refresh (Notifying via bell is handled by its own listener)
+      // 2. Notification logic
+      const matchedPatient = findPatientByRobustMatch(record.paciente, patients);
+      const patientPhone = record.telefone || matchedPatient?.phone;
+      const patientEmail = matchedPatient?.email;
+
+      if (patientPhone || patientEmail) {
+        const confirmNotification = window.confirm(
+          `Agendamento de ${record.paciente} cancelado com sucesso.\n\nDeseja enviar uma notificação de cancelamento sugerindo o reagendamento?`
+        );
+
+        if (confirmNotification) {
+          const formattedDate = format(parseISO(record.data), 'dd/MM/yyyy');
+          const message = `Olá ${record.paciente}, informamos que seu agendamento para o dia ${formattedDate} às ${record.horario} com o(a) ${record.dentista} foi cancelado. Gostaria de reagendar para uma nova data? Estamos à disposição!`;
+          
+          if (patientEmail) {
+            const subject = encodeURIComponent('Cancelamento de Agendamento - Clínica Odontológica');
+            const body = encodeURIComponent(message);
+            window.open(`mailto:${patientEmail}?subject=${subject}&body=${body}`, '_blank');
+          }
+        }
+      }
+
       console.log(`Cancelamento concluído para ${record.paciente}`);
     } catch (e) {
       console.error("Erro no processo de cancelamento:", e);
@@ -1466,6 +1538,51 @@ export default function App() {
     setIsAuthenticated(false);
     setActivePage('Dashboard');
     setSubPage(null);
+  };
+
+  const handleRestoreData = async (backup: any) => {
+    if (currentUser?.role?.toLowerCase() !== 'admin') return;
+
+    try {
+      setIsLoadingData(true);
+      
+      // Restore Patients
+      if (backup.patients && Array.isArray(backup.patients)) {
+        for (const p of backup.patients) {
+          await setDoc(doc(db, 'patients', p.id), p);
+        }
+      }
+
+      // Restore Records
+      if (backup.records && Array.isArray(backup.records)) {
+        for (const r of backup.records) {
+          await setDoc(doc(db, 'records', r.id), r);
+        }
+      }
+
+      // Restore Documents
+      if (backup.documents && Array.isArray(backup.documents)) {
+        for (const d of backup.documents) {
+          await setDoc(doc(db, 'documents', d.id), d);
+        }
+      }
+
+      // Restore Users (Admin only)
+      if (backup.users && Array.isArray(backup.users)) {
+        for (const u of backup.users) {
+          // Careful not to overwrite primary admin or current user if possible, 
+          // but for a full restore, we usually want everything.
+          await setDoc(doc(db, 'users', u.id), u);
+        }
+      }
+
+      console.log("Restauração concluída!");
+    } catch (error) {
+      console.error("Erro na restauração:", error);
+      throw error;
+    } finally {
+      setIsLoadingData(false);
+    }
   };
 
   const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => {
@@ -1582,7 +1699,6 @@ export default function App() {
   }
 
   const renderContent = () => {
-    console.log(`[renderContent] Active Page: ${activePage}, SubPage: ${subPage}, SelectedPatient: ${selectedPatientId}`);
     if (subPage === 'Prontuario' && activePage === 'Pacientes' && selectedPatientId) {
       return (
         <MedicalChartView 
@@ -1791,6 +1907,10 @@ export default function App() {
             onResetDatabase={handleResetDatabase}
             deferredPrompt={deferredPrompt}
             onInstallPWA={handleInstallPWA}
+            data={data}
+            patients={patients}
+            documents={documents}
+            onRestore={handleRestoreData}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
@@ -2066,6 +2186,52 @@ export default function App() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 md:gap-4">
+          <div className="flex items-center gap-2 flex-1 md:flex-none">
+            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+            <select 
+              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
+              value={filterDateRange}
+              onChange={(e) => {
+                const val = e.target.value as any;
+                setFilterDateRange(val);
+                if (val === 'today') {
+                  setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
+                  setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
+                } else if (val === 'month') {
+                  setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+                  setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+                } else if (val === 'last_month') {
+                  const lastMonth = subMonths(new Date(), 1);
+                  setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+                  setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+                }
+              }}
+            >
+              <option value="month">Este Mês</option>
+              <option value="last_month">Mês Passado</option>
+              <option value="today">Hoje</option>
+              <option value="custom">Customizado</option>
+            </select>
+
+            {filterDateRange === 'custom' && (
+              <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
+                <input 
+                  type="date"
+                  className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                  value={filterStartDate}
+                  onChange={(e) => setFilterStartDate(e.target.value)}
+                />
+                <span className="text-[10px] text-slate-400">até</span>
+                <input 
+                  type="date"
+                  className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                  value={filterEndDate}
+                  onChange={(e) => setFilterEndDate(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-2 flex-1 md:flex-none">
             <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
             <select 
@@ -2419,10 +2585,13 @@ function DashboardView({
 }) {
   // Metrics
   const metrics = useMemo(() => {
-    const totalValue = filteredData.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
-    const uniquePatients = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size;
-    const realized = filteredData.filter(r => r.status === 'Realizado').length;
-    const scheduled = filteredData.filter(r => r.status === 'Agendado').length;
+    const activeRecords = filteredData.filter(r => r.status !== 'Cancelado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    
+    const totalValue = realizedRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const uniquePatients = new Set(realizedRecords.map(r => r.paciente).filter(Boolean)).size;
+    const realized = realizedRecords.length;
+    const scheduled = activeRecords.filter(r => r.status === 'Agendado').length;
     
     const ticketMedio = uniquePatients > 0 ? totalValue / uniquePatients : 0;
     const taxaConversao = (realized + scheduled) > 0 ? realized / (realized + scheduled) : 0;
@@ -2433,14 +2602,15 @@ function DashboardView({
       ticketMedio,
       taxaConversao,
       realized,
-      pending: filteredData.filter(r => r.status === 'Pendente').length
+      pending: activeRecords.filter(r => r.status === 'Pendente').length
     };
   }, [filteredData]);
 
   // Chart Data: Monthly Billing
   const monthlyData = useMemo(() => {
     const months: { [key: string]: number } = {};
-    filteredData.slice(0).reverse().forEach(r => {
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.slice(0).reverse().forEach(r => {
       if (r.data && isValid(parseISO(r.data))) {
         const month = format(parseISO(r.data), 'MMM', { locale: ptBR });
         months[month] = (months[month] || 0) + (Number(r.valor) || 0);
@@ -2452,7 +2622,8 @@ function DashboardView({
   // Chart Data: Productivity by Dentist
   const dentistProductivity = useMemo(() => {
     const dentists: { [key: string]: number } = {};
-    filteredData.forEach(r => {
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.forEach(r => {
       const dentista = r.dentista || 'Não definido';
       dentists[dentista] = (dentists[dentista] || 0) + (Number(r.valor) || 0);
     });
@@ -2462,7 +2633,8 @@ function DashboardView({
   // Chart Data: Procedure Distribution
   const procedureDistribution = useMemo(() => {
     const counts: { [key: string]: number } = {};
-    filteredData.forEach(r => {
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.forEach(r => {
       counts[r.procedimento] = (counts[r.procedimento] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
@@ -2772,10 +2944,10 @@ function PatientsView({
   currentUserRole?: string;
   canSeeFinancials?: boolean;
 }) {
-  console.log(`[PatientsView] Rendering with ${patients?.length} patients and ${data?.length} records`);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 7;
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const itemsPerPage = viewMode === 'list' ? 8 : 12;
 
   const canDelete = currentUserRole?.toLowerCase() === 'admin' || currentUserRole?.toLowerCase() === 'dentista';
 
@@ -2801,7 +2973,7 @@ function PatientsView({
         name: patientName,
         lastVisit,
         totalSpent,
-        procedures: patientRecords.length,
+        proceduresCount: patientRecords.length,
         ...pat
       };
     });
@@ -2809,7 +2981,11 @@ function PatientsView({
 
   const filteredPatients = useMemo(() => {
     return allPatients
-      .filter(p => (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()))
+      .filter(p => 
+        (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+        (p.cpf || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+        (p.email || '').toLowerCase().includes((searchTerm || '').toLowerCase())
+      )
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [allPatients, searchTerm]);
 
@@ -2837,215 +3013,297 @@ function PatientsView({
     };
   }, [allPatients]);
 
-  // Reset pagination when search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, viewMode]);
 
   const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentPatients = filteredPatients.slice(startIndex, startIndex + itemsPerPage);
 
+  const getAvatarColor = (name: string) => {
+    const colors = ['bg-blue-500', 'bg-purple-500', 'bg-emerald-500', 'bg-amber-500', 'bg-brand-cyan', 'bg-rose-500'];
+    const index = name.length % colors.length;
+    return colors[index];
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Search and Action Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="flex items-center gap-4 flex-1 max-w-2xl">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-            <input 
-              type="text"
-              placeholder="Pesquisar por nome ou CPF..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan outline-none rounded-2xl transition-all shadow-sm"
-            />
+      {/* Header & Stats Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pacientes</h1>
+          <p className="text-sm text-slate-400 font-medium italic">Gestão completa e acompanhamento clínico</p>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="flex bg-white p-1 border border-slate-200 rounded-2xl shadow-sm">
+            <button 
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "p-2 rounded-xl transition-all",
+                viewMode === 'list' ? "bg-slate-900 text-white shadow-md" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => setViewMode('grid')}
+              className={cn(
+                "p-2 rounded-xl transition-all",
+                viewMode === 'grid' ? "bg-slate-900 text-white shadow-md" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              <Grid className="w-4 h-4" />
+            </button>
           </div>
-          <button className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-brand-cyan transition-colors shadow-sm">
-            <Filter className="w-5 h-5" />
+          <button 
+            onClick={onAdd}
+            className="flex items-center gap-2 bg-brand-cyan text-white px-6 py-3 font-bold text-[10px] uppercase tracking-widest rounded-2xl cursor-pointer hover:bg-slate-900 transition-all shadow-lg shadow-brand-cyan/20 active:scale-95"
+          >
+            <UserPlus className="w-4 h-4" />
+            Novo Paciente
           </button>
         </div>
-
-        <button 
-          onClick={onAdd}
-          className="flex items-center gap-2 bg-brand-cyan text-white px-6 py-3 font-semibold text-xs uppercase tracking-widest rounded-2xl cursor-pointer hover:bg-slate-900 transition-all shadow-lg shadow-brand-cyan/20 active:scale-95"
-        >
-          <UserPlus className="w-4 h-4" />
-          Adicionar Paciente
-        </button>
       </div>
 
-      {/* Quick Stats Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      {/* Modern Stats Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: 'Total de Pacientes', value: stats.total, icon: Users, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5' },
-          { label: 'Pacientes Ativos', value: stats.active, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-          { label: 'Novos este mês', value: stats.newThisMonth, icon: UserPlus, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5' }
+          { label: 'Total cadastrados', value: stats.total, icon: Users, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5', trend: '+12% este mês' },
+          { label: 'Em tratamento', value: stats.active, icon: Activity, color: 'text-amber-500', bg: 'bg-amber-50', trend: 'Ativos' },
+          { label: 'Novos registros', value: stats.newThisMonth, icon: Heart, color: 'text-rose-500', bg: 'bg-rose-50', trend: 'Meta: 80%' }
         ].map((stat, i) => (
-          <div key={i} className="bg-white p-5 rounded-[28px] border border-slate-100 shadow-sm flex items-center gap-4">
-            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", stat.bg)}>
-              <stat.icon className={cn("w-5 h-5", stat.color)} />
+          <div key={i} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+            <div className="flex justify-between items-start mb-3">
+              <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", stat.bg)}>
+                <stat.icon className={cn("w-5 h-5", stat.color)} />
+              </div>
+              <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tight">{stat.trend}</span>
             </div>
             <div>
-              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">{stat.label}</p>
-              <p className="text-xl font-bold text-slate-800">{stat.value}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">{stat.label}</p>
+              <p className="text-2xl font-bold text-slate-800">{stat.value}</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Main Content: Patient Grid/List */}
-      <div className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-slate-50/50 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-              <tr>
-                <th className="px-8 py-5">Identificação</th>
-                <th className="px-6 py-5">Última Visita</th>
-                <th className="px-6 py-5 text-center">Consultas</th>
-                {canSeeFinancials && <th className="px-6 py-5 text-right">Investimento</th>}
-                <th className="px-8 py-5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {currentPatients.length > 0 ? (
-                currentPatients.map((p) => (
-                  <tr key={p.id} className="group hover:bg-slate-50/80 transition-colors">
-                    <td className="px-8 py-5">
-                      <div className="flex items-center gap-4">
-                        <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 font-semibold text-sm border-2 border-white shadow-sm ring-1 ring-slate-100">
-                          {(p.name || '?').charAt(0)}
-                        </div>
-                        <div className="flex flex-col">
-                          <button 
-                            onClick={() => onViewDetail(p)}
-                            className="text-left group/name hover:text-brand-cyan transition-colors"
-                          >
-                            <span className="font-sans font-semibold text-slate-800 text-sm leading-tight block">{p.name}</span>
-                          </button>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight mt-0.5">{p.email || 'Sem e-mail'}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-600 italic font-serif">
-                          {p.lastVisit && isValid(parseISO(p.lastVisit)) 
-                            ? format(parseISO(p.lastVisit), "dd 'de' MMM, yyyy", { locale: ptBR }) 
-                            : 'Bem-vindo'}
-                        </span>
-                        <span className="text-[9px] font-semibold text-slate-300 uppercase tracking-widest mt-0.5">
-                          {p.lastVisit && isValid(parseISO(p.lastVisit)) 
-                            ? (differenceInYears(new Date(), parseISO(p.lastVisit)) === 0 ? 'alguns meses' : `${differenceInYears(new Date(), parseISO(p.lastVisit))} anos`)
-                            : 'Primeira vez'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 text-center">
-                      <div className="inline-flex items-center justify-center min-w-8 h-8 px-2 bg-slate-100 rounded-xl text-[10px] font-semibold text-slate-500 ring-4 ring-slate-50 group-hover:bg-brand-cyan group-hover:text-white transition-all">
-                        {p.procedures}
-                      </div>
-                    </td>
-                    {canSeeFinancials && (
-                      <td className="px-6 py-5 text-right">
-                        <span className="font-semibold text-slate-700 text-sm">{formatCurrency(p.totalSpent)}</span>
-                      </td>
-                    )}
-                    <td className="px-8 py-5">
-                      <div className="flex items-center justify-end gap-3">
-                        <button 
-                          onClick={() => onOpenChart(p.id)}
-                          className="flex items-center gap-2 px-4 py-2 bg-brand-cyan text-white text-[10px] font-semibold uppercase tracking-widest rounded-xl shadow-lg shadow-brand-cyan/20 hover:scale-105 active:scale-95 transition-all"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          Prontuário
-                        </button>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => onOpenEdit(p.id)}
-                            className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-slate-50 rounded-xl transition-all"
-                            title="Editar Perfil"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          {canDelete && (
-                            <button 
-                              onClick={() => onDelete(p.id)}
-                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-                              title="Excluir Permanente"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </td>
+      {/* Search Bar - Floating Style */}
+      <div className="relative group">
+        <Search className="w-4 h-4 text-slate-400 absolute left-5 top-1/2 -translate-y-1/2 group-focus-within:text-brand-cyan transition-colors" />
+        <input 
+          type="text"
+          placeholder="Pesquisar por nome, CPF ou e-mail..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full pl-12 pr-5 py-3.5 bg-white border border-slate-200 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-brand-cyan/10 focus:border-brand-cyan outline-none rounded-2xl transition-all shadow-sm"
+        />
+        {searchTerm && (
+          <button 
+            onClick={() => setSearchTerm('')}
+            className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+          >
+            <XCircle className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      <AnimatePresence mode="wait">
+        {viewMode === 'list' ? (
+          <motion.div 
+            key="list"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50/50 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4">Paciente</th>
+                    <th className="px-5 py-4">Última Visita</th>
+                    <th className="px-5 py-4 text-center">Atendimentos</th>
+                    {canSeeFinancials && <th className="px-5 py-4 text-right">Total</th>}
+                    <th className="px-6 py-4 text-right">Ações</th>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} className="px-6 py-24 text-center">
-                    <div className="max-w-xs mx-auto">
-                      <Search className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                      <p className="text-sm font-black text-slate-400 uppercase tracking-widest leading-loose">
-                        Nenhum paciente encontrado para "{searchTerm}"
-                      </p>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {currentPatients.length > 0 ? (
+                    currentPatients.map((p) => (
+                      <tr key={p.id} className="group hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              "w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-sm ring-1 ring-slate-100",
+                              getAvatarColor(p.name || '')
+                            )}>
+                              {(p.name || '?').charAt(0)}
+                            </div>
+                            <div className="flex flex-col">
+                              <button 
+                                onClick={() => onViewDetail(p)}
+                                className="text-left group/name"
+                              >
+                                <span className="font-sans font-bold text-slate-800 text-sm hover:text-brand-cyan transition-colors">{p.name}</span>
+                              </button>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[10px] font-medium text-slate-400">{p.cpf || 'Sem CPF'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="text-xs font-semibold text-slate-600">
+                            {p.lastVisit && isValid(parseISO(p.lastVisit)) 
+                              ? format(parseISO(p.lastVisit), "dd/MM/yyyy") 
+                              : '---'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-center">
+                          <div className="inline-flex items-center justify-center px-2 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-500">
+                            {p.proceduresCount}
+                          </div>
+                        </td>
+                        {canSeeFinancials && (
+                          <td className="px-5 py-4 text-right">
+                            <span className="font-bold text-slate-700 text-sm">{formatCurrency(p.totalSpent)}</span>
+                          </td>
+                        )}
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-end gap-2">
+                            <button 
+                              onClick={() => onOpenChart(p.id)}
+                              className="px-3 py-1.5 bg-slate-900 text-white text-[10px] font-bold uppercase tracking-tight rounded-lg hover:bg-brand-cyan transition-all"
+                            >
+                              Prontuário
+                            </button>
+                            <button 
+                              onClick={() => onOpenEdit(p.id)}
+                              className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-slate-100 rounded-lg transition-all"
+                            >
+                              <Settings className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-20 text-center">
+                        <p className="text-sm font-medium text-slate-400">Nenhum paciente encontrado.</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div 
+            key="grid"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="w-full"
+          >
+            {currentPatients.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {currentPatients.map((p) => (
+                  <div 
+                    key={p.id}
+                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <div className={cn(
+                        "w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow ring-1 ring-slate-100",
+                        getAvatarColor(p.name || '')
+                      )}>
+                        {(p.name || '?').charAt(0)}
+                      </div>
+                      <div className="flex gap-1">
+                        <button 
+                          onClick={() => onOpenEdit(p.id)}
+                          className="p-1.5 text-slate-400 hover:text-brand-cyan transition-all"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        {canDelete && (
+                          <button 
+                            onClick={() => onDelete(p.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-500 transition-all"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-sm leading-tight mb-0.5 truncate">{p.name}</h3>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-tight">{p.cpf || 'Sem CPF'}</p>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Última</p>
+                          <p className="text-[10px] font-bold text-slate-600 truncate">
+                            {p.lastVisit && isValid(parseISO(p.lastVisit)) ? format(parseISO(p.lastVisit), 'dd/MM/yy') : '--'}
+                          </p>
+                        </div>
+                        <div className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Total</p>
+                          <p className="text-[10px] font-bold text-slate-600">{p.proceduresCount}</p>
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={() => onOpenChart(p.id)}
+                        className="w-full py-2.5 bg-slate-900 text-white font-bold text-[10px] uppercase tracking-widest rounded-xl hover:bg-brand-cyan transition-all shadow-sm"
+                      >
+                        Prontuário
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200 rounded-2xl py-20 text-center shadow-sm">
+                <p className="text-sm font-medium text-slate-400">Nenhum resultado.</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modern Pagination Overlay */}
+      <div className="bg-white/90 backdrop-blur-sm border border-slate-200 rounded-2xl p-3 flex items-center justify-between shadow-lg max-w-xl mx-auto">
+        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">
+          Pág. <span className="text-brand-cyan">{currentPage}</span> / {totalPages || 1}
+        </div>
+        
+        <div className="flex items-center gap-1.5">
+          <button 
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 hover:border-brand-cyan hover:text-brand-cyan transition-all shadow-sm"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          
+          <button 
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages || totalPages === 0}
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 hover:border-brand-cyan hover:text-brand-cyan transition-all shadow-sm"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* Footer with Pagination */}
-        <div className="bg-slate-50/50 border-t border-slate-100 px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-            Página <span className="text-slate-800">{currentPage}</span> de <span className="text-slate-800">{totalPages || 1}</span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="p-2 rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-brand-cyan/30 hover:text-brand-cyan transition-all"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            
-            <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-2xl shadow-sm">
-              {[...Array(totalPages)].map((_, i) => {
-                const page = i + 1;
-                if (page <= 3 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)) {
-                  return (
-                    <button
-                      key={page}
-                      onClick={() => setCurrentPage(page)}
-                      className={cn(
-                        "w-8 h-8 flex items-center justify-center rounded-xl text-[10px] font-black transition-all",
-                        currentPage === page 
-                          ? 'bg-brand-cyan text-white shadow-md shadow-brand-cyan/20' 
-                          : 'text-slate-400 hover:text-slate-800'
-                      )}
-                    >
-                      {page}
-                    </button>
-                  );
-                } else if (page === 4 && totalPages > 5) {
-                   return <span key={page} className="text-slate-300">...</span>;
-                }
-                return null;
-              })}
-            </div>
-
-            <button 
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages || totalPages === 0}
-              className="p-2 rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-brand-cyan/30 hover:text-brand-cyan transition-all"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
+        <div className="px-4 text-[10px] font-bold text-slate-300 uppercase tracking-tight hidden sm:block">
+          {filteredPatients.length} TOTAL
         </div>
       </div>
     </div>
@@ -3571,123 +3829,156 @@ function TeamView({ data, users, currentUser, onViewAgenda, onDeleteUser }: { da
   );
 }
 
-function ImportView({ onImport }: { onImport: (records: any[]) => Promise<void> }) {
-  const [data, setData] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+function BackupView({ data, patients, users, documents, clinicName, onRestore }: { data: any[]; patients: any[]; users: any[]; documents: any[]; clinicName: string; onRestore: (data: any) => Promise<void> }) {
+  const [isExporting, setIsExporting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImport = async () => {
+  const handleExport = () => {
+    setIsExporting(true);
     try {
-      setIsImporting(true);
-      setError(null);
-      setSuccess(null);
-      
-      const parsed = JSON.parse(data);
-      if (!Array.isArray(parsed)) {
-        throw new Error("Os dados devem ser uma lista (array) de objetos.");
-      }
-      
-      parsed.forEach((item, index) => {
-        if (!item.paciente || !item.data || !item.procedimento) {
-          throw new Error(`Item na posição ${index} está incompleto (faltando paciente, data ou procedimento).`);
-        }
-      });
+      const backupData = {
+        clinicName,
+        exportDate: new Date().toISOString(),
+        records: data,
+        patients,
+        users,
+        documents,
+        version: '1.0.0'
+      };
 
-      await onImport(parsed);
-      setSuccess(`${parsed.length} registros importados com sucesso!`);
-      setData('');
-    } catch (e: any) {
-      setError(e.message || "Erro ao processar dados JSON. Verifique o formato.");
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `backup-${clinicName.replace(/\s+/g, '-').toLowerCase()}-${format(new Date(), 'yyyy-MM-dd-HHmm')}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Erro ao exportar backup:", error);
+      alert("Erro ao gerar o arquivo de backup.");
     } finally {
-      setIsImporting(false);
+      setIsExporting(false);
     }
   };
 
-  const downloadTemplate = () => {
-    const template = [
-      {
-        "paciente": "João da Silva",
-        "data": new Date().toISOString(),
-        "procedimento": "Procedimento Exemplo",
-        "dentista": "Nome do Dentista",
-        "status": "Realizado",
-        "statusPagamento": "Pago",
-        "valor": 100.00
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const confirmRestore = window.confirm(
+      "ATENÇÃO: A restauração de backup irá mesclar os dados do arquivo com os dados atuais. Deseja prosseguir?"
+    );
+
+    if (!confirmRestore) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsRestoring(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const backupData = JSON.parse(content);
+
+        if (!backupData.records || !backupData.patients) {
+          throw new Error("Arquivo de backup inválido ou incompatível.");
+        }
+
+        await onRestore(backupData);
+        alert("Backup restaurado com sucesso!");
+      } catch (err: any) {
+        console.error("Erro ao restaurar backup:", err);
+        alert("Erro ao processar o arquivo: " + err.message);
+      } finally {
+        setIsRestoring(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-    ];
-    const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'modelo_importacao.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    };
+    reader.readAsText(file);
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-8 space-y-6 shadow-sm animate-in fade-in zoom-in-95 duration-300">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h3 className="text-lg font-bold text-slate-800">Importação de Dados Legados</h3>
-          <p className="text-xs text-slate-500">Traga seu histórico de atendimentos e pacientes de outros sistemas.</p>
+    <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-300 pb-20">
+      <div className="bg-white border border-slate-200 p-8 rounded-3xl space-y-6 shadow-sm overflow-hidden relative">
+        <div className="absolute top-0 right-0 p-8 opacity-5">
+          <ShieldCheck className="w-32 h-32 text-brand-cyan" />
         </div>
-        <button 
-          onClick={downloadTemplate}
-          className="px-4 py-2 bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-bold uppercase rounded-lg hover:bg-slate-100 transition-all flex items-center gap-2"
-        >
-          <FileText className="w-4 h-4 text-brand-cyan" />
-          Baixar Modelo JSON
-        </button>
-      </div>
 
-      <div className="space-y-4">
-        <div className="flex justify-between items-end">
-          <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Interface de Transferência (JSON)</label>
-          <span className="text-[8px] font-mono text-slate-300">UTF-8 Format</span>
+        <div className="space-y-2 border-b border-slate-100 pb-6">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <ShieldCheck className="w-6 h-6 text-brand-cyan" />
+            Backup de Segurança
+          </h2>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Exporte todos os dados da sua clínica para um arquivo seguro ou restaure dados de um backup anterior.
+          </p>
         </div>
-        <textarea 
-          value={data}
-          onChange={(e) => setData(e.target.value)}
-          placeholder='Ex: [ { "paciente": "Paciente Exemplo", "data": "2023-10-01", "procedimento": "Limpeza", ... } ]'
-          className="w-full h-80 p-6 font-mono text-[11px] bg-slate-50 border border-slate-200 rounded-3xl focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 outline-none transition-all shadow-inner"
-        />
-      </div>
 
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl flex items-center gap-3">
-          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-          <p className="text-[10px] font-bold uppercase">{error}</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Pacientes</div>
+            <div className="text-2xl font-bold text-slate-800">{patients.length}</div>
+          </div>
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Registros</div>
+            <div className="text-2xl font-bold text-slate-800">{data.length}</div>
+          </div>
         </div>
-      )}
 
-      {success && (
-        <div className="p-4 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-2xl flex items-center gap-3">
-          <CheckCircle2 className="w-4 h-4" />
-          <p className="text-[10px] font-bold uppercase">{success}</p>
+        <div className="space-y-4">
+          <button 
+            onClick={handleExport}
+            disabled={isExporting || isRestoring}
+            className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:bg-brand-cyan transition-all flex items-center justify-center gap-2 text-xs uppercase tracking-widest shadow-lg shadow-slate-200 disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {isExporting ? 'Processando Backup...' : 'Gerar Arquivo de Backup (.json)'}
+          </button>
+
+          <div className="relative">
+            <input 
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".json"
+              className="hidden"
+            />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isExporting || isRestoring}
+              className="w-full py-4 bg-white border-2 border-dashed border-slate-200 text-slate-500 font-bold rounded-2xl hover:border-brand-cyan hover:text-brand-cyan transition-all flex items-center justify-center gap-2 text-xs uppercase tracking-widest disabled:opacity-50"
+            >
+              {isRestoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {isRestoring ? 'Restaurando...' : 'Restaurar de um Arquivo'}
+            </button>
+          </div>
         </div>
-      )}
 
-      <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl">
-        <p className="text-[9px] text-amber-700 leading-relaxed font-bold uppercase opacity-80">
-          Nota: A importação em massa é uma operação sensível. Certifique-se de que os campos coincidam com os nomes das colunas exigidas no modelo.
+        <div className="bg-brand-cyan/5 border border-brand-cyan/20 p-6 rounded-2xl space-y-4">
+          <h3 className="text-xs font-bold text-brand-cyan uppercase tracking-widest flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Informações Importantes
+          </h3>
+          <ul className="text-xs text-slate-600 space-y-2 list-disc list-inside">
+            <li>Recomendamos realizar backups antes de grandes mudanças.</li>
+            <li>A restauração adiciona dados novos, mas não remove os atuais.</li>
+            <li>Backup inclui: Pacientes, Agenda, Financeiro e Documentos.</li>
+          </ul>
+        </div>
+
+        <p className="text-[10px] text-slate-400 text-center italic">
+          O arquivo é processado localmente. Seus dados estão seguros.
         </p>
       </div>
-
-      <button 
-        disabled={isImporting || !data.trim()}
-        onClick={handleImport}
-        className="group relative w-full py-5 bg-slate-900 border border-slate-800 text-white font-bold uppercase text-[10px] tracking-[0.2em] rounded-2xl hover:bg-brand-cyan transition-all shadow-2xl disabled:opacity-50 overflow-hidden"
-      >
-        <div className="relative z-10 flex items-center justify-center gap-3">
-          {isImporting ? <Activity className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5 group-hover:scale-110 transition-transform" />}
-          {isImporting ? 'Processando Lote de Dados...' : 'Iniciar Ingestão de Dados'}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000" />
-      </button>
     </div>
   );
 }
+
+
 
 function SettingsView({ 
   clinicName, 
@@ -3871,73 +4162,7 @@ function SettingsView({
           </div>
         </section>
         
-        {isAdmin && onResetDatabase && (
-          <section className="pt-8 border-t-2 border-rose-100 mt-8 space-y-4">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-3 h-3 text-rose-500" />
-              <h3 className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Zona de Perigo</h3>
-            </div>
-            <div className="bg-rose-50 p-6 border border-rose-100 rounded-lg space-y-4">
-              {!showConfirmReset ? (
-                <>
-                  <p className="text-[10px] text-rose-700 leading-relaxed font-medium">
-                    Limpar o sistema irá remover permanentemente todos os registros, pacientes e documentos do banco de dados. 
-                    Esta ação é irreversível e apagará todos os dados inseridos por Admins, Dentistas e Recepcionistas.
-                  </p>
-                  <button 
-                    onClick={() => setShowConfirmReset(true)}
-                    className="bg-rose-500 text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-rose-600 transition-all rounded shadow-sm flex items-center gap-2"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Limpar Todo o Sistema
-                  </button>
-                </>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-[11px] text-rose-800 font-bold">
-                    VOCÊ TEM CERTEZA ABSOLUTA? Esta ação NÃO pode ser desfeita.
-                  </p>
-                  <p className="text-[10px] text-rose-600">
-                    Digite <span className="font-mono bg-rose-100 px-1 rounded">LIMPAR AGORA</span> para confirmar a exclusão total.
-                  </p>
-                  <input 
-                    type="text" 
-                    value={confirmText}
-                    onChange={(e) => setConfirmText(e.target.value)}
-                    className="w-full text-xs p-2 border border-rose-200 outline-none focus:border-rose-500"
-                    placeholder="Digite LIMPAR AGORA"
-                  />
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        if (confirmText === 'LIMPAR AGORA') {
-                          onResetDatabase();
-                          setShowConfirmReset(false);
-                          setConfirmText('');
-                        } else {
-                          alert("Digite o texto de confirmação corretamente.");
-                        }
-                      }}
-                      disabled={confirmText !== 'LIMPAR AGORA'}
-                      className="flex-1 bg-rose-600 text-white py-2 text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                    >
-                      Confirmar Exclusão Total
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setShowConfirmReset(false);
-                        setConfirmText('');
-                      }}
-                      className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-800"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
           <button className="text-[10px] font-bold uppercase text-slate-400">Restaurar Padrões</button>
@@ -6610,7 +6835,11 @@ function AdminView({
   onUpdateSettings,
   onResetDatabase,
   deferredPrompt,
-  onInstallPWA
+  onInstallPWA,
+  data,
+  patients,
+  documents,
+  onRestore
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
@@ -6624,6 +6853,10 @@ function AdminView({
   onResetDatabase?: () => Promise<void>;
   deferredPrompt: any;
   onInstallPWA: () => void;
+  data: any[];
+  patients: any[];
+  documents: any[];
+  onRestore: (data: any) => Promise<void>;
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -6638,7 +6871,7 @@ function AdminView({
   const [newUserModules, setNewUserModules] = useState<string[]>(['Dashboard', 'Agenda', 'Pacientes']);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'import'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'backup'>('users');
 
   const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
 
@@ -6681,18 +6914,28 @@ function AdminView({
           </button>
           <button 
             type="button"
-            onClick={() => setActiveTab('import')}
+            onClick={() => setActiveTab('backup')}
             className={cn(
               "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
-              activeTab === 'import' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+              activeTab === 'backup' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
-            Importar
+            Backup
           </button>
         </div>
       </div>
 
       <div className="min-h-[500px]">
+        {activeTab === 'backup' && (
+          <BackupView 
+            data={data}
+            patients={patients}
+            users={users}
+            documents={documents}
+            clinicName={clinicName}
+            onRestore={onRestore}
+          />
+        )}
         {activeTab === 'settings' && (
           <SettingsView 
             clinicName={clinicName} 
@@ -6703,21 +6946,6 @@ function AdminView({
             isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
             deferredPrompt={deferredPrompt}
             onInstallPWA={onInstallPWA}
-          />
-        )}
-        
-        {activeTab === 'import' && (
-          <ImportView 
-            onImport={async (records) => {
-              for (const record of records) {
-                const id = `rec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                await setDoc(doc(db, 'records', id), {
-                  ...record,
-                  id,
-                  createdAt: new Date().toISOString()
-                });
-              }
-            }} 
           />
         )}
         
@@ -7507,6 +7735,7 @@ function PublicBookingView({
         data: bookingData.data,
         horario: bookingData.horario,
         paciente: trimmedName,
+        telefone: bookingData.telefone,
         procedimento: bookingData.procedimento,
         dentista: bookingData.dentista,
         status: 'Pendente',
@@ -7643,32 +7872,39 @@ function PublicBookingView({
                           key={doc.id}
                           onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
                           className={cn(
-                            "p-6 rounded-3xl border-2 text-left transition-all relative group flex flex-col items-center text-center",
+                            "p-6 rounded-[32px] border-2 text-left transition-all relative group flex flex-col items-center text-center overflow-hidden",
                             bookingData.dentista === doc.name 
-                              ? "border-brand-cyan bg-cyan-50/20 shadow-xl shadow-brand-cyan/10" 
-                              : "border-slate-50 hover:border-slate-200 bg-white"
+                              ? "border-brand-cyan bg-brand-cyan/[0.03] shadow-2xl shadow-brand-cyan/10 ring-1 ring-brand-cyan/20" 
+                              : "border-slate-50 hover:border-slate-200 bg-white hover:shadow-xl hover:shadow-slate-200/40"
                           )}
                         >
-                          {bookingData.dentista === doc.name && (
-                            <div className="absolute top-4 right-4 bg-brand-cyan text-white p-1 rounded-full">
-                              <CheckCircle2 className="w-4 h-4" />
-                            </div>
-                          )}
+                          {/* Selection Indicator */}
                           <div className={cn(
-                            "w-20 h-20 rounded-2xl flex items-center justify-center text-2xl font-black mb-4 transition-transform group-hover:scale-105",
-                            bookingData.dentista === doc.name ? "bg-brand-cyan text-white shadow-lg shadow-brand-cyan/20" : "bg-slate-100 text-slate-400"
+                            "absolute -top-12 -right-12 w-24 h-24 bg-brand-cyan transition-transform duration-500 rounded-full",
+                            bookingData.dentista === doc.name ? "translate-x-0 translate-y-0" : "translate-x-full translate-y-full"
+                          )}>
+                            <CheckCircle2 className="absolute bottom-6 left-6 w-5 h-5 text-white" />
+                          </div>
+
+                          <div className={cn(
+                            "relative w-24 h-24 rounded-3xl flex items-center justify-center text-3xl font-black mb-6 transition-all duration-500",
+                            bookingData.dentista === doc.name 
+                              ? "bg-brand-cyan text-white shadow-2xl shadow-brand-cyan/40 scale-110" 
+                              : "bg-slate-50 text-slate-300 group-hover:bg-slate-100 group-hover:text-brand-cyan"
                           )}>
                             {doc.name[0]}
                           </div>
-                          <div className="space-y-1">
-                            <p className="text-lg font-black text-slate-900">{doc.name}</p>
-                            <div className="flex flex-col gap-1 items-center">
-                              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+
+                          <div className="space-y-2 relative z-10">
+                            <p className="text-xl font-black text-slate-900 tracking-tight">{doc.name}</p>
+                            <div className="flex flex-col gap-2 items-center">
+                              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
                                 {doc.role === 'Admin' ? 'Especialista Sênior' : 'Clínico Geral'}
                               </span>
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600">
-                                Disponível hoje
-                              </span>
+                              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Disponível</span>
+                              </div>
                             </div>
                           </div>
                         </button>
@@ -7706,6 +7942,17 @@ function PublicBookingView({
                             value={bookingData.data}
                             onChange={(e) => {
                               const newData = e.target.value;
+                              if (!newData) return;
+                              
+                              const dateObj = parseISO(newData);
+                              const day = getDay(dateObj);
+
+                              if (day === 0 || day === 6) {
+                                alert("Desculpe, a clínica não realiza atendimentos aos sábados e domingos. Por favor, escolha um dia útil de segunda a sexta.");
+                                e.target.value = bookingData.data; // Reset visually
+                                return;
+                              }
+
                               setBookingData(prev => {
                                 const newBookingData = { ...prev, data: newData };
                                 if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
@@ -7719,7 +7966,11 @@ function PublicBookingView({
                             className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all font-bold text-slate-800"
                           />
                           <p className="mt-4 text-xs text-slate-500 flex items-center gap-2 px-1">
-                            <Info className="w-3.5 h-3.5" />
+                            <Info className="w-3.5 h-3.5 text-brand-cyan" />
+                            Atendimentos de Segunda a Sexta das 08h às 17h.
+                          </p>
+                          <p className="mt-2 text-xs text-slate-500 flex items-center gap-2 px-1">
+                            <Calendar className="w-3.5 h-3.5" />
                             Exibindo horários para {format(parseISO(bookingData.data), "eeee, dd 'de' MMMM", { locale: ptBR })}
                           </p>
                         </div>
@@ -7836,31 +8087,48 @@ function PublicBookingView({
                           <h3 className="text-xl font-bold text-slate-900">Resumo da solicitação</h3>
                         </div>
 
-                        <div className="bg-slate-900 rounded-[40px] p-8 text-white relative overflow-hidden shadow-2xl shadow-slate-900/20">
-                          <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
-                            <CheckCircle2 className="w-32 h-32 text-white" />
-                          </div>
+                        <div className="bg-slate-900 rounded-[48px] p-8 text-white relative overflow-hidden shadow-2xl shadow-slate-900/40 border border-white/5">
+                          {/* Design accents */}
+                          <div className="absolute top-0 right-0 w-32 h-32 bg-brand-cyan/10 blur-[60px] pointer-events-none" />
+                          <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-500/10 blur-[40px] pointer-events-none" />
                           
-                          <div className="space-y-6 relative z-10">
-                            <div className="pb-4 border-b border-white/10">
-                              <p className="text-[10px] text-white/40 uppercase font-black tracking-widest mb-1 text-center">Especialista</p>
-                              <p className="text-xl font-black text-brand-cyan text-center">{bookingData.dentista}</p>
+                          {/* Ticket edge pattern visual */}
+                          <div className="absolute left-0 top-1/2 -ml-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
+                          <div className="absolute right-0 top-1/2 -mr-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
+
+                          <div className="space-y-8 relative z-10">
+                            <div className="pb-6 border-b border-white/10 text-center">
+                              <p className="text-[10px] text-white/30 uppercase font-black tracking-[0.3em] mb-3">Profissional Selecionado</p>
+                              <div className="flex items-center justify-center gap-4">
+                                <div className="w-12 h-12 bg-brand-cyan rounded-2xl flex items-center justify-center text-xl font-black">
+                                  {bookingData.dentista[0]}
+                                </div>
+                                <p className="text-2xl font-black text-white tracking-tight">{bookingData.dentista}</p>
+                              </div>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
-                              <div className="text-center p-3 rounded-2xl bg-white/5">
-                                <p className="text-[8px] text-white/40 uppercase font-bold tracking-widest mb-1">Data</p>
-                                <p className="text-xs font-bold">{format(parseISO(bookingData.data), 'dd/MM/yyyy')}</p>
+                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
+                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">Data Marcada</p>
+                                <p className="text-lg font-black text-brand-cyan">{format(parseISO(bookingData.data), 'dd/MM')}</p>
+                                <p className="text-[9px] text-white/50 font-bold">{format(parseISO(bookingData.data), 'yyyy')}</p>
                               </div>
-                              <div className="text-center p-3 rounded-2xl bg-white/5">
-                                <p className="text-[8px] text-white/40 uppercase font-bold tracking-widest mb-1">Horário</p>
-                                <p className="text-xs font-bold">{bookingData.horario}</p>
+                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
+                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">Início Previsto</p>
+                                <p className="text-lg font-black text-brand-cyan">{bookingData.horario}</p>
+                                <p className="text-[9px] text-white/50 font-bold">Horário Local</p>
                               </div>
                             </div>
 
-                            <div className="space-y-1">
-                                <p className="text-[10px] text-white/40 uppercase font-black tracking-widest text-center">Procedimento</p>
-                                <p className="text-sm font-bold text-center">Consulta Inicial Odontológica</p>
+                            <div className="pt-2">
+                                <div className="flex items-center justify-between px-2">
+                                  <p className="text-[10px] text-white/30 uppercase font-black tracking-widest">Procedimento</p>
+                                  <span className="w-2 h-2 rounded-full bg-brand-cyan animate-pulse" />
+                                </div>
+                                <div className="mt-2 p-4 rounded-2xl bg-white/5 border border-white/5 flex items-center gap-3">
+                                  <Stethoscope className="w-4 h-4 text-brand-cyan" />
+                                  <p className="text-sm font-bold">Primeira Avaliação Clínica</p>
+                                </div>
                             </div>
                           </div>
                         </div>
