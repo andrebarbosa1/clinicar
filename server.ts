@@ -10,11 +10,28 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Import Firebase config
-const firebaseConfig = JSON.parse(fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8'));
+// Load firebase-applet-config.json safely for both ESM/CJS and DEV/PROD
+let firebaseConfig: any = {};
+try {
+  const rootConfigPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(rootConfigPath)) {
+    firebaseConfig = JSON.parse(fs.readFileSync(rootConfigPath, 'utf8'));
+  } else {
+    // Fallback detection of ESM vs CJS dirname
+    let currentDirname = '';
+    if (typeof __dirname !== 'undefined') {
+      currentDirname = __dirname;
+    } else {
+      currentDirname = path.dirname(fileURLToPath(import.meta.url));
+    }
+    const localConfigPath = path.join(currentDirname, 'firebase-applet-config.json');
+    if (fs.existsSync(localConfigPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+    }
+  }
+} catch (err) {
+  console.error("Error reading firebase-applet-config.json:", err);
+}
 
 // Initialize Firebase
 const appFirebase = initializeApp(firebaseConfig);

@@ -72,7 +72,12 @@ import {
   ShieldCheck,
   ChevronDown,
   ImagePlus,
-  Info
+  Info,
+  Sparkles,
+  Package,
+  Layers,
+  ShoppingCart,
+  TrendingDown
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -308,9 +313,9 @@ const SecurityUtils = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Use initializeFirestore with experimentalForceLongPolling to avoid connection timeouts in restricted environments
+// Use initializeFirestore with experimentalAutoDetectLongPolling to support both local execution (WebSockets) and container environments (Long Polling)
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
+  experimentalAutoDetectLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
@@ -320,11 +325,11 @@ async function testConnection() {
   try {
     // Only attempt the connection test if we're in a browser environment
     if (typeof window !== 'undefined') {
-      await getDocFromServer(doc(db, '_connection_test_', 'ping'));
+      await getDocFromServer(doc(db, 'test', 'connection'));
       console.log("Firestore connection established successfully.");
     }
   } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
+    if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('Could not reach Cloud Firestore backend'))) {
       console.error("Firestore connection failure: Please check your Firebase configuration or internet connection.");
     } else {
       console.warn("Firestore connection test completed with status:", error);
@@ -454,6 +459,7 @@ export default function App() {
   const [clinicLogo, setClinicLogo] = useState<string | null>(null);
   const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isFreeTrialView, setIsFreeTrialView] = useState(false);
 
   React.useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -1681,6 +1687,51 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
+    if (isFreeTrialView) {
+      return (
+        <>
+          <FreeTrialView 
+            onBack={() => setIsFreeTrialView(false)}
+            onStartTrial={async (details) => {
+              setClinicName(details.clinicName);
+              try {
+                await handleUpdateSettings({ clinicName: details.clinicName });
+              } catch (e) {
+                console.error("Erro ao atualizar configurações no Firestore:", e);
+              }
+              
+              const trialUserProfile = {
+                id: `trial-${Date.now()}`,
+                name: details.fullName,
+                role: 'Admin',
+                modules: 'Todos',
+                username: details.username.trim().toLowerCase(),
+                password: details.password.trim(),
+                email: details.email,
+                phone: details.phone,
+                isTrial: true,
+                trialPlan: details.plan,
+                trialSpecialty: details.specialty,
+                trialStartedAt: new Date().toISOString()
+              };
+
+              try {
+                await setDoc(doc(db, 'users', trialUserProfile.id), trialUserProfile);
+              } catch (e) {
+                console.error("Erro ao persistir perfil de trial no Firestore:", e);
+              }
+              
+              await handleLogin(trialUserProfile);
+              setIsFreeTrialView(false);
+            }}
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+          />
+          {renderLegal()}
+        </>
+      );
+    }
+
     return (
       <>
         <LoginView 
@@ -1692,6 +1743,7 @@ export default function App() {
           clinicName={clinicName}
           clinicLogo={clinicLogo}
           footerText={footerText}
+          onOpenFreeTrial={() => setIsFreeTrialView(true)}
         />
         {renderLegal()}
       </>
@@ -1915,14 +1967,144 @@ export default function App() {
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
         );
+      case 'Estoque':
+        return <StockView currentUser={currentUser} />;
       default:
         return <DashboardView filteredData={filteredData} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
-      <AnimatePresence>
+    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans text-slate-900">
+      {/* Sidebar para Desktop */}
+      <aside className="hidden lg:flex flex-col w-64 h-screen bg-slate-800 border-r border-slate-700/50 sticky top-0 shrink-0 select-none z-50">
+        {/* Branding */}
+        <div className="p-4 border-b border-white/5 flex items-center gap-2.5 shrink-0">
+          {clinicLogo ? (
+            <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain brightness-110 contrast-110" />
+          ) : (
+            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+              <Stethoscope className="h-4.5 w-4.5 text-white" />
+            </div>
+          )}
+          <div className="flex flex-col min-w-0">
+            <span className="text-xs font-black text-white tracking-tight leading-none truncate">{clinicName}</span>
+            <span className="text-[9px] text-brand-cyan font-bold tracking-widest mt-0.5">ANALYTICS</span>
+          </div>
+        </div>
+
+        {/* Navigation vertical list */}
+        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+          {hasModule('Dashboard') && (
+            <SidebarNavItem 
+              icon={<LayoutDashboard className="w-4 h-4" />} 
+              label="Dashboard" 
+              active={activePage === 'Dashboard'} 
+              onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Pacientes') && (
+            <SidebarNavItem 
+              icon={<Users className="w-4 h-4" />} 
+              label="Pacientes" 
+              active={activePage === 'Pacientes'} 
+              onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Agenda') && (
+            <SidebarNavItem 
+              icon={<Calendar className="w-4 h-4" />} 
+              label="Agenda" 
+              active={activePage === 'Agenda'} 
+              onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Retorno') && (
+            <SidebarNavItem 
+              icon={<RotateCcw className="w-4 h-4" />} 
+              label="Retorno" 
+              active={activePage === 'Retorno'} 
+              onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Documentos') && (
+            <SidebarNavItem 
+              icon={<FileText className="w-4 h-4" />} 
+              label="Documentos" 
+              active={activePage === 'Documentos'} 
+              onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Financeiro') && (
+            <SidebarNavItem 
+              icon={<DollarSign className="w-4 h-4" />} 
+              label="Financeiro" 
+              active={activePage === 'Financeiro'} 
+              onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Equipe') && (
+            <SidebarNavItem 
+              icon={<Stethoscope className="w-4 h-4" />} 
+              label="Equipe / Dentistas" 
+              active={activePage === 'Equipe'} 
+              onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Estoque') && (
+            <SidebarNavItem 
+              icon={<Package className="w-4 h-4" />} 
+              label="Estoque & Suprimentos" 
+              active={activePage === 'Estoque'} 
+              onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Administração') && (
+            <SidebarNavItem 
+              icon={<Activity className="w-4 h-4" />} 
+              label="Administração" 
+              active={activePage === 'Administração'} 
+              onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+            />
+          )}
+        </div>
+
+        {/* Bottom Section */}
+        <div className="p-3 border-t border-white/5 bg-slate-950/20 space-y-2.5 shrink-0">
+          {currentUser && (
+            <div className="px-2.5 py-2.5 mb-1 bg-white/5 rounded-xl flex items-center gap-2.5 shrink-0">
+              <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-[10px] font-bold text-slate-300 uppercase shrink-0">
+                {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-slate-200 leading-tight truncate">{currentUser.name}</span>
+                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider leading-normal truncate">
+                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {currentUser?.isTrial && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300 text-[9px] font-bold">
+              <Sparkles className="w-3 h-3 text-amber-400 animate-pulse shrink-0" />
+              <span className="truncate">Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
+            </div>
+          )}
+
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-400 rounded-lg border border-rose-500/20 hover:bg-rose-500/20 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sair do Sistema</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Conteúdo Principal (Direita) */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <AnimatePresence>
         {quotaExceeded && (
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
@@ -1978,51 +2160,61 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0">
-        <div className="flex items-center gap-4 md:gap-6">
+      {/* Header (apenas Mobile) */}
+      <header className="lg:hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
           <button 
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="p-2 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
+            className="p-1.5 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
           >
             {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {clinicLogo ? (
-              <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain" />
+              <img src={clinicLogo} alt={clinicName} className="h-7 max-w-[130px] object-contain" />
             ) : (
-              <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-                <Stethoscope className="h-5 w-5 text-white" />
+              <div className="w-7 h-7 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+                <Stethoscope className="h-4.5 w-4.5 text-white" />
               </div>
             )}
-            <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">{clinicName} <span className="text-brand-cyan font-normal">Analytics</span></h1>
+            <h1 className="text-sm md:text-base font-bold text-slate-800 tracking-tight hidden xs:block">
+              {clinicName} <span className="text-brand-cyan font-normal">Analytics</span>
+            </h1>
+            {currentUser?.isTrial && (
+              <div className="hidden xl:flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-full text-amber-700 text-[8.5px] font-black uppercase tracking-wider ml-1">
+                <Sparkles className="w-2.5 h-2.5 text-amber-500 animate-pulse" />
+                <span>Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
+              </div>
+            )}
           </div>
           
           {currentUser && (
-            <div className="hidden lg:flex items-center gap-3 pl-6 border-l border-slate-100">
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-500 border border-slate-200 uppercase">
+            <div className="hidden xl:flex items-center gap-2 pl-3 border-l border-slate-100 shrink-0">
+              <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-500 border border-slate-200 uppercase">
                 {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
               </div>
               <div className="flex flex-col">
-                <span className="text-xs font-bold text-slate-700">{currentUser.name}</span>
-                <span className="text-[9px] uppercase font-bold text-brand-cyan tracking-tighter">{currentUser.role}</span>
+                <span className="text-[10px] font-bold text-slate-700 leading-tight">{currentUser.name}</span>
+                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-tighter leading-none">
+                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
+                </span>
               </div>
             </div>
           )}
         </div>
 
-        <div className="flex items-center gap-2 lg:gap-3">
+        <div className="flex items-center gap-1 lg:gap-2">
           {/* RealTime Clock - Topo */}
-          <div className="hidden sm:flex items-center mr-2">
+          <div className="hidden xl:flex items-center mr-1">
             <RealTimeClock />
           </div>
 
           {/* Desktop Navigation */}
-          <nav className="hidden lg:flex items-center gap-1">
+          <nav className="hidden lg:flex items-center gap-0.5">
             {hasModule('Dashboard') && (
               <RibbonItem 
-                icon={<LayoutDashboard className="w-4 h-4" />} 
+                icon={<LayoutDashboard className="w-3.5 h-3.5" />} 
                 label="Dashboard" 
                 active={activePage === 'Dashboard'} 
                 onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
@@ -2030,7 +2222,7 @@ export default function App() {
             )}
             {hasModule('Pacientes') && (
               <RibbonItem 
-                icon={<Users className="w-4 h-4" />} 
+                icon={<Users className="w-3.5 h-3.5" />} 
                 label="Pacientes" 
                 active={activePage === 'Pacientes'} 
                 onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
@@ -2038,7 +2230,7 @@ export default function App() {
             )}
             {hasModule('Agenda') && (
               <RibbonItem 
-                icon={<Calendar className="w-4 h-4" />} 
+                icon={<Calendar className="w-3.5 h-3.5" />} 
                 label="Agenda" 
                 active={activePage === 'Agenda'} 
                 onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
@@ -2046,7 +2238,7 @@ export default function App() {
             )}
             {hasModule('Retorno') && (
               <RibbonItem 
-                icon={<RotateCcw className="w-4 h-4" />} 
+                icon={<RotateCcw className="w-3.5 h-3.5" />} 
                 label="Retorno" 
                 active={activePage === 'Retorno'} 
                 onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
@@ -2054,7 +2246,7 @@ export default function App() {
             )}
             {hasModule('Documentos') && (
               <RibbonItem 
-                icon={<FileText className="w-4 h-4" />} 
+                icon={<FileText className="w-3.5 h-3.5" />} 
                 label="Documentos" 
                 active={activePage === 'Documentos'} 
                 onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
@@ -2062,7 +2254,7 @@ export default function App() {
             )}
             {hasModule('Financeiro') && (
               <RibbonItem 
-                icon={<DollarSign className="w-4 h-4" />} 
+                icon={<DollarSign className="w-3.5 h-3.5" />} 
                 label="Financeiro" 
                 active={activePage === 'Financeiro'} 
                 onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
@@ -2070,15 +2262,23 @@ export default function App() {
             )}
             {hasModule('Equipe') && (
               <RibbonItem 
-                icon={<Stethoscope className="w-4 h-4" />} 
+                icon={<Stethoscope className="w-3.5 h-3.5" />} 
                 label="Equipe" 
                 active={activePage === 'Equipe'} 
                 onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
               />
             )}
+            {hasModule('Estoque') && (
+              <RibbonItem 
+                icon={<Package className="w-3.5 h-3.5" />} 
+                label="Estoque" 
+                active={activePage === 'Estoque'} 
+                onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+              />
+            )}
             {hasModule('Administração') && (
               <RibbonItem 
-                icon={<Activity className="w-4 h-4" />} 
+                icon={<Activity className="w-3.5 h-3.5" />} 
                 label="Adm" 
                 active={activePage === 'Administração'} 
                 onClick={() => { setActivePage('Administração'); setSubPage(null); }}
@@ -2086,9 +2286,9 @@ export default function App() {
             )}
           </nav>
 
-          <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
+          <div className="w-px h-6 bg-slate-100 mx-0.5 shrink-0" />
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button 
               onClick={() => {
                 const url = window.location.origin + window.location.pathname + '?booking=true';
@@ -2151,6 +2351,7 @@ export default function App() {
                   <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
                 )}
                 {hasModule('Equipe') && <MobileNavItem icon={<Stethoscope className="w-5 h-5" />} label="Equipe" active={activePage === 'Equipe'} onClick={() => { setActivePage('Equipe'); setIsMenuOpen(false); }} />}
+                {hasModule('Estoque') && <MobileNavItem icon={<Package className="w-5 h-5" />} label="Estoque & Suprimentos" active={activePage === 'Estoque'} onClick={() => { setActivePage('Estoque'); setIsMenuOpen(false); }} />}
                 {hasModule('Administração') && (
                   <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
                 )}
@@ -2171,112 +2372,132 @@ export default function App() {
       </AnimatePresence>
 
       {/* Filters Bar */}
-      <nav className="bg-slate-50 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-6 sticky top-[53px] md:top-[61px] z-40 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="relative group flex-1 md:flex-none">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-            <input 
-              type="text" 
-              placeholder="Buscar paciente..."
-              className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
-              value={searchPatient}
-              onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
-            />
+      <nav className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 sticky top-[53px] md:top-[61px] lg:top-0 z-40 shrink-0">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
+          <div className="flex items-center gap-2">
+            <div className="relative group flex-1 md:flex-none">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+              <input 
+                type="text" 
+                placeholder="Buscar paciente..."
+                className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
+                value={searchPatient}
+                onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
+              />
+            </div>
           </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-3 md:gap-4">
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-              value={filterDateRange}
-              onChange={(e) => {
-                const val = e.target.value as any;
-                setFilterDateRange(val);
-                if (val === 'today') {
-                  setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
-                  setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
-                } else if (val === 'month') {
-                  setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-                  setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
-                } else if (val === 'last_month') {
-                  const lastMonth = subMonths(new Date(), 1);
-                  setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
-                  setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
-                }
-              }}
-            >
-              <option value="month">Este Mês</option>
-              <option value="last_month">Mês Passado</option>
-              <option value="today">Hoje</option>
-              <option value="custom">Customizado</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-3 md:gap-4">
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
+                value={filterDateRange}
+                onChange={(e) => {
+                  const val = e.target.value as any;
+                  setFilterDateRange(val);
+                  if (val === 'today') {
+                    setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
+                  } else if (val === 'month') {
+                    setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+                  } else if (val === 'last_month') {
+                    const lastMonth = subMonths(new Date(), 1);
+                    setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+                  }
+                }}
+              >
+                <option value="month">Este Mês</option>
+                <option value="last_month">Mês Passado</option>
+                <option value="today">Hoje</option>
+                <option value="custom">Customizado</option>
+              </select>
 
-            {filterDateRange === 'custom' && (
-              <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
-                <input 
-                  type="date"
-                  className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                  value={filterStartDate}
-                  onChange={(e) => setFilterStartDate(e.target.value)}
-                />
-                <span className="text-[10px] text-slate-400">até</span>
-                <input 
-                  type="date"
-                  className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                  value={filterEndDate}
-                  onChange={(e) => setFilterEndDate(e.target.value)}
-                />
+              {filterDateRange === 'custom' && (
+                <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
+                  <input 
+                    type="date"
+                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                    value={filterStartDate}
+                    onChange={(e) => setFilterStartDate(e.target.value)}
+                  />
+                  <span className="text-[10px] text-slate-400">até</span>
+                  <input 
+                    type="date"
+                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                    value={filterEndDate}
+                    onChange={(e) => setFilterEndDate(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterProcedure}
+                onChange={(e) => setFilterProcedure(e.target.value)}
+              >
+                {procedures.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+              >
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterPayment}
+                onChange={(e) => setFilterPayment(e.target.value)}
+              >
+                {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                  value={filterDentista}
+                  onChange={(e) => setFilterDentista(e.target.value)}
+                >
+                  {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
               </div>
             )}
           </div>
+        </div>
 
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterProcedure}
-              onChange={(e) => setFilterProcedure(e.target.value)}
-            >
-              {procedures.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-            >
-              {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterPayment}
-              onChange={(e) => setFilterPayment(e.target.value)}
-            >
-              {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-          {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                value={filterDentista}
-                onChange={(e) => setFilterDentista(e.target.value)}
-              >
-                {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-          )}
+        {/* Relógio e Ícone (ao lado contrário do menu de busca no topo) */}
+        <div className="hidden lg:flex items-center gap-3 shrink-0 self-end lg:self-auto pl-4 border-l border-slate-200/60 ml-2">
+          <RealTimeClock />
+          
+          <button 
+            onClick={() => {
+              const url = window.location.origin + window.location.pathname + '?booking=true';
+              navigator.clipboard.writeText(url);
+              alert('Link de agendamento online copiado!');
+              setIsPublicBooking(true);
+            }}
+            className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
+            title="Copiar Link de Agendamento"
+          >
+            <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+          </button>
         </div>
       </nav>
 
@@ -2302,6 +2523,7 @@ export default function App() {
       />
 
       {renderLegal()}
+      </div>
     </div>
   );
 }
@@ -2550,12 +2772,34 @@ function MobileNavItem({ icon, label, active = false, onClick }: { icon: React.R
   );
 }
 
+function SidebarNavItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs font-bold border cursor-pointer select-none text-left",
+        active 
+          ? "bg-brand-cyan/20 border-brand-cyan/35 text-white font-bold shadow-sm" 
+          : "border-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+      )}
+    >
+      <div className={cn(
+        "transition-transform duration-200 shrink-0",
+        active ? "scale-105 text-brand-cyan" : "hover:scale-105 text-slate-400"
+      )}>
+        {icon}
+      </div>
+      <span className="truncate tracking-wide">{label}</span>
+    </button>
+  );
+}
+
 function RibbonItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "flex flex-col items-center justify-center px-4 py-2 gap-1 border-b-2 transition-all group min-w-[80px] cursor-pointer",
+        "flex flex-col items-center justify-center px-1.5 py-1 gap-0.5 border-b-2 transition-all group min-w-[62px] md:min-w-[70px] cursor-pointer",
         active 
           ? "border-brand-cyan bg-cyan-50/30 text-brand-cyan" 
           : "border-transparent text-slate-400 hover:text-slate-600 hover:bg-slate-50"
@@ -2563,11 +2807,11 @@ function RibbonItem({ icon, label, active = false, onClick }: { icon: React.Reac
     >
       <div className={cn(
         "transition-transform duration-200",
-        active ? "scale-110" : "group-hover:scale-110"
+        active ? "scale-105" : "group-hover:scale-105"
       )}>
         {icon}
       </div>
-      <span className="text-[9px] uppercase font-bold tracking-widest">{label}</span>
+      <span className="text-[8.5px] md:text-[9px] uppercase font-bold tracking-wider leading-none">{label}</span>
     </button>
   );
 }
@@ -7437,7 +7681,8 @@ function LoginView({
   onTerms,
   clinicName,
   clinicLogo,
-  footerText
+  footerText,
+  onOpenFreeTrial
 }: { 
   users: any[]; 
   onLogin: (user: any) => void; 
@@ -7447,6 +7692,7 @@ function LoginView({
   clinicName: string;
   clinicLogo: string | null;
   footerText: string;
+  onOpenFreeTrial?: () => void;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -7621,6 +7867,23 @@ function LoginView({
             </button>
 
           </form>
+
+          {onOpenFreeTrial && (
+            <div className="mt-6 pt-6 border-t border-slate-100 flex flex-col items-center gap-3">
+              <div className="text-center">
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Ainda não é cliente?</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Crie um ambiente de testes personalizado</p>
+              </div>
+              <button
+                type="button"
+                onClick={onOpenFreeTrial}
+                className="w-full bg-emerald-50 hover:bg-emerald-100/85 text-emerald-600 border border-emerald-200/50 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-wide transition-all shadow-sm flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                Experimentar Teste Grátis
+              </button>
+            </div>
+          )}
         </motion.div>
         
         <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8 px-4 text-center">
@@ -8473,6 +8736,1652 @@ function Footer({
         </div>
       </div>
     </footer>
+  );
+}
+
+interface FreeTrialDetails {
+  fullName: string;
+  clinicName: string;
+  email: string;
+  phone: string;
+  plan: string;
+  specialty: string;
+  username: string;
+  password: string;
+}
+
+function FreeTrialView({
+  onBack,
+  onStartTrial,
+  clinicLogo,
+  footerText
+}: {
+  onBack: () => void;
+  onStartTrial: (details: FreeTrialDetails) => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+}) {
+  const [fullName, setFullName] = useState('');
+  const [clinicName, setClinicName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [plan, setPlan] = useState('Pro'); // Default Pro
+  const [specialty, setSpecialty] = useState('Geral');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const steps = [
+    "Validando dados cadastrais...",
+    "Instanciando banco de dados privado no Cloud Run...",
+    "Preparando módulos de faturamento e fluxo de caixa...",
+    "Configurando o painel inteligente para odontologia..."
+  ];
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!fullName.trim() || !clinicName.trim() || !email.trim() || !phone.trim() || !username.trim() || !password.trim()) {
+      setError('Por favor, preencha todos os campos obrigatórios do formulário.');
+      return;
+    }
+
+    if (username.trim().includes(' ')) {
+      setError('O nome de usuário não pode conter espaços.');
+      return;
+    }
+
+    if (password.trim().length < 3) {
+      setError('A senha deve ter pelo menos 3 caracteres.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setCurrentStep(0);
+
+    // Simulate gorgeous loading steps with specific delays
+    for (let i = 0; i < steps.length; i++) {
+      setCurrentStep(i);
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+
+    try {
+      await onStartTrial({
+        fullName,
+        clinicName,
+        email,
+        phone,
+        plan,
+        specialty,
+        username,
+        password
+      });
+    } catch (err: any) {
+      setError(err?.message || 'Erro ao inicializar o teste grátis.');
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen w-screen bg-[#f8fafc] flex flex-col items-center justify-start py-12 px-4 md:px-8 relative overflow-x-hidden font-sans">
+      {/* Background patterns */}
+      <div className="absolute top-0 left-0 w-full h-full opacity-30 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-brand-cyan/15 blur-[120px]" />
+        <div className="absolute bottom-[-15%] right-[-10%] w-[700px] h-[700px] rounded-full bg-blue-400/10 blur-[130px]" />
+      </div>
+
+      <div className="w-full max-w-5xl relative z-10 flex flex-col gap-8">
+        
+        {/* Back Button and Logo */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-6">
+          <button 
+            type="button"
+            onClick={onBack}
+            className="group px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors flex items-center gap-1 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/50 shadow-sm self-start sm:self-auto"
+          >
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+            Voltar ao Login
+          </button>
+          
+          <div className="flex items-center gap-2">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt="OdontoDash" className="h-10 w-auto object-contain" />
+            ) : (
+              <>
+                <div className="w-8 h-8 bg-brand-cyan rounded-lg flex items-center justify-center text-white shadow-lg">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <span className="text-lg font-black text-slate-800 tracking-tight">
+                  Odonto<span className="text-brand-cyan">Dash</span>
+                </span>
+              </>
+            )}
+            <span className="text-[10px] bg-brand-cyan/10 text-brand-cyan font-bold uppercase tracking-wider px-2 py-0.5 rounded-full">
+              Free Trial Hub
+            </span>
+          </div>
+        </div>
+
+        {/* Central Grid container */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          
+          {/* Left Column: Premium Value Proposition & Plan choice */}
+          <div className="lg:col-span-5 space-y-6 text-left">
+            <div className="space-y-3">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 text-[10px] font-bold uppercase tracking-widest">
+                <Sparkles className="w-3 h-3 text-emerald-500 animate-pulse" />
+                Sem compromisso, cancele quando quiser
+              </span>
+              <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                Experimente o <span className="text-brand-cyan">OdontoDash</span> gratuitamente por 14 dias
+              </h2>
+              <p className="text-sm text-slate-500 leading-relaxed">
+                Acesse todas as ferramentas de gestão, faturamento d3, controle de agendamentos e prontuários que vão alavancar os lucros da sua clínica.
+              </p>
+            </div>
+
+            {/* Core Features list */}
+            <div className="space-y-3 bg-white/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200/50">
+              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Incluso na versão de Teste:</h4>
+              {[
+                { title: "Dashboards analíticos de faturamento", desc: "Fluxo de caixa claro e transparente" },
+                { title: "Agenda Inteligente integrada", desc: "Prevenção de faltas com lembretes WhatsApp" },
+                { title: "Prontuário Odontológico Digital", desc: "Grave evoluções de tratamento e receitas" },
+                { title: "Gestão completa de pacientes", desc: "Ficha médica, histórico financeiro e anamnese" }
+              ].map((item, idx) => (
+                <div key={idx} className="flex gap-3">
+                  <div className="w-5 h-5 rounded-full bg-emerald-50 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-100">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-bold text-slate-800">{item.title}</h5>
+                    <p className="text-[10px] text-slate-500">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Secure Badging */}
+            <div className="bg-slate-100/60 p-4 rounded-2xl border border-slate-200/40 flex items-center gap-3">
+              <Shield className="w-8 h-8 text-slate-400 shrink-0" />
+              <p className="text-[10px] text-slate-500 leading-normal font-medium">
+                Seus dados de teste estão seguros em um ambiente sandbox criptografado com conformidade total à <strong>LGPD médica</strong>.
+              </p>
+            </div>
+          </div>
+
+          {/* Right Column: Loading Setup Wizard OR Setup Form */}
+          <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/60 shadow-xl shadow-slate-200/40 p-8 relative overflow-hidden">
+            <AnimatePresence mode="wait">
+              {isSubmitting ? (
+                // Setup loader animation wizard
+                <motion.div 
+                  key="loader-wizard"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="py-12 flex flex-col items-center justify-center text-center space-y-8"
+                >
+                  <div className="relative">
+                    {/* Ring loader */}
+                    <div className="w-20 h-20 rounded-full border-4 border-slate-100 border-t-brand-cyan animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Cpu className="w-7 h-7 text-brand-cyan animate-pulse" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 max-w-sm">
+                    <h3 className="text-lg font-bold text-slate-800">Preparando seu Espaço Virtual</h3>
+                    <p className="text-xs text-slate-400 font-mono transition-all duration-300">
+                      {steps[currentStep]}
+                    </p>
+                  </div>
+
+                  {/* Progress dots bar */}
+                  <div className="flex gap-2 justify-center">
+                    {steps.map((_, i) => (
+                      <div 
+                        key={i} 
+                        className={cn(
+                          "h-1.5 rounded-full transition-all duration-300", 
+                          i === currentStep ? "w-6 bg-brand-cyan" : i < currentStep ? "w-3 bg-brand-cyan/40" : "w-1.5 bg-slate-100"
+                        )} 
+                      />
+                    ))}
+                  </div>
+                </motion.div>
+              ) : (
+                // Form View
+                <motion.div 
+                  key="trial-form"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="space-y-6 text-left"
+                >
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800 tracking-tight">Configure sua Conta Experimental</h3>
+                    <p className="text-xs text-slate-400">Preencha os dados e tenha acesso imediato ao painel de testes.</p>
+                  </div>
+
+                  {error && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 text-rose-600 rounded-2xl text-[10px] uppercase font-bold flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    
+                    {/* Input name and Email */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Seu Nome Completo *</label>
+                        <div className="relative">
+                          <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="text"
+                            required
+                            value={fullName}
+                            onChange={(e) => setFullName(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: Dr. Arthur Rezende"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">E-mail Profissional *</label>
+                        <div className="relative">
+                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: darthur@odonto.com"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Clinic Name and Phone/WhatsApp */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome da Clínica / Consultório *</label>
+                        <div className="relative">
+                          <Stethoscope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="text"
+                            required
+                            value={clinicName}
+                            onChange={(e) => setClinicName(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: Clínica Sorriso Novo"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">WhatsApp para Ativação *</label>
+                        <div className="relative">
+                          <MessageCircle className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="tel"
+                            required
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: (11) 99999-9999"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Custom Credentials for subsequent logins */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100/80">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-slate-400" />
+                          Nome de Usuário para Acesso *
+                        </label>
+                        <input 
+                          type="text"
+                          required
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                          placeholder="Ex: arthur.odonto (sem espaços)"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+                          <Lock className="w-3.5 h-3.5 text-slate-400" />
+                          Senha de Acesso *
+                        </label>
+                        <input 
+                          type="password"
+                          required
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                          placeholder="Ex: darthur123"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Select Specialty Preset */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Especialidade Principal da Clínica</label>
+                      <select
+                        value={specialty}
+                        onChange={(e) => setSpecialty(e.target.value)}
+                        className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                      >
+                        <option value="Geral">Clínica Geral & Estética</option>
+                        <option value="Ortodontia">Ortodontia & Alinhadores</option>
+                        <option value="Implantodontia">Implantodontia & Próteses</option>
+                        <option value="Odontopediatria">Odontopediatria & Endodontia</option>
+                      </select>
+                    </div>
+
+                    {/* Desired Plan Tabs Selector */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Plano desejado para simular</label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {[
+                          { title: 'Lite', desc: '1 consultório, agenda simples', price: 'R$ 149/mês' },
+                          { title: 'Pro', desc: 'Multi-cadeiras, KPI, WhatsApp', price: 'R$ 299/mês', flag: 'Recomendado' },
+                          { title: 'Platinum', desc: 'Franquias, suporte 24h dedicado', price: 'R$ 599/mês' }
+                        ].map((p, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setPlan(p.title)}
+                            className={cn(
+                              "text-left p-4 rounded-xl border transition-all relative flex flex-col justify-between h-28 focus:outline-none",
+                              plan === p.title 
+                                ? "bg-brand-cyan/[0.03] border-brand-cyan ring-4 ring-brand-cyan/5 shadow-md" 
+                                : "bg-white border-slate-200/60 hover:border-slate-300"
+                            )}
+                          >
+                            {p.flag && (
+                              <span className="absolute -top-2 right-3 px-2 py-0.5 rounded-full bg-brand-cyan text-white text-[8px] font-bold uppercase tracking-wider">
+                                {p.flag}
+                              </span>
+                            )}
+                            <div>
+                              <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight">{p.title}</h5>
+                              <p className="text-[9px] text-slate-400 leading-tight mt-0.5">{p.desc}</p>
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-700">{p.price}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Launch Trial CTA Button */}
+                    <button
+                      type="submit"
+                      className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold uppercase text-xs tracking-wider py-4 rounded-2xl transition-all shadow-xl shadow-slate-900/10 active:scale-[0.99] flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4 text-white animate-pulse" />
+                      Inicializar Meu OdontoDash Grátis
+                    </button>
+
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+        </div>
+
+        {/* Footing disclaimer */}
+        <p className="text-[10px] text-slate-400 text-center mt-4">
+          {footerText} | Dental Analytics trial sandbox env.
+        </p>
+
+      </div>
+    </div>
+  );
+}
+
+interface StockItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  minQuantity: number;
+  unit: string;
+  priceUnit: number;
+  supplier: string;
+  location: string;
+  lastUpdated: string;
+}
+
+interface StockMovement {
+  id: string;
+  itemId: string;
+  itemName: string;
+  type: 'in' | 'out';
+  quantity: number;
+  reason: string;
+  operator: string;
+  date: string;
+}
+
+const DEFAULT_STOCK_ITEMS: StockItem[] = [
+  {
+    id: 'st-1',
+    name: 'Anestésico Lidofrim 2%',
+    category: 'Anestésicos',
+    quantity: 45,
+    minQuantity: 20,
+    unit: 'Frascos',
+    priceUnit: 3.50,
+    supplier: 'Dental Cremer',
+    location: 'Gaveta A2-Consultório 1',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-2',
+    name: 'Luva de Látex Descartável M',
+    category: 'Descartáveis',
+    quantity: 8,
+    minQuantity: 15,
+    unit: 'Caixas',
+    priceUnit: 28.00,
+    supplier: 'OdontoMed Corp',
+    location: 'Armário Geral Prateleira 1',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-3',
+    name: 'Resina Aplic Z350 XT A2',
+    category: 'Dentística',
+    quantity: 12,
+    minQuantity: 5,
+    unit: 'Seringas',
+    priceUnit: 130.00,
+    supplier: 'Dental Cremer',
+    location: 'Gaveta B1-Consultório 2',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-4',
+    name: 'Babador Descartável c/ 100',
+    category: 'Descartáveis',
+    quantity: 4,
+    minQuantity: 5,
+    unit: 'Pacotes',
+    priceUnit: 15.00,
+    supplier: 'OdontoMed Corp',
+    location: 'Armário Geral Prateleira 2',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-5',
+    name: 'Broca Diamantada FG 1014',
+    category: 'Instrumentais',
+    quantity: 25,
+    minQuantity: 15,
+    unit: 'Unidades',
+    priceUnit: 12.50,
+    supplier: 'Dental Speed',
+    location: 'Gaveta C3-Esterilização',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-6',
+    name: 'Álcool em Gel 70% 1L',
+    category: 'Higienização',
+    quantity: 2,
+    minQuantity: 4,
+    unit: 'Frascos',
+    priceUnit: 18.90,
+    supplier: 'Comercial Sul',
+    location: 'Esterilização Pia',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-7',
+    name: 'Fio de Sutura Nylon 4-0',
+    category: 'Ortodontia',
+    quantity: 18,
+    minQuantity: 8,
+    unit: 'Envelopes',
+    priceUnit: 8.40,
+    supplier: 'Dental Speed',
+    location: 'Gaveta D1-Consultório 1',
+    lastUpdated: new Date().toISOString()
+  }
+];
+
+const DEFAULT_MOVEMENTS: StockMovement[] = [
+  {
+    id: 'm-1',
+    itemId: 'st-1',
+    itemName: 'Anestésico Lidofrim 2%',
+    type: 'in',
+    quantity: 50,
+    reason: 'Compra periódica via distribuidor',
+    operator: 'Dra. Ana Admin',
+    date: subMonths(new Date(), 1).toISOString()
+  },
+  {
+    id: 'm-2',
+    itemId: 'st-2',
+    itemName: 'Luva de Látex Descartável M',
+    type: 'out',
+    quantity: 12,
+    reason: 'Uso clínico intensivo cirurgias',
+    operator: 'Dr. Arthur Rezende',
+    date: subMonths(new Date(), 1).toISOString()
+  },
+  {
+    id: 'm-3',
+    itemId: 'st-4',
+    itemName: 'Babador Descartável c/ 100',
+    type: 'out',
+    quantity: 2,
+    reason: 'Consumo do consultório 3',
+    operator: 'Dr. Arthur Rezende',
+    date: new Date().toISOString()
+  }
+];
+
+function StockView({ currentUser }: { currentUser: any }) {
+  // Initialize from LocalStorage
+  const [items, setItems] = useState<StockItem[]>(() => {
+    const saved = localStorage.getItem('odonto_stock_items');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    localStorage.setItem('odonto_stock_items', JSON.stringify(DEFAULT_STOCK_ITEMS));
+    return DEFAULT_STOCK_ITEMS;
+  });
+
+  const [movements, setMovements] = useState<StockMovement[]>(() => {
+    const saved = localStorage.getItem('odonto_stock_movements');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    localStorage.setItem('odonto_stock_movements', JSON.stringify(DEFAULT_MOVEMENTS));
+    return DEFAULT_MOVEMENTS;
+  });
+
+  // Save changes to LocalStorage whenever state updates
+  useEffect(() => {
+    localStorage.setItem('odonto_stock_items', JSON.stringify(items));
+  }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem('odonto_stock_movements', JSON.stringify(movements));
+  }, [movements]);
+
+  // Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('Todos');
+  const [statusFilter, setStatusFilter] = useState('Todos'); // 'Todos', 'Baixo', 'Adequado'
+
+  // Modals / Actions
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [showMovementForm, setShowMovementForm] = useState(false);
+  const [selectedItemForMovement, setSelectedItemForMovement] = useState<StockItem | null>(null);
+  const [movementType, setMovementType] = useState<'in' | 'out'>('in');
+  const [showHistory, setShowHistory] = useState(false);
+
+  // New Item Form State
+  const [newItem, setNewItem] = useState({
+    name: '',
+    category: 'Descartáveis',
+    quantity: '',
+    minQuantity: '',
+    unit: 'Unidades',
+    priceUnit: '',
+    supplier: '',
+    location: ''
+  });
+
+  // Movement Form State
+  const [movementQty, setMovementQty] = useState('');
+  const [movementReason, setMovementReason] = useState('Consumo rotina clínica');
+
+  // Edit State
+  const [editingItem, setEditingItem] = useState<StockItem | null>(null);
+  const [deletingItem, setDeletingItem] = useState<StockItem | null>(null);
+
+  // Calculated Properties
+  const lowStockCount = useMemo(() => {
+    return items.filter(item => item.quantity <= item.minQuantity).length;
+  }, [items]);
+
+  const totalStockValue = useMemo(() => {
+    return items.reduce((sum, item) => sum + (item.quantity * item.priceUnit), 0);
+  }, [items]);
+
+  const uniqueCategories = useMemo(() => {
+    return ['Todos', ...new Set(items.map(i => i.category))];
+  }, [items]);
+
+  // Filtered Items
+  const filteredItems = useMemo(() => {
+    return items.filter(item => {
+      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            item.supplier.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            item.location.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const matchesCategory = categoryFilter === 'Todos' || item.category === categoryFilter;
+      
+      let matchesStatus = true;
+      if (statusFilter === 'Baixo') {
+        matchesStatus = item.quantity <= item.minQuantity;
+      } else if (statusFilter === 'Adequado') {
+        matchesStatus = item.quantity > item.minQuantity;
+      }
+
+      return matchesSearch && matchesCategory && matchesStatus;
+    });
+  }, [items, searchQuery, categoryFilter, statusFilter]);
+
+  // Add Item Handler
+  const handleAddItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItem.name.trim()) return;
+
+    const item: StockItem = {
+      id: `st-${Date.now()}`,
+      name: newItem.name.trim(),
+      category: newItem.category,
+      quantity: Math.max(0, parseInt(newItem.quantity) || 0),
+      minQuantity: Math.max(0, parseInt(newItem.minQuantity) || 0),
+      unit: newItem.unit,
+      priceUnit: Math.max(0, parseFloat(newItem.priceUnit) || 0),
+      supplier: newItem.supplier.trim() || 'Não especificado',
+      location: newItem.location.trim() || 'Almoxarifado',
+      lastUpdated: new Date().toISOString()
+    };
+
+    setItems(prev => [item, ...prev]);
+
+    // Add movement for initial stock
+    if (item.quantity > 0) {
+      const movement: StockMovement = {
+        id: `m-${Date.now()}`,
+        itemId: item.id,
+        itemName: item.name,
+        type: 'in',
+        quantity: item.quantity,
+        reason: 'Cadastro inicial de estoque',
+        operator: currentUser?.name || 'Administrador',
+        date: new Date().toISOString()
+      };
+      setMovements(prev => [movement, ...prev]);
+    }
+
+    // Reset Form
+    setNewItem({
+      name: '',
+      category: 'Descartáveis',
+      quantity: '',
+      minQuantity: '',
+      unit: 'Unidades',
+      priceUnit: '',
+      supplier: '',
+      location: ''
+    });
+    setShowAddForm(false);
+  };
+
+  // Edit Item Handler
+  const handleEditItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem || !editingItem.name.trim()) return;
+
+    setItems(prev => prev.map(item => {
+      if (item.id === editingItem.id) {
+        return {
+          ...editingItem,
+          lastUpdated: new Date().toISOString()
+        };
+      }
+      return item;
+    }));
+
+    setEditingItem(null);
+  };
+
+  // Delete Item Handler
+  const handleDeleteItem = (id: string) => {
+    const item = items.find(i => i.id === id);
+    if (item) {
+      setDeletingItem(item);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!deletingItem) return;
+    const targetId = deletingItem.id;
+
+    setItems(prev => {
+      const updated = prev.filter(i => i.id !== targetId);
+      localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
+      return updated;
+    });
+
+    setMovements(prev => {
+      const updated = prev.filter(m => m.itemId !== targetId);
+      localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
+      return updated;
+    });
+
+    setDeletingItem(null);
+  };
+
+  // Registrar Entrada / Saída
+  const handleAddMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (!selectedItemForMovement) {
+        alert("Por favor, selecione um material cadastrado para registrar a movimentação.");
+        return;
+      }
+
+      const liveItem = items.find(i => i.id === selectedItemForMovement.id);
+      if (!liveItem) {
+        alert("Produto não encontrado no estoque atual.");
+        return;
+      }
+
+      const qty = Math.max(1, parseInt(movementQty) || 1);
+
+      // If outflow, check boundaries
+      if (movementType === 'out' && liveItem.quantity < qty) {
+        alert(`Quantidade insuficiente no estoque atual para o material "${liveItem.name}".\n\nEstoque Atual: ${liveItem.quantity} ${liveItem.unit}\nQuantidade Solicitada: ${qty} ${liveItem.unit}\n\nPor favor, ajuste o valor.`);
+        return;
+      }
+
+      // Update quantities
+      setItems(prev => {
+        const updated = prev.map(item => {
+          if (item.id === liveItem.id) {
+            const newQty = movementType === 'in' ? item.quantity + qty : item.quantity - qty;
+            return {
+              ...item,
+              quantity: newQty,
+              lastUpdated: new Date().toISOString()
+            };
+          }
+          return item;
+        });
+        localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
+        return updated;
+      });
+
+      // Record movement logs
+      const movement: StockMovement = {
+        id: `m-${Date.now()}`,
+        itemId: liveItem.id,
+        itemName: liveItem.name,
+        type: movementType,
+        quantity: qty,
+        reason: movementReason.trim() || (movementType === 'in' ? 'Entrada manual' : 'Saída manual'),
+        operator: currentUser?.name || 'Clínico',
+        date: new Date().toISOString()
+      };
+
+      setMovements(prev => {
+        const updated = [movement, ...prev];
+        localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
+        return updated;
+      });
+
+      // Reset Form
+      setMovementQty('');
+      setMovementReason('Consumo rotina clínica');
+      setSelectedItemForMovement(null);
+      setShowMovementForm(false);
+
+      // Success alerts in Portuguese matching exactly the requested confirmation
+      alert(`Movimentação salva com sucesso!\n\nMaterial: ${liveItem.name}\nOperação: ${movementType === 'in' ? 'Entrada (+)' : 'Saída (-)'}\nQuantidade: ${qty} ${liveItem.unit}\nNovo Estoque: ${movementType === 'in' ? liveItem.quantity + qty : liveItem.quantity - qty} ${liveItem.unit}`);
+
+    } catch (error: any) {
+      console.error("Erro ao registrar movimentação:", error);
+      alert("Ocorreu um erro ao salvar a movimentação: " + error.message);
+    }
+  };
+
+  return (
+    <div className="space-y-6 container mx-auto pb-12 font-sans text-left">
+      {/* Header Panel */}
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-4">
+        <div>
+          <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
+            <Package className="w-7 h-7 text-brand-cyan" />
+            Controle de Estoque & Suprimentos
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Gerencie o consumo de materiais clínicos, receba alertas de compras críticas e mantenha sua clínica operando sem interrupções.
+          </p>
+        </div>
+        
+        <div className="flex gap-2 shrink-0">
+          <button 
+            onClick={() => {
+              setSelectedItemForMovement(null);
+              setMovementType('out');
+              setMovementQty('1');
+              setMovementReason('Consumo rotina clínica');
+              setShowMovementForm(true);
+            }}
+            className="px-4 py-2 bg-rose-50 text-rose-600 border border-rose-200/50 hover:bg-rose-100 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <TrendingDown className="w-4 h-4 text-rose-500" />
+            Registrar Saída / Consumo
+          </button>
+          
+          <button 
+            onClick={() => {
+              setSelectedItemForMovement(null);
+              setMovementType('in');
+              setMovementQty('1');
+              setMovementReason('Nova compra / Reposição de estoque');
+              setShowMovementForm(true);
+            }}
+            className="px-4 py-2 bg-emerald-50 text-emerald-600 border border-emerald-200/50 hover:bg-emerald-100 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4 text-emerald-500 animate-pulse" />
+            Adicionar Entrada de Lote
+          </button>
+
+          <button 
+            onClick={() => setShowAddForm(true)}
+            className="px-4 py-2 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            Cadastrar Novo Item
+          </button>
+        </div>
+      </div>
+
+      {/* Grid KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        
+        {/* Total Itens card */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Total de Itens</span>
+            <p className="text-2xl font-black text-slate-800 tracking-tight mt-1">{items.length}</p>
+            <span className="text-[10px] text-slate-400 mt-1 block">Variedade de suprimentos</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500">
+            <Package className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Low Stock Alerts card */}
+        <button 
+          onClick={() => {
+            setStatusFilter('Baixo');
+            setCategoryFilter('Todos');
+          }}
+          className={cn(
+            "p-5 rounded-2xl border text-left shadow-sm flex items-center justify-between transition-all outline-none focus:outline-none",
+            lowStockCount > 0 
+              ? "bg-amber-50/[0.3] border-amber-200 shadow-amber-100/10 cursor-pointer hover:bg-amber-50" 
+              : "bg-white border-slate-100 cursor-default"
+          )}
+        >
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Estoque Crítico / Baixo</span>
+            <p className={cn("text-2xl font-black tracking-tight mt-1", lowStockCount > 0 ? "text-amber-500" : "text-slate-800")}>
+              {lowStockCount}
+            </p>
+            <span className={cn("text-[10px] mt-1 block font-bold", lowStockCount > 0 ? "text-amber-600 animate-pulse" : "text-slate-400")}>
+              {lowStockCount > 0 ? "Exige reposição imediata" : "Nenhuma pendência"}
+            </span>
+          </div>
+          <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", lowStockCount > 0 ? "bg-amber-100/60 text-amber-500 animate-bounce" : "bg-slate-50 text-slate-400")}>
+            <AlertCircle className="w-6 h-6" />
+          </div>
+        </button>
+
+        {/* Financial Value card */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Valor total de Estoque</span>
+            <p className="text-2xl font-black text-rose-500 tracking-tight mt-1">{formatCurrency(totalStockValue)}</p>
+            <span className="text-[10px] text-slate-400 mt-1 block">Patrimônio ativo estocado</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500">
+            <DollarSign className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* History tracker widget */}
+        <button 
+          onClick={() => setShowHistory(true)}
+          className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:bg-slate-50 text-left transition-all outline-none"
+        >
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Log de Movimentações</span>
+            <p className="text-2xl font-black text-brand-cyan tracking-tight mt-1">{movements.length}</p>
+            <span className="text-[10px] text-brand-cyan underline block font-bold">Ver histórico de entradas/saídas</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan">
+            <History className="w-6 h-6" />
+          </div>
+        </button>
+
+      </div>
+
+      {/* Filter and Table area */}
+      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-lg p-6 space-y-6">
+        
+        {/* Actions bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            
+            {/* Search */}
+            <div className="relative group w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+              <input 
+                type="text" 
+                placeholder="Buscar por nome, fornecedor, local..."
+                className="pl-9 pr-3 py-2.5 w-full bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all shadow-sm"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+
+            {/* Category Filter dropdown */}
+            <div className="w-full sm:w-auto shrink-0">
+              <select 
+                className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 outline-none cursor-pointer shadow-sm font-semibold text-slate-700"
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+              >
+                {uniqueCategories.map((cat, i) => (
+                  <option key={i} value={cat}>Categorias: {cat}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Status Filter buttons */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100/80 rounded-xl border border-slate-200/50 w-full sm:w-auto overflow-x-auto">
+              {[
+                { label: 'Todos', value: 'Todos' },
+                { label: 'Crítico/Baixo ⚠️', value: 'Baixo' },
+                { label: 'Adequado', value: 'Adequado' }
+              ].map((btn, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setStatusFilter(btn.value)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap",
+                    statusFilter === btn.value
+                      ? "bg-white text-slate-800 shadow-sm font-black"
+                      : "text-slate-500 hover:text-slate-800 hover:bg-white/40"
+                  )}
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setCategoryFilter('Todos');
+              setStatusFilter('Todos');
+            }}
+            className="text-[10px] font-black uppercase text-slate-400 tracking-wider hover:text-slate-700 underline focus:outline-none"
+          >
+            Limpar Filtros
+          </button>
+        </div>
+
+        {/* Stock Items Table */}
+        <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/70 border-b border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                  <th className="py-4 px-5">Material / Suprimento</th>
+                  <th className="py-4 px-4">Categoria</th>
+                  <th className="py-4 px-4 text-center">Nível / Quantidade</th>
+                  <th className="py-4 px-4 text-right">Preço Unitário</th>
+                  <th className="py-4 px-4 text-right">Valor Total Estocado</th>
+                  <th className="py-4 px-4 hidden md:table-cell">Fornecedor & Localização</th>
+                  <th className="py-4 px-5 text-center">Ações Rápidas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/20 font-medium">
+                      Nenhum material encontrado com as especificações inseridas.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredItems.map((item) => {
+                    const isLow = item.quantity <= item.minQuantity;
+                    const pct = item.minQuantity > 0 ? Math.min(100, Math.round((item.quantity / (item.minQuantity * 2.5)) * 100)) : 100;
+                    
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                        
+                        {/* Material Info */}
+                        <td className="py-4 px-5">
+                          <div>
+                            <div className="font-bold text-slate-800 text-sm group-hover:text-brand-cyan transition-colors">{item.name}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[9px] text-slate-400 font-mono">Última atualização: {new Date(item.lastUpdated).toLocaleDateString()}</span>
+                              {isLow && (
+                                <span className="inline-flex items-center gap-0.5 text-[8.5px] bg-red-50 text-red-600 font-black px-1.5 py-0.5 rounded uppercase tracking-wider animate-pulse">
+                                  CRÍTICO/BAIXO
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Category Badge */}
+                        <td className="py-4 px-4">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium text-[10px]">
+                            {item.category}
+                          </span>
+                        </td>
+
+                        {/* Stock Quantity */}
+                        <td className="py-4 px-4 min-w-[150px]">
+                          <div className="flex flex-col items-center justify-center">
+                            <span className="font-bold text-slate-700 text-sm">
+                              {item.quantity} <span className="text-[10px] text-slate-400 font-normal">/ {item.minQuantity} {item.unit}</span>
+                            </span>
+                            <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 text-center">
+                              <div 
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-300",
+                                  isLow ? "bg-red-500" : pct < 60 ? "bg-amber-400" : "bg-emerald-500"
+                                )} 
+                                style={{ width: `${pct}%` }} 
+                              />
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Price Unit */}
+                        <td className="py-4 px-4 text-right font-medium text-slate-500">
+                          {formatCurrency(item.priceUnit)}
+                        </td>
+
+                        {/* Price Total */}
+                        <td className="py-4 px-4 text-right font-bold text-slate-700">
+                          {formatCurrency(item.quantity * item.priceUnit)}
+                        </td>
+
+                        {/* Supplier Location */}
+                        <td className="py-4 px-4 hidden md:table-cell">
+                          <div className="text-[11px] text-slate-600 font-medium max-w-xs truncate">{item.supplier}</div>
+                          <div className="text-[9.5px] text-slate-400 italic truncate">{item.location}</div>
+                        </td>
+
+                        {/* Action buttons */}
+                        <td className="py-4 px-5">
+                          <div className="flex items-center justify-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                            
+                            {/* Inflow button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItemForMovement(item);
+                                setMovementType('in');
+                                setMovementQty('1');
+                                setMovementReason('Nova compra / Reposição de estoque');
+                                setShowMovementForm(true);
+                              }}
+                              className="p-1 px-1.5 text-xs font-bold text-emerald-600 hover:bg-emerald-50 border border-emerald-100 rounded-lg transition-colors shadow-sm bg-white"
+                              title="Adicionar entrada"
+                            >
+                              + Entrada
+                            </button>
+
+                            {/* Outflow button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItemForMovement(item);
+                                setMovementType('out');
+                                setMovementQty('1');
+                                setMovementReason('Consumo rotina clínica');
+                                setShowMovementForm(true);
+                              }}
+                              className="p-1 px-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 border border-rose-100 rounded-lg transition-colors shadow-sm bg-white"
+                              title="Registrar consumo"
+                            >
+                              - Saída
+                            </button>
+
+                            <div className="w-[1px] h-6 bg-slate-100" />
+
+                            {/* Edit */}
+                            <button
+                              type="button"
+                              onClick={() => setEditingItem(item)}
+                              className="p-1.5 bg-slate-50 text-slate-500 hover:text-slate-800 border border-slate-200/50 rounded-lg transition-colors hover:bg-slate-100"
+                              title="Editar item cadastrado"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Delete */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(item.id)}
+                              className="p-1.5 bg-rose-50/50 text-rose-500 hover:text-rose-700 border border-rose-100/50 rounded-lg transition-colors hover:bg-rose-100"
+                              title="Remover produto permanentemente"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+
+                          </div>
+                        </td>
+
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      {/* MODAL: CADASTRO DE NOVO ITEM */}
+      <AnimatePresence>
+        {showAddForm && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <Package className="w-5 h-5 text-brand-cyan" />
+                  <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Cadastrar Suprimento do Estoque</h3>
+                </div>
+                <button onClick={() => setShowAddForm(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddItem} className="p-6 space-y-4">
+                
+                {/* Nome do Item */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome do Produto / Material *</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newItem.name}
+                    onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: Alginato Kelldent 454g"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Categoria */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Categoria</label>
+                    <select
+                      value={newItem.category}
+                      onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    >
+                      <option value="Descartáveis">Descartáveis</option>
+                      <option value="Anestésicos">Anestésicos</option>
+                      <option value="Ortodontia">Ortodontia</option>
+                      <option value="Dentística">Dentística</option>
+                      <option value="Instrumentais">Instrumentais</option>
+                      <option value="Higienização">Higienização</option>
+                      <option value="Prevenção">Prevenção</option>
+                    </select>
+                  </div>
+
+                  {/* Unidade de Medida */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Unidade de Medida</label>
+                    <select
+                      value={newItem.unit}
+                      onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    >
+                      <option value="Unidades">Unidades</option>
+                      <option value="Caixas">Caixas</option>
+                      <option value="Seringas">Seringas</option>
+                      <option value="Envelopes">Envelopes</option>
+                      <option value="Pacotes">Pacotes</option>
+                      <option value="Frascos">Frascos</option>
+                      <option value="Kits">Kits</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Qtd Inicial */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Inicial *</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={newItem.quantity}
+                      onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 15"
+                    />
+                  </div>
+
+                  {/* Qtd Mínima */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra *</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={newItem.minQuantity}
+                      onChange={(e) => setNewItem({ ...newItem, minQuantity: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 5"
+                    />
+                  </div>
+
+                  {/* Preço Unitário */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Preço Unitário R$ *</label>
+                    <input 
+                      type="number" 
+                      required
+                      step="0.01"
+                      min="0.01"
+                      value={newItem.priceUnit}
+                      onChange={(e) => setNewItem({ ...newItem, priceUnit: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 34.90"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Fornecedor */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
+                    <input 
+                      type="text" 
+                      value={newItem.supplier}
+                      onChange={(e) => setNewItem({ ...newItem, supplier: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: Dental Speed"
+                    />
+                  </div>
+
+                  {/* Localização */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Local de Armazenamento</label>
+                    <input 
+                      type="text" 
+                      value={newItem.location}
+                      onChange={(e) => setNewItem({ ...newItem, location: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: Armário Clínico 2B"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-xl shadow-slate-900/10 mt-2 active:scale-[0.99]"
+                >
+                  Confirmar Cadastro do Material
+                </button>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: MOVER ESTOQUE (ENTRADA / SAÍDA QUICK) */}
+      <AnimatePresence>
+        {showMovementForm && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-md overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between" style={{ backgroundColor: movementType === 'in' ? '#f0fdf4' : '#fff5f5' }}>
+                <div className="flex items-center gap-2">
+                  <Layers className={cn("w-5 h-5", movementType === 'in' ? "text-emerald-500 animate-pulse" : "text-rose-500")} />
+                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                    {movementType === 'in' ? 'Registrar Nova Entrada (Compra/Lote)' : 'Registrar Consumo / Saída'}
+                  </h3>
+                </div>
+                <button onClick={() => { setShowMovementForm(false); setSelectedItemForMovement(null); }} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddMovement} className="p-6 space-y-4 text-left">
+                
+                {/* Item Select */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Produto *</label>
+                  <select
+                    required
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    value={selectedItemForMovement?.id || ""}
+                    onChange={(e) => {
+                      const found = items.find(i => i.id === e.target.value);
+                      setSelectedItemForMovement(found || null);
+                    }}
+                  >
+                    <option value="">Selecione um produto cadastrado...</option>
+                    {items.map(i => (
+                      <option key={i.id} value={i.id}>{i.name} (Disponível: {i.quantity} {i.unit})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Quantidade */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Quantidade ({selectedItemForMovement?.unit || 'Unidades'}) *</label>
+                  <input 
+                    type="number" 
+                    required
+                    min="1"
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: 5"
+                    value={movementQty}
+                    onChange={(e) => setMovementQty(e.target.value)}
+                  />
+                </div>
+
+                {/* Motivação/Motivo */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Motivo da Movimentação</label>
+                  <input 
+                    type="text" 
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder={movementType === 'in' ? 'Ex: Fornecimento de rotina ou compra emergencial' : 'Ex: Tratamento do canal Dr. Carlos'}
+                    value={movementReason}
+                    onChange={(e) => setMovementReason(e.target.value)}
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    className={cn(
+                      "w-full py-4 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md active:scale-[0.99]",
+                      movementType === 'in' 
+                        ? "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10" 
+                        : "bg-rose-500 hover:bg-rose-600 shadow-rose-500/10"
+                    )}
+                  >
+                    {movementType === 'in' ? 'Confirmar Entrada de Materiais' : 'Confirmar Baixa do Estoque'}
+                  </button>
+                </div>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: EDITAR PRODUTO */}
+      <AnimatePresence>
+        {editingItem && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-100/50">
+                <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Editar Informações do Produto</h3>
+                <button onClick={() => setEditingItem(null)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditItem} className="p-6 space-y-4 text-left">
+                
+                {/* Nome do Item */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome Completo do Produto</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={editingItem.name}
+                    onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Fornecedor */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
+                    <input 
+                      type="text" 
+                      value={editingItem.supplier}
+                      onChange={(e) => setEditingItem({ ...editingItem, supplier: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+
+                  {/* Localização */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Localização interna</label>
+                    <input 
+                      type="text" 
+                      value={editingItem.location}
+                      onChange={(e) => setEditingItem({ ...editingItem, location: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Ponto de Compra */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra Mínimo</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={editingItem.minQuantity}
+                      onChange={(e) => setEditingItem({ ...editingItem, minQuantity: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+
+                  {/* Preco Unitario */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Preço Unitário R$</label>
+                    <input 
+                      type="number" 
+                      required
+                      step="0.01"
+                      min="0.01"
+                      value={editingItem.priceUnit}
+                      onChange={(e) => setEditingItem({ ...editingItem, priceUnit: Math.max(0.01, parseFloat(e.target.value) || 0) })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md mt-2 active:scale-[0.99]"
+                >
+                  Salvar Alterações
+                </button>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: HISTÓRICO DE LOGS DE COMPRAS E CONSUMO */}
+      <AnimatePresence>
+        {showHistory && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <History className="w-5 h-5 text-brand-cyan" />
+                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Registro Cronológico de Movimentações</h3>
+                </div>
+                <button onClick={() => setShowHistory(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto p-6 space-y-4 flex-1">
+                {movements.length === 0 ? (
+                  <p className="text-center text-slate-400 py-12 text-xs font-medium">Nenhuma movimentação registrada.</p>
+                ) : (
+                  movements.map((m) => {
+                    const isIn = m.type === 'in';
+                    return (
+                      <div key={m.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 flex items-center justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5", isIn ? "bg-emerald-50 text-emerald-500" : "bg-rose-50 text-rose-500")}>
+                            {isIn ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-800 text-xs">
+                              {isIn ? 'Entrada / Adicionamento' : 'Baixa / Consumo'} de <span className="text-brand-cyan">{m.itemName}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Motivo: {m.reason}</p>
+                            <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[9px] text-slate-400">
+                              <span>Por: <strong>{m.operator}</strong></span>
+                              <span>•</span>
+                              <span>Data/Hora: {new Date(m.date).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className={cn("text-sm font-black shrink-0", isIn ? "text-emerald-500" : "text-rose-500")}>
+                          {isIn ? '+' : '-'}{m.quantity}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              
+              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+                <button 
+                  type="button" 
+                  onClick={() => setShowHistory(false)}
+                  className="px-4 py-2 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider"
+                >
+                  Fechar Histórico
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: CONFIRMAR REMOVER ITEM */}
+      <AnimatePresence>
+        {deletingItem && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-sm overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-rose-100 flex items-center justify-between bg-rose-50/55">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 bg-rose-100 text-rose-600 rounded-lg">
+                    <Trash2 className="w-4 h-4" />
+                  </span>
+                  <h3 className="text-xs font-black uppercase text-rose-700 tracking-wider">Confirmar Exclusão</h3>
+                </div>
+                <button 
+                  onClick={() => setDeletingItem(null)} 
+                  className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-6 text-center space-y-4">
+                <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-2xl text-left">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider leading-none mb-1">Material Selecionado</p>
+                  <p className="font-bold text-slate-800 text-sm">{deletingItem.name}</p>
+                  <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-100 text-[10.5px]">
+                    <span className="text-slate-400">Estoque Atual:</span>
+                    <span className="font-black text-slate-700">{deletingItem.quantity} {deletingItem.unit}</span>
+                  </div>
+                </div>
+
+                <p className="text-[11.5px] text-slate-500 font-medium">
+                  Tem certeza absoluta que deseja remover este item permanentemente do estoque? Esta ação não pode ser desfeita.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
+                <button 
+                  type="button" 
+                  onClick={() => setDeletingItem(null)}
+                  className="flex-1 py-3 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button" 
+                  onClick={confirmDelete}
+                  className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-wider transition-all shadow-md shadow-rose-500/10 active:scale-[0.98]"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+    </div>
   );
 }
 
