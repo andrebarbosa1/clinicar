@@ -77,7 +77,11 @@ import {
   Package,
   Layers,
   ShoppingCart,
-  TrendingDown
+  TrendingDown,
+  Smartphone,
+  Check,
+  RefreshCw,
+  Bot
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -1870,6 +1874,26 @@ export default function App() {
         );
       case 'Retorno':
         return <RecallView data={data} clinicName={clinicName} />;
+      case 'Mensagens':
+        if (!hasModule('Mensagens')) {
+          return (
+            <div className="p-8 text-center bg-white rounded-2xl border border-slate-100 shadow-sm max-w-md mx-auto my-12">
+              <span className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-red-50 text-red-500 mb-4">
+                <Lock className="w-6 h-6" />
+              </span>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight mb-2">Acesso Restrito</h2>
+              <p className="text-slate-500 text-xs">Você não possui permissão para acessar o módulo de Mensagens. Entre em contato com o administrador.</p>
+            </div>
+          );
+        }
+        return (
+          <MessagesView 
+            data={data} 
+            patients={patients} 
+            clinicName={clinicName} 
+            db={db} 
+          />
+        );
       case 'Documentos':
         return <DocumentsView 
           data={data} 
@@ -2025,6 +2049,14 @@ export default function App() {
               label="Retorno" 
               active={activePage === 'Retorno'} 
               onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Mensagens') && (
+            <SidebarNavItem 
+              icon={<MessageSquare className="w-4 h-4" />} 
+              label="Mensagens" 
+              active={activePage === 'Mensagens'} 
+              onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
             />
           )}
           {hasModule('Documentos') && (
@@ -2244,6 +2276,14 @@ export default function App() {
                 onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
               />
             )}
+            {hasModule('Mensagens') && (
+              <RibbonItem 
+                icon={<MessageSquare className="w-3.5 h-3.5" />} 
+                label="Mensagens" 
+                active={activePage === 'Mensagens'} 
+                onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+              />
+            )}
             {hasModule('Documentos') && (
               <RibbonItem 
                 icon={<FileText className="w-3.5 h-3.5" />} 
@@ -2346,6 +2386,7 @@ export default function App() {
                 {hasModule('Pacientes') && <MobileNavItem icon={<Users className="w-5 h-5" />} label="Pacientes" active={activePage === 'Pacientes'} onClick={() => { setActivePage('Pacientes'); setIsMenuOpen(false); }} />}
                 {hasModule('Agenda') && <MobileNavItem icon={<Calendar className="w-5 h-5" />} label="Agenda" active={activePage === 'Agenda'} onClick={() => { setActivePage('Agenda'); setIsMenuOpen(false); }} />}
                 {hasModule('Retorno') && <MobileNavItem icon={<RotateCcw className="w-5 h-5" />} label="Retorno" active={activePage === 'Retorno'} onClick={() => { setActivePage('Retorno'); setIsMenuOpen(false); }} />}
+                {hasModule('Mensagens') && <MobileNavItem icon={<MessageSquare className="w-5 h-5" />} label="Mensagens" active={activePage === 'Mensagens'} onClick={() => { setActivePage('Mensagens'); setIsMenuOpen(false); }} />}
                 {hasModule('Documentos') && <MobileNavItem icon={<FileText className="w-5 h-5" />} label="Documentos" active={activePage === 'Documentos'} onClick={() => { setActivePage('Documentos'); setIsMenuOpen(false); }} />}
                 {hasModule('Financeiro') && (
                   <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
@@ -2524,6 +2565,767 @@ export default function App() {
 
       {renderLegal()}
       </div>
+    </div>
+  );
+}
+
+function MessagesView({ data, patients, clinicName, db }: { data: DentalRecord[], patients: any[], clinicName: string, db: any }) {
+  const [activeSubTab, setActiveSubTab] = useState<'status' | 'templates' | 'configs'>('status');
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  
+  // Simulated chat messages thread state by record ID
+  const [chats, setChats] = useState<{[recordId: string]: any[]}>({});
+  const [isTyping, setIsTyping] = useState<{[recordId: string]: boolean}>({});
+
+  // Message templates stored in state, hydrated from localStorage or defaults
+  const [templates, setTemplates] = useState({
+    confirmacao: localStorage.getItem('odonto_tpl_confirmacao') || 
+      "Olá, {paciente}! Aqui é da clínica {clinica}. Confirmamos sua consulta de {procedimento} amanhã ({data}) às {horario} com Dr(a). {dentista}. Responda SIM p/ confirmar ou NÃO p/ cancelar.",
+    retorno: localStorage.getItem('odonto_tpl_retorno') || 
+      "Olá, {paciente}! Já se passaram 6 meses desde o seu tratamento de {procedimento} na {clinica}. Recomendamos agendar um retorno preventivo para manter seu sorriso saudável! Vamos agendar?",
+    aniversario: localStorage.getItem('odonto_tpl_aniversario') || 
+      "Olá, {paciente}! 🎉 Nós da clínica {clinica} desejamos um feliz aniversário com muita saúde e motivos para sorrir! Parabéns!",
+    cobranca: localStorage.getItem('odonto_tpl_cobranca') || 
+      "Olá, {paciente}! Identificamos que há um orçamento pendente ou parcela em aberto para o procedimento {procedimento}. Entre em contato para facilitarmos as condições p/ você."
+  });
+
+  const [activeTemplateTab, setActiveTemplateTab] = useState<'confirmacao' | 'retorno' | 'aniversario' | 'cobranca'>('confirmacao');
+  const [templateText, setTemplateText] = useState(templates.confirmacao);
+
+  // Sync templates modification to localStorage
+  const handleSaveTemplate = () => {
+    localStorage.setItem(`odonto_tpl_${activeTemplateTab}`, templateText);
+    setTemplates(prev => ({ ...prev, [activeTemplateTab]: templateText }));
+    alert('Modelo de mensagem salvo com sucesso!');
+  };
+
+  useEffect(() => {
+    setTemplateText(templates[activeTemplateTab]);
+  }, [activeTemplateTab, templates]);
+
+  // Automation Settings Toggle States
+  const [configs, setConfigs] = useState({
+    autoWhatsapp: localStorage.getItem('odonto_cfg_autoWhatsapp') !== 'false',
+    autoSms: localStorage.getItem('odonto_cfg_autoSms') === 'true',
+    autoEmail: localStorage.getItem('odonto_cfg_autoEmail') !== 'false',
+    birthdayPromo: localStorage.getItem('odonto_cfg_birthdayPromo') !== 'false',
+    iaCoPilot: localStorage.getItem('odonto_cfg_iaCoPilot') !== 'false',
+  });
+
+  const handleToggleConfig = (key: keyof typeof configs) => {
+    const newVal = !configs[key];
+    setConfigs(prev => ({ ...prev, [key]: newVal }));
+    localStorage.setItem(`odonto_cfg_${String(key)}`, String(newVal));
+  };
+
+  // Only consider active/future appointments or valid records
+  const filteredAppointments = useMemo(() => {
+    return data.filter(record => record.status !== 'Realizado' && record.status !== 'Concluído')
+      .sort((a,b) => {
+        const da = a.data ? new Date(a.data).getTime() : 0;
+        const db = b.data ? new Date(b.data).getTime() : 0;
+        return da - db;
+      });
+  }, [data]);
+
+  // Set default selected record
+  useEffect(() => {
+    if (filteredAppointments.length > 0 && !selectedRecordId) {
+      setSelectedRecordId(filteredAppointments[0].id);
+    }
+  }, [filteredAppointments, selectedRecordId]);
+
+  const selectedRecord = useMemo(() => {
+    return data.find(r => r.id === selectedRecordId) || null;
+  }, [data, selectedRecordId]);
+
+  // Format Helper for printing templates
+  const formatTemplate = (text: string, record: any) => {
+    if (!record) return text;
+    const formattedDate = record.data && isValid(parseISO(record.data))
+      ? format(parseISO(record.data), "dd/MM")
+      : "N/D";
+    return text
+      .replace(/{paciente}/g, record.paciente || 'Paciente')
+      .replace(/{data}/g, formattedDate)
+      .replace(/{horario}/g, record.horario || 'Conforme agendado')
+      .replace(/{dentista}/g, record.dentista || 'Dr. Médico')
+      .replace(/{procedimento}/g, record.procedimento || 'Procedimento')
+      .replace(/{clinica}/g, clinicName);
+  };
+
+  // KPI calculations based on current data
+  const metrics = useMemo(() => {
+    const total = filteredAppointments.length;
+    // We can count records with 'confirmationStatus' === 'Confirmado' or record.status === 'Realizado' / Completed
+    const confirmed = data.filter(r => (r as any).confirmationStatus === 'Confirmado' || r.status === 'Realizado' || r.status === 'Concluído').length;
+    const pending = data.filter(r => (!(r as any).confirmationStatus || (r as any).confirmationStatus === 'Pendente') && r.status !== 'Cancelado' && r.status !== 'Realizado' && r.status !== 'Concluído').length;
+    const cancelled = data.filter(r => r.status === 'Cancelado' || (r as any).confirmationStatus === 'Cancelado').length;
+    return { total, confirmed, pending, cancelled };
+  }, [data, filteredAppointments]);
+
+  // Fetch or setup chat history for selected record
+  const currentChatMessages = useMemo(() => {
+    if (!selectedRecordId || !selectedRecord) return [];
+    
+    // Default messages
+    if (!chats[selectedRecordId]) {
+      const defaultMsg = formatTemplate(templates.confirmacao, selectedRecord);
+      return [
+        {
+          id: 'initial',
+          text: defaultMsg,
+          sender: 'clinic',
+          timestamp: 'Enviado às 08:30 (Automático)',
+          status: 'delivered'
+        }
+      ];
+    }
+    return chats[selectedRecordId];
+  }, [selectedRecordId, selectedRecord, chats, templates.confirmacao]);
+
+  // Trigger patient reply simulation
+  const handleSimulateResponse = async (type: 'SIM' | 'REAGENDAR' | 'NAO') => {
+    if (!selectedRecordId || !selectedRecord) return;
+
+    // 1. Set typing state
+    setIsTyping(prev => ({ ...prev, [selectedRecordId]: true }));
+
+    // Outgo/Incoming text structures
+    let patientText = "";
+    let finalConfirmationStatus = "Pendente";
+    let finalAppointmentStatus = selectedRecord.status;
+    let aiReplyText = "";
+
+    if (type === 'SIM') {
+      patientText = "Sim, está ótimo! Confirmado para amanhã. Obrigado pelo lembrete!";
+      finalConfirmationStatus = "Confirmado";
+      aiReplyText = "Excelente! Sua consulta está confirmada nos nossos sistemas. Tenha um ótimo dia e até amanhã! 👍😊";
+    } else if (type === 'REAGENDAR') {
+      patientText = "Olá, infelizmente não vou conseguir ir nesse horário. Conseguimos remarcar para sexta-feira de tarde?";
+      finalConfirmationStatus = "Reagendar";
+      aiReplyText = "Entendido! O nosso assistente inteligente entrará em contato ou você pode ligar diretamente na clínica para escolhermos o melhor horário. Muito obrigado!";
+    } else if (type === 'NAO') {
+      patientText = "Infelizmente não poderei comparecer. Favor cancelar ou remarcar para o mês que vem.";
+      finalConfirmationStatus = "Cancelado";
+      finalAppointmentStatus = "Cancelado";
+      aiReplyText = "Sentimos muito! Seu agendamento foi cancelado em nosso sistema. Deseja realizar um novo agendamento no futuro?";
+    }
+
+    // Add Simulated delay (1200ms)
+    setTimeout(async () => {
+      // 1. New dynamic messages
+      const patientMsg = {
+        id: `patient-${Date.now()}`,
+        text: patientText,
+        sender: 'patient',
+        timestamp: 'Agora mesmo'
+      };
+
+      const iaMsg = {
+        id: `ia-${Date.now() + 1}`,
+        text: aiReplyText,
+        sender: 'clinic-ia',
+        timestamp: 'Agora mesmo (Auto-resposta)'
+      };
+
+      // Set chat messages
+      setChats(prev => {
+        const currentList = prev[selectedRecordId] || [
+          {
+            id: 'initial',
+            text: formatTemplate(templates.confirmacao, selectedRecord),
+            sender: 'clinic',
+            timestamp: 'Enviado às 08:30',
+            status: 'delivered'
+          }
+        ];
+        return {
+          ...prev,
+          [selectedRecordId]: [...currentList, patientMsg]
+        };
+      });
+
+      setIsTyping(prev => ({ ...prev, [selectedRecordId]: false }));
+
+      // Trigger standard Firestore update so it updates real-time
+      try {
+        await setDoc(doc(db, 'records', selectedRecordId), {
+          status: finalAppointmentStatus,
+          confirmationStatus: finalConfirmationStatus,
+          reminderSent: true,
+          reminderSentAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.error("Erro ao registrar confirmação simulada em Firestore:", err);
+      }
+
+      // If IA activation is enabled, queue the smart response typing indicator and message
+      if (configs.iaCoPilot) {
+        setTimeout(() => {
+          setChats(prev => ({
+            ...prev,
+            [selectedRecordId]: [...(prev[selectedRecordId] || []), iaMsg]
+          }));
+        }, 1000);
+      }
+
+    }, 1200);
+  };
+
+  const currentConfirmationStatus = selectedRecord ? ((selectedRecord as any).confirmationStatus || 'Pendente') : 'Pendente';
+
+  // Internal WhatsApp proceed simulation
+  const proceedWithWhatsApp = (patient: any, record: DentalRecord) => {
+    const phone = patient.phone || patient.telefone || patient.celular || patient.mobile || patient.contato || '';
+    if (!phone) {
+      alert(`O paciente "${patient.name}" não tem um telefone cadastrado.\n\nPor favor, adicione seu celular.`);
+      return;
+    }
+    const timeStr = record.horario ? ` às ${record.horario}` : '';
+    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM") : "N/D";
+    const message = `Olá ${record.paciente}, confirmamos sua consulta de ${record.procedimento} para o dia ${dateFormatted}${timeStr} com ${record.dentista}. Podemos confirmar?`;
+    const encodedMessage = encodeURIComponent(message);
+    const cleanPhone = phone.toString().replace(/\D/g, '');
+    let finalPhone = cleanPhone;
+    if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+      finalPhone = `55${cleanPhone}`;
+    }
+    const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodedMessage}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Indicadores KPI */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-slate-400 text-[10px] font-bold uppercase tracking-widest block">Lembretes Enviados</span>
+            <span className="text-2xl font-black text-slate-800">{metrics.total}</span>
+            <span className="text-[10px] text-slate-400 block">Agendamentos ativos</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan shrink-0">
+            <MessageSquare className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-emerald-500 text-[10px] font-bold uppercase tracking-widest block">Confirmados via IA/Paciente</span>
+            <span className="text-2xl font-black text-emerald-600">{metrics.confirmed}</span>
+            <span className="text-[10px] text-slate-400 block">Consultas garantidas</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 shrink-0">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-amber-500 text-[10px] font-bold uppercase tracking-widest block">Aguardando Resposta</span>
+            <span className="text-2xl font-black text-amber-600">{metrics.pending}</span>
+            <span className="text-[10px] text-slate-400 block">Confirmação pendente</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 shrink-0">
+            <Clock className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-rose-500 text-[10px] font-bold uppercase tracking-widest block">Cancelados / Desmarcados</span>
+            <span className="text-2xl font-black text-rose-600">{metrics.cancelled}</span>
+            <span className="text-[10px] text-slate-400 block">Vagas para encaixe</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-500 shrink-0">
+            <XCircle className="w-6 h-6" />
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs Menu */}
+      <div className="border-b border-slate-200/80 flex items-center justify-between">
+        <div className="flex gap-4">
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('status')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'status' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Central de Confirmações</span>
+            {activeSubTab === 'status' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+          
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('templates')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'templates' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Modelos de Mensagem</span>
+            {activeSubTab === 'templates' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('configs')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'configs' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Configurações & Canais</span>
+            {activeSubTab === 'configs' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+        </div>
+
+        {configs.iaCoPilot && (
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-brand-cyan/10 border border-brand-cyan/20 rounded-full text-[10px] font-bold text-brand-cyan">
+            <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+            <span>Co-Pilot IA Ativo</span>
+          </div>
+        )}
+      </div>
+
+      {/* Rendering different sub-tabs */}
+      {activeSubTab === 'status' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Appointment list for confirmation */}
+          <div className="lg:col-span-7 bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Próximos Lembretes Automatizados</h3>
+              <p className="text-[10px] text-slate-400">Selecione um paciente para simular a resposta dele via WhatsApp no smartphone ao lado.</p>
+            </div>
+
+            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+              {filteredAppointments.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  Não há novos agendamentos ativos na lista de confirmações automáticas.
+                </div>
+              ) : (
+                filteredAppointments.map(record => {
+                  const isSelected = record.id === selectedRecordId;
+                  const itemStatus = (record as any).confirmationStatus || 'Pendente';
+                  
+                  return (
+                    <div 
+                      key={record.id}
+                      onClick={() => setSelectedRecordId(record.id)}
+                      className={cn(
+                        "p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-4 text-left",
+                        isSelected 
+                          ? "bg-slate-50 border-brand-cyan/30 ring-1 ring-brand-cyan/25" 
+                          : "border-slate-100 hover:bg-slate-50/50"
+                      )}
+                    >
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-slate-800 truncate">{record.paciente}</span>
+                          <span className={cn(
+                            "text-[8px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded-full select-none leading-none",
+                            itemStatus === 'Confirmado' ? "bg-emerald-50 text-emerald-600 border border-emerald-100" :
+                            itemStatus === 'Cancelado' ? "bg-rose-50 text-rose-600 border border-rose-100" :
+                            itemStatus === 'Reagendar' ? "bg-indigo-50 text-indigo-600 border border-indigo-100" :
+                            "bg-amber-50 text-amber-600 border border-amber-100"
+                          )}>
+                            {itemStatus}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                          <span className="font-semibold text-slate-600">{record.procedimento}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{record.data ? format(parseISO(record.data), "dd/MM/yyyy") : 'N/D'} às {record.horario || 'N/D'}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>Dr(a). {record.dentista}</span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const patient = findPatientByRobustMatch(record.paciente, patients);
+                            if (patient) proceedWithWhatsApp(patient, record);
+                            else alert(`Lembrete disparado para o canal WhatsApp. Aguardando processamento...`);
+                          }}
+                          className="p-1.5 bg-slate-50 hover:bg-emerald-50 border border-slate-200 rounded-lg text-emerald-500 hover:text-emerald-600 transition-all cursor-pointer"
+                          title="Enviar Mensagem Manual via Web WhatsApp"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Sandbox Interactive Mobile Preview */}
+          <div className="lg:col-span-5 flex flex-col gap-4">
+            {selectedRecord ? (
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800">Simulador de WhatsApp IA</h4>
+                    <p className="text-[9px] text-slate-400">Envie respostas simuladas por parte do paciente.</p>
+                  </div>
+                  <div className="flex items-center gap-1 text-slate-400 shrink-0">
+                    <Smartphone className="w-4 h-4 text-slate-400" />
+                    <span className="text-[10px] font-bold">Smartphone Mock</span>
+                  </div>
+                </div>
+
+                {/* Smartphone Box container */}
+                <div className="border border-slate-300 rounded-3xl overflow-hidden shadow-lg bg-[#e5ddd5] flex flex-col h-[380px] relative">
+                  {/* Whatsapp Client Header */}
+                  <div className="bg-[#075e54] text-white px-3 py-2 flex items-center justify-between shrink-0 select-none">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-full bg-slate-300 text-[10px] font-bold text-slate-700 uppercase flex items-center justify-center shrink-0 border border-white/20 font-sans">
+                        {selectedRecord.paciente?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+                      </div>
+                      <div className="flex flex-col min-w-0 text-left">
+                        <span className="text-xs font-bold truncate leading-tight block">{selectedRecord.paciente}</span>
+                        <span className="text-[8px] text-emerald-200 leading-normal block">
+                          {isTyping[selectedRecordId!] ? "digitando..." : "online"}
+                        </span>
+                      </div>
+                    </div>
+                    {configs.iaCoPilot && (
+                      <div className="px-1.5 py-0.5 bg-emerald-400/20 rounded border border-emerald-400/30 text-[7px] tracking-wider uppercase font-extrabold text-emerald-200 animate-pulse leading-none">
+                        Co-Pilot Ativo
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Messages Area */}
+                  <div className="flex-1 overflow-y-auto p-3 space-y-2 flex flex-col justify-start">
+                    <div className="self-center bg-white/80 text-[8px] text-slate-500 font-bold px-2 py-0.5 rounded-md uppercase tracking-wider mb-2 select-none border border-black/5">
+                      Hoje
+                    </div>
+
+                    {currentChatMessages.map((msg: any) => {
+                      const isClinic = msg.sender === 'clinic' || msg.sender === 'clinic-ia';
+                      return (
+                        <div 
+                          key={msg.id}
+                          className={cn(
+                            "max-w-[85%] rounded-xl px-2.5 py-1.5 text-[11px] leading-snug relative shadow-sm text-left font-sans animate-in fade-in slide-in-from-bottom-1 duration-150",
+                            isClinic 
+                              ? "self-end bg-[#dcf8c6] text-slate-800" 
+                              : "self-start bg-white text-slate-800"
+                          )}
+                        >
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                          <div className="flex items-center justify-end gap-1 mt-1 select-none">
+                            <span className="text-[8px] text-slate-400 font-medium block text-right leading-none">
+                              {msg.timestamp}
+                            </span>
+                            {isClinic && <Check className="w-3 h-3 text-sky-500 shrink-0" />}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {isTyping[selectedRecordId!] && (
+                      <div className="self-start bg-white max-w-[85%] rounded-xl px-3 py-2 text-[11px] leading-snug shadow-sm flex items-center gap-1 text-slate-400 font-sans">
+                        <span className="animate-bounce">●</span>
+                        <span className="animate-bounce delay-75">●</span>
+                        <span className="animate-bounce delay-150">●</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Simulated trigger actions */}
+                <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[9px] font-extrabold text-slate-400 block uppercase tracking-wide text-left">Simular Ação do Paciente</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('SIM')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Confirmado'}
+                      className={cn(
+                        "py-2 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 text-emerald-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Confirmado' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Responder SIM</span>
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('REAGENDAR')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Reagendar'}
+                      className={cn(
+                        "py-2 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Reagendar' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Pedir Reagenda</span>
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('NAO')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Cancelado'}
+                      className={cn(
+                        "py-2 bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Cancelado' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Responder NÃO</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center h-[400px]">
+                <Smartphone className="w-12 h-12 text-slate-200 mb-3" />
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block">Nenhum Paciente Selecionado</span>
+                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">Selecione um paciente na lista ao lado para abrir o simulador de mensagens instantâneas.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'templates' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Editor block */}
+          <div className="lg:col-span-8 bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Gerenciador de Modelos Acadêmicos</h3>
+              <p className="text-[10px] text-slate-400">Personalize os textos padrões das mensagens. Use as tags na caixa para puxar dados inteligentes.</p>
+            </div>
+
+            {/* Template select tabs */}
+            <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-3">
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('confirmacao')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'confirmacao' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Confirmação de Consulta
+              </button>
+              
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('retorno')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'retorno' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Lembrete de Retorno (6M)
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('aniversario')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'aniversario' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Parabéns de Aniversário
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('cobranca')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'cobranca' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Cobrança de Orçamento
+              </button>
+            </div>
+
+            {/* Textarea fields and helper variable tags */}
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider text-left">Texto do Modelo</label>
+              <textarea 
+                rows={5}
+                className="w-full text-xs font-sans tracking-wide leading-relaxed border border-slate-200 rounded-xl p-3 shadow-inner focus:ring-1 focus:ring-brand-cyan outline-none resize-none"
+                value={templateText}
+                onChange={(e) => setTemplateText(e.target.value)}
+              />
+
+              {/* Tag Injectors Helper Box */}
+              <div className="space-y-1.5 text-left">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Atalhos de Chaves Inteligentes</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { tag: '{paciente}', label: 'Nome do Paciente' },
+                    { tag: '{data}', label: 'Dia da Consulta' },
+                    { tag: '{horario}', label: 'Horário do Lembrete' },
+                    { tag: '{dentista}', label: 'Dr(a). da Consulta' },
+                    { tag: '{procedimento}', label: 'Procedimento' },
+                    { tag: '{clinica}', label: 'Nome de Fantasia' }
+                  ].map(item => (
+                    <button 
+                      type="button"
+                      key={item.tag}
+                      onClick={() => setTemplateText(prev => prev + item.tag)}
+                      className="px-2 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded text-[10px] font-mono text-slate-600 transition-all cursor-pointer select-none"
+                      title={`Inserir ${item.label}`}
+                    >
+                      {item.tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={handleSaveTemplate}
+                className="px-4 py-2 bg-brand-cyan hover:bg-brand-cyan/90 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Salvar Alterações</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Side preview card */}
+          <div className="lg:col-span-4 space-y-4">
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4 text-left">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-2.5">
+                <Smartphone className="w-4.5 h-4.5 text-brand-cyan" />
+                <span className="text-xs font-bold text-slate-800">Visualização de Amostra</span>
+              </div>
+              <div className="bg-[#e5ddd5] p-3 rounded-2xl min-h-[150px] flex flex-col justify-center border border-slate-200">
+                <div className="self-end max-w-[90%] bg-[#dcf8c6] rounded-xl px-2.5 py-1.5 text-[10px] leading-snug shadow-sm">
+                  <p className="whitespace-pre-wrap">
+                    {formatTemplate(templateText, selectedRecord || (filteredAppointments[0] || null))}
+                  </p>
+                  <span className="text-[8px] text-slate-400 block text-right mt-1 select-none">Agora</span>
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400">Assim é como o cliente receberá a mensagem pelo canal automatizado selecionado (WhatsApp/SMS).</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'configs' && (
+        <div className="max-w-2xl bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm space-y-6 text-left">
+          <div>
+            <h3 className="text-sm font-bold text-slate-800">Canais de Confirmação & Assistência Inteligente</h3>
+            <p className="text-[10px] text-slate-400">Habilite, configure e audite disparos automatizados de confirmação odontológica.</p>
+          </div>
+
+          <div className="space-y-4">
+            {/* Setting Item 1 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <MessageCircle className="w-4 h-4 text-emerald-500" />
+                  <span className="text-xs font-bold text-slate-700">Automação de WhatsApp Co-Pilot</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Dispara lembretes de consultas 24 horas antes do horário marcado coletando dados inteligentes dos agendamentos.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoWhatsapp')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoWhatsapp ? "bg-emerald-500 border-emerald-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 2 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <Bot className="w-4 h-4 text-brand-cyan" />
+                  <span className="text-xs font-bold text-slate-700">Assistente IA de Confirmação</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Permite que a inteligência artificial interprete respostas complexas ("não poderei ir", "posso sim", "quero mudar de dia") e atualize faturamentos e calendários sem necessidade de intervenção humana.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('iaCoPilot')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.iaCoPilot ? "bg-brand-cyan border-brand-cyan flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 3 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4 text-indigo-500" />
+                  <span className="text-xs font-bold text-slate-700">Automação de Backup via SMS Torpedo</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Ativa o envio de SMS tradicional automático se o cliente não responder ao WhatsApp em até 4 horas.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoSms')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoSms ? "bg-indigo-500 border-indigo-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 4 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-yellow-500" />
+                  <span className="text-xs font-bold text-slate-700">Notificações e Lembretes de E-mail</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Envia lembretes por e-mail com botões inteligentes p/ confirmação instantânea direto do provedor configurado.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoEmail')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoEmail ? "bg-yellow-500 border-yellow-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -7117,7 +7919,7 @@ function AdminView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'backup'>('users');
 
-  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
+  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
 
   const toggleModule = (module: string, currentModules: string[], setter: (m: string[]) => void) => {
     if (currentModules.includes(module)) {
@@ -7992,12 +8794,51 @@ function PublicBookingView({
 
     setIsSubmitting(true);
     try {
+      let finalPatientId = '';
+      try {
+        console.log("[PortalBooking] Buscando pacientes para verificar duplicados...");
+        const patientsSnap = await getDocs(collection(db, 'patients'));
+        const patientsList = patientsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const existingPatient = findPatientByRobustMatch(trimmedName, patientsList);
+
+        if (!existingPatient) {
+          finalPatientId = `pat-${Date.now()}`;
+          console.log("[PortalBooking] Paciente não cadastrado. Criando registro para o paciente:", finalPatientId);
+          const patientData = {
+            id: finalPatientId,
+            name: trimmedName,
+            email: '',
+            phone: bookingData.telefone || '',
+            cpf: '',
+            dentistaResponsavel: bookingData.dentista || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          await setDoc(doc(db, 'patients', finalPatientId), patientData);
+        } else {
+          finalPatientId = existingPatient.id;
+          console.log("[PortalBooking] Paciente já cadastrado:", existingPatient.name);
+          const needsUpdate = !existingPatient.phone || !existingPatient.dentistaResponsavel;
+          if (needsUpdate) {
+            const updatedPatientData = {
+              phone: existingPatient.phone || bookingData.telefone || '',
+              dentistaResponsavel: existingPatient.dentistaResponsavel || bookingData.dentista || '',
+              updatedAt: new Date().toISOString()
+            };
+            await setDoc(doc(db, 'patients', existingPatient.id), updatedPatientData, { merge: true });
+          }
+        }
+      } catch (patientAutoErr) {
+        console.error("[PortalBooking] Erro ao cadastrar paciente automaticamente:", patientAutoErr);
+      }
+
       const id = `booking-${Date.now()}`;
       const record: DentalRecord = {
         id,
         data: bookingData.data,
         horario: bookingData.horario,
         paciente: trimmedName,
+        pacienteId: finalPatientId || undefined,
         telefone: bookingData.telefone,
         procedimento: bookingData.procedimento,
         dentista: bookingData.dentista,
