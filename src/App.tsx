@@ -1892,6 +1892,7 @@ export default function App() {
             patients={patients} 
             clinicName={clinicName} 
             db={db} 
+            currentUser={currentUser}
           />
         );
       case 'Documentos':
@@ -2569,7 +2570,7 @@ export default function App() {
   );
 }
 
-function MessagesView({ data, patients, clinicName, db }: { data: DentalRecord[], patients: any[], clinicName: string, db: any }) {
+function MessagesView({ data, patients, clinicName, db, currentUser }: { data: DentalRecord[], patients: any[], clinicName: string, db: any, currentUser: any }) {
   const [activeSubTab, setActiveSubTab] = useState<'status' | 'templates' | 'configs'>('status');
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   
@@ -2621,12 +2622,22 @@ function MessagesView({ data, patients, clinicName, db }: { data: DentalRecord[]
   // Only consider active/future appointments or valid records
   const filteredAppointments = useMemo(() => {
     return data.filter(record => record.status !== 'Realizado' && record.status !== 'Concluído')
+      .filter(record => {
+        // Guard check: Dentists can only see patients linked to them
+        if (currentUser?.role === 'Dentista') {
+          const isRecordDentist = record.dentista === currentUser.name;
+          const patient = findPatientByRobustMatch(record.paciente, patients);
+          const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+          return isRecordDentist || isPatientDentist;
+        }
+        return true;
+      })
       .sort((a,b) => {
         const da = a.data ? new Date(a.data).getTime() : 0;
         const db = b.data ? new Date(b.data).getTime() : 0;
         return da - db;
       });
-  }, [data]);
+  }, [data, currentUser, patients]);
 
   // Set default selected record
   useEffect(() => {
@@ -2656,13 +2667,20 @@ function MessagesView({ data, patients, clinicName, db }: { data: DentalRecord[]
 
   // KPI calculations based on current data
   const metrics = useMemo(() => {
+    const activeData = currentUser?.role === 'Dentista' ? data.filter(record => {
+      const isRecordDentist = record.dentista === currentUser.name;
+      const patient = findPatientByRobustMatch(record.paciente, patients);
+      const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+      return isRecordDentist || isPatientDentist;
+    }) : data;
+
     const total = filteredAppointments.length;
     // We can count records with 'confirmationStatus' === 'Confirmado' or record.status === 'Realizado' / Completed
-    const confirmed = data.filter(r => (r as any).confirmationStatus === 'Confirmado' || r.status === 'Realizado' || r.status === 'Concluído').length;
-    const pending = data.filter(r => (!(r as any).confirmationStatus || (r as any).confirmationStatus === 'Pendente') && r.status !== 'Cancelado' && r.status !== 'Realizado' && r.status !== 'Concluído').length;
-    const cancelled = data.filter(r => r.status === 'Cancelado' || (r as any).confirmationStatus === 'Cancelado').length;
+    const confirmed = activeData.filter(r => (r as any).confirmationStatus === 'Confirmado' || r.status === 'Realizado' || r.status === 'Concluído').length;
+    const pending = activeData.filter(r => (!(r as any).confirmationStatus || (r as any).confirmationStatus === 'Pendente') && r.status !== 'Cancelado' && r.status !== 'Realizado' && r.status !== 'Concluído').length;
+    const cancelled = activeData.filter(r => r.status === 'Cancelado' || (r as any).confirmationStatus === 'Cancelado').length;
     return { total, confirmed, pending, cancelled };
-  }, [data, filteredAppointments]);
+  }, [data, filteredAppointments, currentUser, patients]);
 
   // Fetch or setup chat history for selected record
   const currentChatMessages = useMemo(() => {
@@ -2777,6 +2795,16 @@ function MessagesView({ data, patients, clinicName, db }: { data: DentalRecord[]
 
   // Internal WhatsApp proceed simulation
   const proceedWithWhatsApp = (patient: any, record: DentalRecord) => {
+    // Guard check: Dentists can only send messages if the patient is linked to them
+    if (currentUser?.role === 'Dentista') {
+      const isRecordDentist = record.dentista === currentUser.name;
+      const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+      if (!isRecordDentist && !isPatientDentist) {
+        alert("Acesso negado: Este paciente não está vinculado ao seu perfil.");
+        return;
+      }
+    }
+
     const phone = patient.phone || patient.telefone || patient.celular || patient.mobile || patient.contato || '';
     if (!phone) {
       alert(`O paciente "${patient.name}" não tem um telefone cadastrado.\n\nPor favor, adicione seu celular.`);
