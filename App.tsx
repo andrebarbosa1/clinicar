@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Users, 
   TrendingUp, 
@@ -39,6 +39,7 @@ import {
   Printer,
   FileCheck,
   HelpCircle,
+  Keyboard,
   MessageSquare,
   Cpu,
   Upload,
@@ -64,8 +65,24 @@ import {
   Share2,
   Link,
   Heart,
+  XCircle,
+  FileSearch,
+  LayoutGrid,
+  LayoutList,
+  Grid,
   ShieldCheck,
-  ChevronDown
+  ChevronDown,
+  ImagePlus,
+  Info,
+  Sparkles,
+  Package,
+  Layers,
+  ShoppingCart,
+  TrendingDown,
+  Smartphone,
+  Check,
+  RefreshCw,
+  Bot
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -81,13 +98,21 @@ import {
   PieChart,
   Pie
 } from 'recharts';
-import { format, parseISO, isToday, startOfMonth, subMonths, isWithinInterval, differenceInYears, isValid, addDays } from 'date-fns';
+import { format, parseISO, isToday, startOfMonth, endOfMonth, startOfDay, endOfDay, subMonths, isWithinInterval, differenceInYears, isValid, addDays, getDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { MOCK_DATA } from './mockData';
 import { DentalRecord } from './types';
 import { cn, formatCurrency, formatPercent } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  onAuthStateChanged, 
+  signOut, 
+  setPersistence, 
+  browserLocalPersistence
+} from 'firebase/auth';
+import firebaseConfig from '../firebase-applet-config.json';
 import { 
   getFirestore, 
   initializeFirestore,
@@ -109,22 +134,20 @@ const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
 
 const getSystemInitialDate = () => {
-    const now = new Date();
+    let now = new Date();
+    // Se passar do horário de fechamento, pula para o dia seguinte
     if (format(now, 'HH:mm') >= CLOSING_HOUR) {
-        return format(addDays(now, 1), 'yyyy-MM-dd');
+        now = addDays(now, 1);
     }
+    
+    // Se o dia cair no final de semana, pula para a próxima segunda-feira
+    while (getDay(now) === 0 || getDay(now) === 6) {
+        now = addDays(now, 1);
+    }
+    
     return format(now, 'yyyy-MM-dd');
 };
-import { 
-  getAuth, 
-  onAuthStateChanged, 
-  signOut, 
-  setPersistence, 
-  browserLocalPersistence
-} from 'firebase/auth';
-import firebaseConfig from '../firebase-applet-config.json';
 
-// --- SECURITY UTILS ---
 const RealTimeClock = () => {
   const [time, setTime] = useState(new Date());
 
@@ -167,6 +190,27 @@ const findPatientByRobustMatch = (name: string, patientsList: any[]) => {
   }
 
   return patient;
+};
+
+const sendWhatsAppDirectly = (phone: string, message: string) => {
+  if (!phone) return false;
+  const cleanPhone = phone.replace(/\D/g, '');
+  let finalPhone = cleanPhone;
+  
+  // Auto-add 55 for Brazil if it looks like a standard local number
+  if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+    finalPhone = '55' + cleanPhone;
+  }
+
+  if (finalPhone) {
+    const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodeURIComponent(message)}`;
+    const win = window.open(whatsappUrl, '_blank');
+    if (!win) {
+      alert("O WhatsApp não pôde ser aberto automaticamente. Verifique se o seu navegador bloqueou o pop-up.");
+    }
+    return true;
+  }
+  return false;
 };
 
 const SecurityUtils = {
@@ -235,38 +279,114 @@ const SecurityUtils = {
   // Brute force state management
   BRUTE_FORCE_KEY: 'odonto_brute_lock',
   MAX_ATTEMPTS: 5,
-  LOCKOUT_TIME: 60 * 1000, // 1 minute
+
+  getLockoutDelay: (attempts: number) => {
+    if (attempts < SecurityUtils.MAX_ATTEMPTS) return 0;
+    if (attempts === 5) return 60 * 1000;       // 1 minute lockout
+    if (attempts === 6) return 300 * 1000;      // 5 minutes lockout
+    if (attempts === 7) return 900 * 1000;      // 15 minutes lockout
+    return 3600 * 1000;                         // 1 hour lockout for 8+ failures
+  },
 
   getLockoutStatus: () => {
-    const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
-    if (!lock) return { isLocked: false, remaining: 0 };
-    
-    const { timestamp, attempts } = JSON.parse(lock);
-    const now = Date.now();
-    const elapsed = now - timestamp;
+    try {
+      const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
+      if (!lock) return { isLocked: false, remaining: 0 };
+      
+      const { timestamp, attempts } = JSON.parse(lock);
+      const now = Date.now();
+      const elapsed = now - timestamp;
+      const lockoutTime = SecurityUtils.getLockoutDelay(attempts);
 
-    if (attempts >= SecurityUtils.MAX_ATTEMPTS && elapsed < SecurityUtils.LOCKOUT_TIME) {
-      return { isLocked: true, remaining: Math.ceil((SecurityUtils.LOCKOUT_TIME - elapsed) / 1000) };
-    }
+      // Safety check: Clock rewinding defense
+      if (elapsed < 0) {
+        return { isLocked: true, remaining: 3600 }; // Lock for 1 hour for tampering attempts
+      }
 
-    if (elapsed >= SecurityUtils.LOCKOUT_TIME) {
-      localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      if (attempts >= SecurityUtils.MAX_ATTEMPTS && elapsed < lockoutTime) {
+        return { isLocked: true, remaining: Math.ceil((lockoutTime - elapsed) / 1000) };
+      }
+
+      if (elapsed >= lockoutTime) {
+        localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        return { isLocked: false, remaining: 0 };
+      }
+
+      return { isLocked: false, remaining: 0, attempts };
+    } catch {
       return { isLocked: false, remaining: 0 };
     }
-
-    return { isLocked: false, remaining: 0, attempts };
   },
 
   recordAttempt: (success: boolean) => {
-    const status = SecurityUtils.getLockoutStatus();
-    if (success) {
-      localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
-    } else {
-      const attempts = (status.attempts || 0) + 1;
-      localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, JSON.stringify({
-        timestamp: Date.now(),
-        attempts
-      }));
+    try {
+      const status = SecurityUtils.getLockoutStatus();
+      if (success) {
+        localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      } else {
+        const attempts = (status.attempts || 0) + 1;
+        localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, JSON.stringify({
+          timestamp: Date.now(),
+          attempts
+        }));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  // Layer 2: Firestore lock synced per username to secure against distributed brute-force
+  checkFirestoreLockout: async (username: string): Promise<{ isLocked: boolean; remaining: number }> => {
+    if (!username) return { isLocked: false, remaining: 0 };
+    const cleanUsername = username.trim().toLowerCase();
+    
+    try {
+      const docRef = doc(db, 'login_attempts', cleanUsername);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const lockoutUntil = data?.lockoutUntil || 0;
+        const attempts = data?.attempts || 0;
+        const now = Date.now();
+        
+        if (attempts >= SecurityUtils.MAX_ATTEMPTS && lockoutUntil > now) {
+          return { isLocked: true, remaining: Math.ceil((lockoutUntil - now) / 1000) };
+        }
+      }
+    } catch (e) {
+      console.error("[Prevention] Database security state check was bypassed or unavailable:", e);
+    }
+    return { isLocked: false, remaining: 0 };
+  },
+
+  recordAttemptFirestore: async (username: string, success: boolean): Promise<void> => {
+    if (!username) return;
+    const cleanUsername = username.trim().toLowerCase();
+    
+    try {
+      const docRef = doc(db, 'login_attempts', cleanUsername);
+      if (success) {
+        await deleteDoc(docRef);
+      } else {
+        const docSnap = await getDoc(docRef);
+        let attempts = 1;
+        if (docSnap.exists()) {
+          attempts = (docSnap.data()?.attempts || 0) + 1;
+        }
+        
+        const lockoutDelay = SecurityUtils.getLockoutDelay(attempts);
+        const lockoutUntil = attempts >= SecurityUtils.MAX_ATTEMPTS ? Date.now() + lockoutDelay : 0;
+        
+        await setDoc(docRef, {
+          username: cleanUsername,
+          attempts,
+          lastAttempt: Date.now(),
+          lockoutUntil
+        });
+      }
+    } catch (e) {
+      console.error("[Prevention] Error logging security tracker:", e);
     }
   }
 };
@@ -274,9 +394,9 @@ const SecurityUtils = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Use initializeFirestore with experimentalForceLongPolling to avoid connection timeouts in restricted environments
+// Use initializeFirestore with experimentalAutoDetectLongPolling to support both local execution (WebSockets) and container environments (Long Polling)
 export const db = initializeFirestore(app, {
-  experimentalForceLongPolling: true,
+  experimentalAutoDetectLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
 
 export const auth = getAuth(app);
@@ -286,11 +406,11 @@ async function testConnection() {
   try {
     // Only attempt the connection test if we're in a browser environment
     if (typeof window !== 'undefined') {
-      await getDocFromServer(doc(db, '_connection_test_', 'ping'));
+      await getDocFromServer(doc(db, 'test', 'connection'));
       console.log("Firestore connection established successfully.");
     }
   } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
+    if (error instanceof Error && (error.message.includes('the client is offline') || error.message.includes('Could not reach Cloud Firestore backend'))) {
       console.error("Firestore connection failure: Please check your Firebase configuration or internet connection.");
     } else {
       console.warn("Firestore connection test completed with status:", error);
@@ -366,7 +486,7 @@ const PROCEDURES_OPTIONS = [
 const INITIAL_USERS = [
   { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com' },
   { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com' },
-  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
+  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Dashboard, Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
 ];
 
 export default function App() {
@@ -378,13 +498,19 @@ export default function App() {
   const [users, setUsers] = useState<any[]>(INITIAL_USERS);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isPublicBooking, setIsPublicBooking] = useState(false);
+  const [confirmApptId, setConfirmApptId] = useState<string | null>(null);
+  const [reschedulePreFill, setReschedulePreFill] = useState<any | null>(null);
 
-  // Handle public booking URL
+  // Handle public booking and confirmation URLs
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('booking') === 'true') {
         setIsPublicBooking(true);
+      }
+      const apptId = params.get('confirmAppt');
+      if (apptId) {
+        setConfirmApptId(apptId);
       }
     }
   }, []);
@@ -398,6 +524,12 @@ export default function App() {
   const [filterPayment, setFilterPayment] = useState<string>('Todos');
   const [filterDentista, setFilterDentista] = useState<string>('Todos');
   const [searchPatient, setSearchPatient] = useState('');
+  
+  // Date Filters
+  const [filterDateRange, setFilterDateRange] = useState<'month' | 'last_month' | 'today' | 'custom'>('month');
+  const [filterStartDate, setFilterStartDate] = useState<string>(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [filterEndDate, setFilterEndDate] = useState<string>(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [patients, setPatients] = useState<any[]>([]);
@@ -406,27 +538,140 @@ export default function App() {
   const [editingPatientEmail, setEditingPatientEmail] = useState<{patientName: string; appointmentId: string} | null>(null);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showTermsOfUse, setShowTermsOfUse] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [cookieConsent, setCookieConsent] = useState(() => {
     if (typeof window === 'undefined') return true;
     return localStorage.getItem('odonto_cookie_consent') === 'true';
   });
   const [clinicName, setClinicName] = useState('OdontoDash');
+  const [clinicLogo, setClinicLogo] = useState<string | null>(null);
+  const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
+  const [providerPhone, setProviderPhone] = useState(() => localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999');
+  const [providerName, setProviderName] = useState(() => localStorage.getItem('odonto_cfg_providerName') || 'MB.SISTEMAS');
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isFreeTrialView, setIsFreeTrialView] = useState(false);
+
+  React.useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
 
   const hasModule = React.useCallback((moduleName: string) => {
     if (!currentUser) return false;
     // Admin always has all access
     if (currentUser.role === 'Admin') return true;
     
-    // Explicit module check
-    const userModules = (currentUser.modules || '').split(',').map((m: string) => m.trim().toLowerCase());
-    
     // Safety: Recepcionista cannot access Financeiro or Administração even if misconfigured
     if (currentUser.role === 'Recepcionista' && (moduleName.toLowerCase() === 'financeiro' || moduleName.toLowerCase() === 'administração')) {
       return false;
     }
+
+    // Recepcionista always gets Dashboard, Agenda, and Pacientes by default
+    if (currentUser.role === 'Recepcionista' && (moduleName.toLowerCase() === 'dashboard' || moduleName.toLowerCase() === 'agenda' || moduleName.toLowerCase() === 'pacientes')) {
+      return true;
+    }
+    
+    // Explicit module check
+    const userModules = (currentUser.modules || '').split(',').map((m: string) => m.trim().toLowerCase());
     
     return userModules.includes(moduleName.toLowerCase());
   }, [currentUser]);
+
+  // Global Keyboard Shortcuts Hook
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check if user is typing in common editable input objects to ignore hotkeys
+      const target = e.target as HTMLElement;
+      const isInput = target && (
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable
+      );
+
+      // Check if Control (Ctrl) or Command (Cmd on Mac) is pressed
+      const hasModifier = e.ctrlKey || e.metaKey;
+      if (!hasModifier) return;
+
+      const key = e.key.toLowerCase();
+
+      // Avoid blocking native selecting or copy/paste behaviors when typing inside inputs
+      if (isInput) {
+        // Only allow Ctrl+/ or Ctrl+K to open shortcuts even when in input
+        if (key !== 'k' && key !== '/' && key !== ';') {
+          return;
+        }
+      }
+
+      switch (key) {
+        case 'h': // Ctrl+H -> Home/Dashboard
+          e.preventDefault();
+          setActivePage('Dashboard');
+          setSubPage(null);
+          break;
+        case 'a': // Ctrl+A -> Agenda (Calendar)
+          e.preventDefault();
+          setActivePage('Agenda');
+          setSubPage(null);
+          break;
+        case 'p': // Ctrl+P -> Patients List
+          e.preventDefault();
+          setActivePage('Pacientes');
+          setSubPage(null);
+          break;
+        case 'n': // Ctrl+N -> New Patient (Cadastrar)
+          e.preventDefault();
+          setActivePage('Pacientes');
+          setSubPage('Cadastrar');
+          break;
+        case 'b': // Ctrl+B -> New Appointment Booking
+          e.preventDefault();
+          setActivePage('Agenda');
+          setSubPage('NovoAgendamento');
+          break;
+        case 'm': // Ctrl+M -> Messages & Whatsapp Simulation
+          e.preventDefault();
+          setActivePage('Mensagens');
+          setSubPage(null);
+          break;
+        case 'f': // Ctrl+F -> Billing / Financials
+          if (hasModule('Financeiro')) {
+            e.preventDefault();
+            setActivePage('Financeiro');
+            setSubPage(null);
+          }
+          break;
+        case 'k': // Ctrl+K or Ctrl+/ -> Trigger Keyboard Shortcuts overlay panel
+        case '/':
+          e.preventDefault();
+          setShowKeyboardShortcuts(prev => !prev);
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [hasModule]);
 
   React.useEffect(() => {
     if (!isAuthReady) return;
@@ -435,15 +680,34 @@ export default function App() {
 
     // 2.1 Users sync (Always active if authenticated or about to be)
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const u = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
-      if (u.length === 0) {
-        setUsers(INITIAL_USERS);
-      } else {
-        setUsers(u);
+      const dbUsers = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
+      console.log(`[UsersSync] ${dbUsers.length} usuários em Firestore. Sincronizando...`);
+      
+      // Use INITIAL_USERS as base, override with Firestore data, and add any new ones
+      const merged = INITIAL_USERS.map(iu => {
+        const found = dbUsers.find(du => du.id === iu.id);
+        if (found) {
+          if (iu.id === '1') {
+            console.log(`[UsersSync] Sincronizando Admin (ID:1). Login: ${found.username}, PWD matches default? ${found.password === iu.password}`);
+          }
+          return { ...iu, ...found };
+        }
+        return iu;
+      });
+
+      dbUsers.forEach(du => {
+        if (!merged.find(m => m.id === du.id)) {
+          merged.push(du);
+        }
+      });
+
+      setUsers(merged);
+
+      if (merged.length > 0) {
         const sessionUser = JSON.parse(localStorage.getItem('odonto_session') || '{}');
         const selfId = currentUser?.id || sessionUser?.id;
         if (selfId) {
-          const updatedSelf = u.find(user => user.id === selfId);
+          const updatedSelf = merged.find(user => user.id === selfId);
           if (updatedSelf) {
             if (updatedSelf.modules !== currentUser?.modules || updatedSelf.role !== currentUser?.role || updatedSelf.name !== currentUser?.name) {
               console.log("[DataSync] Perfil do usuário atualizado, sincronizando estado local...");
@@ -540,10 +804,21 @@ export default function App() {
   React.useEffect(() => {
     const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
       if (docSnap.exists()) {
-        setClinicName(docSnap.data().clinicName || 'OdontoDash');
+        const d = docSnap.data();
+        setClinicName(d.clinicName || 'OdontoDash');
+        setClinicLogo(d.clinicLogo || null);
+        setFooterText(d.footerText || `© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
+        if (d.providerPhone) {
+          setProviderPhone(d.providerPhone);
+          localStorage.setItem('odonto_cfg_providerPhone', d.providerPhone);
+        }
+        if (d.providerName) {
+          setProviderName(d.providerName);
+          localStorage.setItem('odonto_cfg_providerName', d.providerName);
+        }
       }
     }, (error) => {
-      console.warn("Settings sync error (clinicName):", error);
+      console.warn("Settings sync error (branding):", error);
     });
     return unsub;
   }, []);
@@ -575,9 +850,48 @@ export default function App() {
       const matchesPayment = filterPayment === 'Todos' || record.statusPagamento === filterPayment;
       const matchesDentista = filterDentista === 'Todos' || record.dentista === filterDentista;
       const matchesSearch = (record.paciente || "").toLowerCase().includes((searchPatient || "").toLowerCase());
-      return matchesProcedure && matchesStatus && matchesPayment && matchesDentista && matchesSearch;
+      
+      // Date Filter logic
+      let matchesDate = true;
+      if (record.data && isValid(parseISO(record.data))) {
+        const d = parseISO(record.data);
+        const start = startOfDay(parseISO(filterStartDate));
+        const end = endOfDay(parseISO(filterEndDate));
+        matchesDate = isWithinInterval(d, { start, end });
+      }
+
+      return matchesProcedure && matchesStatus && matchesPayment && matchesDentista && matchesSearch && matchesDate;
     });
-  }, [filteredRecords, filterProcedure, filterStatus, filterPayment, filterDentista, searchPatient]);
+  }, [filteredRecords, filterProcedure, filterStatus, filterPayment, filterDentista, searchPatient, filterStartDate, filterEndDate]);
+
+  // General upcoming appointments that bypasses dashboard date filters but respects developer/role restrictions & searches
+  const upcomingAppointments = React.useMemo(() => {
+    const todayStart = startOfDay(new Date());
+    return filteredRecords
+      .filter(r => {
+        if (!r.data || !isValid(parseISO(r.data))) return false;
+        if (r.status !== 'Agendado' && r.status !== 'Pendente') return false;
+        
+        // Match dentist filter if set
+        if (filterDentista !== 'Todos' && r.dentista !== filterDentista) return false;
+        
+        // Match patient name search if set
+        if (searchPatient && !(r.paciente || "").toLowerCase().includes(searchPatient.toLowerCase())) return false;
+
+        const apptDate = startOfDay(parseISO(r.data));
+        return apptDate.getTime() >= todayStart.getTime();
+      })
+      .sort((a, b) => {
+        const dateA = parseISO(a.data);
+        const dateB = parseISO(b.data);
+        if (dateA.getTime() !== dateB.getTime()) {
+          return dateA.getTime() - dateB.getTime();
+        }
+        const timeA = a.horario || '';
+        const timeB = b.horario || '';
+        return timeA.localeCompare(timeB);
+      });
+  }, [filteredRecords, filterDentista, searchPatient]);
 
   // Seeding Logic (Optimized to avoid quota drain)
   React.useEffect(() => {
@@ -598,24 +912,17 @@ export default function App() {
             try {
               const userRef = doc(db, 'users', initialUser.id);
               
-              // For ID '1' (ana.admin), we ALWAYS overwrite to ensure credentials are correct
-              if (initialUser.id === '1') {
-                const userSnap = await getDoc(userRef);
-                console.log(`FORCING update for admin: ${initialUser.name}`);
+              // Seed initial user if it doesn't exist
+              const userSnap = await getDoc(userRef);
+              if (!userSnap.exists()) {
+                console.log(`Seeding initial user: ${initialUser.name}`);
                 await setDoc(userRef, {
                   ...initialUser,
-                  updatedAt: new Date().toISOString(),
-                  createdAt: userSnap.exists() ? (userSnap.data()?.createdAt || new Date().toISOString()) : new Date().toISOString()
-                }); 
-              } else if (!seedFlag) {
-                const userSnap = await getDoc(userRef);
-                if (!userSnap.exists()) {
-                  console.log(`Seeding initial user: ${initialUser.name}`);
-                  await setDoc(userRef, {
-                    ...initialUser,
-                    createdAt: new Date().toISOString()
-                  });
-                }
+                  createdAt: new Date().toISOString()
+                });
+              } else if (initialUser.id === '1' && !seedFlag) {
+                // Special case for first run only if needed, but usually we just want the seed
+                console.log(`Initial admin ${initialUser.name} already exists.`);
               }
             } catch (err) {
               console.warn(`Failed to seed user ${initialUser.name}:`, err);
@@ -747,10 +1054,27 @@ export default function App() {
         }
       } else {
         // User is NOT logged into Firebase
-        console.log("Cleaning up session - no Firebase user found");
-        localStorage.removeItem('odonto_session');
-        setCurrentUser(null);
-        setIsAuthenticated(false);
+        console.log("Cleaning up session check - Firebase: no user");
+        const savedSessionStr = localStorage.getItem('odonto_session');
+        if (savedSessionStr) {
+          try {
+            const savedSession = JSON.parse(savedSessionStr);
+            // ONLY clean if it was a Firebase session. Custom login sessions (no firebaseUid) are preserved.
+            if (savedSession.firebaseUid) {
+              console.log("Cleaning up Firebase session");
+              localStorage.removeItem('odonto_session');
+              setCurrentUser(null);
+              setIsAuthenticated(false);
+            } else {
+              console.log("Preserving custom login session");
+              // Ensure state matches localStorage
+              setCurrentUser(savedSession);
+              setIsAuthenticated(true);
+            }
+          } catch (e) {
+            localStorage.removeItem('odonto_session');
+          }
+        }
       }
       
       setIsAuthReady(true);
@@ -851,11 +1175,15 @@ export default function App() {
       return;
     }
 
+    const matchedPatient = findPatientByRobustMatch(newAppt.paciente, patients);
+    const patientPhone = newAppt.telefone || matchedPatient?.phone;
+
     const record: DentalRecord = {
       id: `rec-new-${Date.now()}`,
       data: newAppt.data,
       horario: newAppt.horario || '',
       paciente: newAppt.paciente,
+      telefone: patientPhone || '',
       procedimento: newAppt.procedimento || 'Avaliação',
       dentista: newAppt.dentista,
       status: 'Agendado',
@@ -883,7 +1211,6 @@ export default function App() {
       const dentist = users.find(u => u.name === newAppt.dentista);
       if (dentist) {
         // Important: we target the dentist specifically.
-        // The notification listener in App already uses where('userId', '==', currentUserId)
         const dentistId = dentist.id || dentist.uid || dentist.firebaseUid;
         const notifId = `notif-appt-${Date.now()}`;
         await setDoc(doc(db, 'notifications', notifId), {
@@ -1057,7 +1384,7 @@ export default function App() {
       id,
       name: newUser.name,
       role: newUser.role,
-      modules: newUser.modules || (newUser.role === 'Admin' ? 'Todos' : (newUser.role === 'Dentista' ? 'Dashboard, Agenda, Pacientes' : 'Agenda, Pacientes, Financeiro')),
+      modules: newUser.modules || (newUser.role === 'Admin' ? 'Todos' : (newUser.role === 'Dentista' ? 'Dashboard, Agenda, Pacientes' : (newUser.role === 'Recepcionista' ? 'Dashboard, Agenda, Pacientes' : 'Agenda, Pacientes, Financeiro'))),
       username: newUser.username || (newUser.name || "user").toLowerCase().replace(' ', '.'),
       password: newUser.password || '123',
       email: newUser.email || '',
@@ -1080,9 +1407,19 @@ export default function App() {
   const handleUpdateUser = async (userId: string, updatedData: any): Promise<boolean> => {
     try {
       const userRef = doc(db, 'users', userId);
-      await updateDoc(userRef, {
-        ...updatedData,
+      // Remove id from the data to be updated in the document content
+      const { id, ...dataToUpdate } = updatedData;
+      
+      // Update with exact data from UI
+      await setDoc(userRef, {
+        ...dataToUpdate,
         updatedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      console.log(`[Users] Usuário ${userId} salvo em Firestore com sucesso.`, {
+        username: dataToUpdate.username,
+        hasPassword: !!dataToUpdate.password,
+        pwdLength: dataToUpdate.password?.length
       });
       return true;
     } catch (e: any) {
@@ -1240,8 +1577,14 @@ export default function App() {
     }
 
     const timeStr = record.horario ? ` às ${record.horario}` : '';
-    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM") : "N/D";
-    const message = `Olá ${record.paciente}, aqui é da Clínica Odontológica. Confirmando sua consulta de ${record.procedimento} para o dia ${dateFormatted}${timeStr} com ${record.dentista}. Podemos confirmar?`;
+    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM/yyyy") : "N/D";
+    
+    // Gerar link de ação do paciente
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const confirmationLink = `${origin}${pathname}?confirmAppt=${record.id}`;
+
+    const message = `Olá, ${record.paciente}!\n\nConfirmando a sua consulta odontológica de *${record.procedimento}* para o dia *${dateFormatted}*${timeStr} com *${record.dentista}*.\n\nPor favor, responda ou gerencie sua consulta (Confirmar, Cancelar ou Reagendar) clicando no link abaixo:\n\n👉 ${confirmationLink}`;
     const encodedMessage = encodeURIComponent(message);
     
     // Remove caracteres não numéricos e garante o DDI 55 (Brasil) se não houver
@@ -1278,12 +1621,33 @@ export default function App() {
       // Optimistic update for better UX
       setData(prev => prev.map(r => r.id === recordId ? { ...r, status: 'Cancelado' } : r));
 
-      // 1. Update Firestore - Using setDoc with merge to ensure it works even if doc wasn't found (seeding issues)
+      // 1. Update Firestore
       await setDoc(doc(db, 'records', recordId), {
         status: 'Cancelado'
       }, { merge: true });
 
-      // 2. Clear state and refresh (Notifying via bell is handled by its own listener)
+      // 2. Notification logic
+      const matchedPatient = findPatientByRobustMatch(record.paciente, patients);
+      const patientPhone = record.telefone || matchedPatient?.phone;
+      const patientEmail = matchedPatient?.email;
+
+      if (patientPhone || patientEmail) {
+        const confirmNotification = window.confirm(
+          `Agendamento de ${record.paciente} cancelado com sucesso.\n\nDeseja enviar uma notificação de cancelamento sugerindo o reagendamento?`
+        );
+
+        if (confirmNotification) {
+          const formattedDate = format(parseISO(record.data), 'dd/MM/yyyy');
+          const message = `Olá ${record.paciente}, informamos que seu agendamento para o dia ${formattedDate} às ${record.horario} com o(a) ${record.dentista} foi cancelado. Gostaria de reagendar para uma nova data? Estamos à disposição!`;
+          
+          if (patientEmail) {
+            const subject = encodeURIComponent('Cancelamento de Agendamento - Clínica Odontológica');
+            const body = encodeURIComponent(message);
+            window.open(`mailto:${patientEmail}?subject=${subject}&body=${body}`, '_blank');
+          }
+        }
+      }
+
       console.log(`Cancelamento concluído para ${record.paciente}`);
     } catch (e) {
       console.error("Erro no processo de cancelamento:", e);
@@ -1399,12 +1763,65 @@ export default function App() {
     setSubPage(null);
   };
 
-  const handleUpdateClinicName = async (newName: string) => {
+  const handleRestoreData = async (backup: any) => {
+    if (currentUser?.role?.toLowerCase() !== 'admin') return;
+
+    try {
+      setIsLoadingData(true);
+      
+      // Restore Patients
+      if (backup.patients && Array.isArray(backup.patients)) {
+        for (const p of backup.patients) {
+          await setDoc(doc(db, 'patients', p.id), p);
+        }
+      }
+
+      // Restore Records
+      if (backup.records && Array.isArray(backup.records)) {
+        for (const r of backup.records) {
+          await setDoc(doc(db, 'records', r.id), r);
+        }
+      }
+
+      // Restore Documents
+      if (backup.documents && Array.isArray(backup.documents)) {
+        for (const d of backup.documents) {
+          await setDoc(doc(db, 'documents', d.id), d);
+        }
+      }
+
+      // Restore Users (Admin only)
+      if (backup.users && Array.isArray(backup.users)) {
+        for (const u of backup.users) {
+          // Careful not to overwrite primary admin or current user if possible, 
+          // but for a full restore, we usually want everything.
+          await setDoc(doc(db, 'users', u.id), u);
+        }
+      }
+
+      console.log("Restauração concluída!");
+    } catch (error) {
+      console.error("Erro na restauração:", error);
+      throw error;
+    } finally {
+      setIsLoadingData(false);
+    }
+  };
+
+  const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => {
     try {
       await setDoc(doc(db, 'settings', 'clinic'), {
-        clinicName: newName,
+        ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
+      if (updates.providerPhone) {
+        setProviderPhone(updates.providerPhone);
+        localStorage.setItem('odonto_cfg_providerPhone', updates.providerPhone);
+      }
+      if (updates.providerName) {
+        setProviderName(updates.providerName);
+        localStorage.setItem('odonto_cfg_providerName', updates.providerName);
+      }
     } catch (e: any) {
       handleFirestoreError(e, OperationType.UPDATE, 'settings/clinic');
     }
@@ -1459,6 +1876,7 @@ export default function App() {
     <>
       <PrivacyPolicyModal isOpen={showPrivacyPolicy} onClose={() => setShowPrivacyPolicy(false)} />
       <TermsOfUseModal isOpen={showTermsOfUse} onClose={() => setShowTermsOfUse(false)} />
+      <KeyboardShortcutsModal isOpen={showKeyboardShortcuts} onClose={() => setShowKeyboardShortcuts(false)} />
       {!cookieConsent && <CookieBanner onAccept={() => {
         setCookieConsent(true);
         localStorage.setItem('odonto_cookie_consent', 'true');
@@ -1476,16 +1894,43 @@ export default function App() {
     );
   }
 
+  if (confirmApptId) {
+    return (
+      <>
+        <PublicConfirmationView 
+          appointmentId={confirmApptId} 
+          onBack={() => setConfirmApptId(null)} 
+          onOpenBooking={() => {
+            setConfirmApptId(null);
+            setIsPublicBooking(true);
+          }}
+          setReschedulePreFill={setReschedulePreFill}
+          clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+          data={data}
+        />
+        {renderLegal()}
+      </>
+    );
+  }
+
   if (isPublicBooking) {
     return (
       <>
         <PublicBookingView 
-          onBack={() => setIsPublicBooking(false)} 
+          onBack={() => {
+            setIsPublicBooking(false);
+            setReschedulePreFill(null);
+          }} 
           users={users} 
           data={data} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
           clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+          initialFormData={reschedulePreFill}
         />
         {renderLegal()}
       </>
@@ -1493,6 +1938,51 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
+    if (isFreeTrialView) {
+      return (
+        <>
+          <FreeTrialView 
+            onBack={() => setIsFreeTrialView(false)}
+            onStartTrial={async (details) => {
+              setClinicName(details.clinicName);
+              try {
+                await handleUpdateSettings({ clinicName: details.clinicName });
+              } catch (e) {
+                console.error("Erro ao atualizar configurações no Firestore:", e);
+              }
+              
+              const trialUserProfile = {
+                id: `trial-${Date.now()}`,
+                name: details.fullName,
+                role: 'Admin',
+                modules: 'Todos',
+                username: details.username.trim().toLowerCase(),
+                password: details.password.trim(),
+                email: details.email,
+                phone: details.phone,
+                isTrial: true,
+                trialPlan: details.plan,
+                trialSpecialty: details.specialty,
+                trialStartedAt: new Date().toISOString()
+              };
+
+              try {
+                await setDoc(doc(db, 'users', trialUserProfile.id), trialUserProfile);
+              } catch (e) {
+                console.error("Erro ao persistir perfil de trial no Firestore:", e);
+              }
+              
+              await handleLogin(trialUserProfile);
+              setIsFreeTrialView(false);
+            }}
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+          />
+          {renderLegal()}
+        </>
+      );
+    }
+
     return (
       <>
         <LoginView 
@@ -1502,6 +1992,9 @@ export default function App() {
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
           clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+          onOpenFreeTrial={() => setIsFreeTrialView(true)}
         />
         {renderLegal()}
       </>
@@ -1620,6 +2113,7 @@ export default function App() {
             )}
             <DashboardView 
               filteredData={filteredData} 
+              upcomingAppointments={upcomingAppointments}
               onSendWhatsApp={handleWhatsAppReminder} 
               onSendReminder={handleSendManualReminder} 
               canSeeFinancials={canSeeFinancials}
@@ -1627,9 +2121,37 @@ export default function App() {
           </div>
         );
       case 'Retorno':
-        return <RecallView data={data} clinicName={clinicName} />;
+        return <RecallView data={data} clinicName={clinicName} patients={patients} />;
+      case 'Mensagens':
+        if (!hasModule('Mensagens')) {
+          return (
+            <div className="p-8 text-center bg-white rounded-2xl border border-slate-100 shadow-sm max-w-md mx-auto my-12">
+              <span className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-red-50 text-red-500 mb-4">
+                <Lock className="w-6 h-6" />
+              </span>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight mb-2">Acesso Restrito</h2>
+              <p className="text-slate-500 text-xs">Você não possui permissão para acessar o módulo de Mensagens. Entre em contato com o administrador.</p>
+            </div>
+          );
+        }
+        return (
+          <MessagesView 
+            data={data} 
+            patients={patients} 
+            clinicName={clinicName} 
+            db={db} 
+            currentUser={currentUser}
+          />
+        );
       case 'Documentos':
-        return <DocumentsView data={data} users={users} currentUser={currentUser} clinicName={clinicName} />;
+        return <DocumentsView 
+          data={data} 
+          users={users} 
+          currentUser={currentUser} 
+          clinicName={clinicName} 
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+        />;
       case 'Pacientes':
         return (
           <PatientsView 
@@ -1704,20 +2226,178 @@ export default function App() {
             onDeleteUser={handleDeleteUser}
             currentUser={currentUser}
             clinicName={clinicName}
-            onUpdateClinicName={handleUpdateClinicName}
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+            providerPhone={providerPhone}
+            providerName={providerName}
+            onUpdateSettings={handleUpdateSettings}
             onResetDatabase={handleResetDatabase}
+            deferredPrompt={deferredPrompt}
+            onInstallPWA={handleInstallPWA}
+            data={data}
+            patients={patients}
+            documents={documents}
+            onRestore={handleRestoreData}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
         );
+      case 'Estoque':
+        return <StockView currentUser={currentUser} />;
       default:
-        return <DashboardView filteredData={filteredData} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
+        return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
-      <AnimatePresence>
+    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans text-slate-900">
+      {/* Sidebar para Desktop */}
+      <aside className="hidden lg:flex flex-col w-64 h-screen bg-slate-800 border-r border-slate-700/50 sticky top-0 shrink-0 select-none z-50">
+        {/* Branding */}
+        <div className="p-4 border-b border-white/5 flex items-center gap-2.5 shrink-0">
+          {clinicLogo ? (
+            <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain brightness-110 contrast-110" />
+          ) : (
+            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+              <Stethoscope className="h-4.5 w-4.5 text-white" />
+            </div>
+          )}
+          <div className="flex flex-col min-w-0">
+            <span className="text-xs font-black text-white tracking-tight leading-none truncate">{clinicName}</span>
+            <span className="text-[9px] text-brand-cyan font-bold tracking-widest mt-0.5">ANALYTICS</span>
+          </div>
+        </div>
+
+        {/* Navigation vertical list */}
+        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+          {hasModule('Dashboard') && (
+            <SidebarNavItem 
+              icon={<LayoutDashboard className="w-4 h-4" />} 
+              label="Dashboard" 
+              active={activePage === 'Dashboard'} 
+              onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Pacientes') && (
+            <SidebarNavItem 
+              icon={<Users className="w-4 h-4" />} 
+              label="Pacientes" 
+              active={activePage === 'Pacientes'} 
+              onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Agenda') && (
+            <SidebarNavItem 
+              icon={<Calendar className="w-4 h-4" />} 
+              label="Agenda" 
+              active={activePage === 'Agenda'} 
+              onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Retorno') && (
+            <SidebarNavItem 
+              icon={<RotateCcw className="w-4 h-4" />} 
+              label="Retorno" 
+              active={activePage === 'Retorno'} 
+              onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Mensagens') && (
+            <SidebarNavItem 
+              icon={<MessageSquare className="w-4 h-4" />} 
+              label="Mensagens" 
+              active={activePage === 'Mensagens'} 
+              onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Documentos') && (
+            <SidebarNavItem 
+              icon={<FileText className="w-4 h-4" />} 
+              label="Documentos" 
+              active={activePage === 'Documentos'} 
+              onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Financeiro') && (
+            <SidebarNavItem 
+              icon={<DollarSign className="w-4 h-4" />} 
+              label="Financeiro" 
+              active={activePage === 'Financeiro'} 
+              onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Equipe') && (
+            <SidebarNavItem 
+              icon={<Stethoscope className="w-4 h-4" />} 
+              label="Equipe / Dentistas" 
+              active={activePage === 'Equipe'} 
+              onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Estoque') && (
+            <SidebarNavItem 
+              icon={<Package className="w-4 h-4" />} 
+              label="Estoque & Suprimentos" 
+              active={activePage === 'Estoque'} 
+              onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+            />
+          )}
+          {hasModule('Administração') && (
+            <SidebarNavItem 
+              icon={<Activity className="w-4 h-4" />} 
+              label="Administração" 
+              active={activePage === 'Administração'} 
+              onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+            />
+          )}
+        </div>
+
+        {/* Bottom Section */}
+        <div className="p-3 border-t border-white/5 bg-slate-950/20 space-y-2.5 shrink-0">
+          {currentUser && (
+            <div className="px-2.5 py-2.5 mb-1 bg-white/5 rounded-xl flex items-center gap-2.5 shrink-0">
+              <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-[10px] font-bold text-slate-300 uppercase shrink-0">
+                {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-slate-200 leading-tight truncate">{currentUser.name}</span>
+                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider leading-normal truncate">
+                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {currentUser?.isTrial && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300 text-[9px] font-bold">
+              <Sparkles className="w-3 h-3 text-amber-400 animate-pulse shrink-0" />
+              <span className="truncate">Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
+            </div>
+          )}
+
+          <button 
+            type="button"
+            onClick={() => setShowKeyboardShortcuts(true)}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-slate-800 text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-700/80 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+            title="Ver atalhos de teclado (Ctrl + K)"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-brand-cyan" />
+            <span>Atalhos de Teclado</span>
+          </button>
+
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-400 rounded-lg border border-rose-500/20 hover:bg-rose-500/20 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sair do Sistema</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Conteúdo Principal (Direita) */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <AnimatePresence>
         {quotaExceeded && (
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
@@ -1773,47 +2453,61 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-4 md:px-6 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0">
-        <div className="flex items-center gap-4 md:gap-6">
+      {/* Header (apenas Mobile) */}
+      <header className="lg:hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
+        <div className="flex items-center gap-2 md:gap-3 shrink-0">
           <button 
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="p-2 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
+            className="p-1.5 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
           >
             {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
 
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-              <Stethoscope className="h-5 w-5 text-white" />
-            </div>
-            <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tight hidden xs:block">{clinicName} <span className="text-brand-cyan font-normal">Analytics</span></h1>
+          <div className="flex items-center gap-2">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-7 max-w-[130px] object-contain" />
+            ) : (
+              <div className="w-7 h-7 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+                <Stethoscope className="h-4.5 w-4.5 text-white" />
+              </div>
+            )}
+            <h1 className="text-sm md:text-base font-bold text-slate-800 tracking-tight hidden xs:block">
+              {clinicName} <span className="text-brand-cyan font-normal">Analytics</span>
+            </h1>
+            {currentUser?.isTrial && (
+              <div className="hidden xl:flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-full text-amber-700 text-[8.5px] font-black uppercase tracking-wider ml-1">
+                <Sparkles className="w-2.5 h-2.5 text-amber-500 animate-pulse" />
+                <span>Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
+              </div>
+            )}
           </div>
           
           {currentUser && (
-            <div className="hidden lg:flex items-center gap-3 pl-6 border-l border-slate-100">
-              <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-500 border border-slate-200 uppercase">
+            <div className="hidden xl:flex items-center gap-2 pl-3 border-l border-slate-100 shrink-0">
+              <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-500 border border-slate-200 uppercase">
                 {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
               </div>
               <div className="flex flex-col">
-                <span className="text-xs font-bold text-slate-700">{currentUser.name}</span>
-                <span className="text-[9px] uppercase font-bold text-brand-cyan tracking-tighter">{currentUser.role}</span>
+                <span className="text-[10px] font-bold text-slate-700 leading-tight">{currentUser.name}</span>
+                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-tighter leading-none">
+                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
+                </span>
               </div>
             </div>
           )}
         </div>
 
-        <div className="flex items-center gap-2 lg:gap-3">
+        <div className="flex items-center gap-1 lg:gap-2">
           {/* RealTime Clock - Topo */}
-          <div className="hidden sm:flex items-center mr-2">
+          <div className="hidden xl:flex items-center mr-1">
             <RealTimeClock />
           </div>
 
           {/* Desktop Navigation */}
-          <nav className="hidden lg:flex items-center gap-1">
+          <nav className="hidden lg:flex items-center gap-0.5">
             {hasModule('Dashboard') && (
               <RibbonItem 
-                icon={<LayoutDashboard className="w-4 h-4" />} 
+                icon={<LayoutDashboard className="w-3.5 h-3.5" />} 
                 label="Dashboard" 
                 active={activePage === 'Dashboard'} 
                 onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
@@ -1821,7 +2515,7 @@ export default function App() {
             )}
             {hasModule('Pacientes') && (
               <RibbonItem 
-                icon={<Users className="w-4 h-4" />} 
+                icon={<Users className="w-3.5 h-3.5" />} 
                 label="Pacientes" 
                 active={activePage === 'Pacientes'} 
                 onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
@@ -1829,7 +2523,7 @@ export default function App() {
             )}
             {hasModule('Agenda') && (
               <RibbonItem 
-                icon={<Calendar className="w-4 h-4" />} 
+                icon={<Calendar className="w-3.5 h-3.5" />} 
                 label="Agenda" 
                 active={activePage === 'Agenda'} 
                 onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
@@ -1837,15 +2531,23 @@ export default function App() {
             )}
             {hasModule('Retorno') && (
               <RibbonItem 
-                icon={<RotateCcw className="w-4 h-4" />} 
+                icon={<RotateCcw className="w-3.5 h-3.5" />} 
                 label="Retorno" 
                 active={activePage === 'Retorno'} 
                 onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
               />
             )}
+            {hasModule('Mensagens') && (
+              <RibbonItem 
+                icon={<MessageSquare className="w-3.5 h-3.5" />} 
+                label="Mensagens" 
+                active={activePage === 'Mensagens'} 
+                onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+              />
+            )}
             {hasModule('Documentos') && (
               <RibbonItem 
-                icon={<FileText className="w-4 h-4" />} 
+                icon={<FileText className="w-3.5 h-3.5" />} 
                 label="Documentos" 
                 active={activePage === 'Documentos'} 
                 onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
@@ -1853,7 +2555,7 @@ export default function App() {
             )}
             {hasModule('Financeiro') && (
               <RibbonItem 
-                icon={<DollarSign className="w-4 h-4" />} 
+                icon={<DollarSign className="w-3.5 h-3.5" />} 
                 label="Financeiro" 
                 active={activePage === 'Financeiro'} 
                 onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
@@ -1861,15 +2563,23 @@ export default function App() {
             )}
             {hasModule('Equipe') && (
               <RibbonItem 
-                icon={<Stethoscope className="w-4 h-4" />} 
+                icon={<Stethoscope className="w-3.5 h-3.5" />} 
                 label="Equipe" 
                 active={activePage === 'Equipe'} 
                 onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
               />
             )}
+            {hasModule('Estoque') && (
+              <RibbonItem 
+                icon={<Package className="w-3.5 h-3.5" />} 
+                label="Estoque" 
+                active={activePage === 'Estoque'} 
+                onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+              />
+            )}
             {hasModule('Administração') && (
               <RibbonItem 
-                icon={<Activity className="w-4 h-4" />} 
+                icon={<Activity className="w-3.5 h-3.5" />} 
                 label="Adm" 
                 active={activePage === 'Administração'} 
                 onClick={() => { setActivePage('Administração'); setSubPage(null); }}
@@ -1877,9 +2587,9 @@ export default function App() {
             )}
           </nav>
 
-          <div className="w-px h-6 bg-slate-100 mx-1 shrink-0" />
+          <div className="w-px h-6 bg-slate-100 mx-0.5 shrink-0" />
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button 
               onClick={() => {
                 const url = window.location.origin + window.location.pathname + '?booking=true';
@@ -1937,11 +2647,13 @@ export default function App() {
                 {hasModule('Pacientes') && <MobileNavItem icon={<Users className="w-5 h-5" />} label="Pacientes" active={activePage === 'Pacientes'} onClick={() => { setActivePage('Pacientes'); setIsMenuOpen(false); }} />}
                 {hasModule('Agenda') && <MobileNavItem icon={<Calendar className="w-5 h-5" />} label="Agenda" active={activePage === 'Agenda'} onClick={() => { setActivePage('Agenda'); setIsMenuOpen(false); }} />}
                 {hasModule('Retorno') && <MobileNavItem icon={<RotateCcw className="w-5 h-5" />} label="Retorno" active={activePage === 'Retorno'} onClick={() => { setActivePage('Retorno'); setIsMenuOpen(false); }} />}
+                {hasModule('Mensagens') && <MobileNavItem icon={<MessageSquare className="w-5 h-5" />} label="Mensagens" active={activePage === 'Mensagens'} onClick={() => { setActivePage('Mensagens'); setIsMenuOpen(false); }} />}
                 {hasModule('Documentos') && <MobileNavItem icon={<FileText className="w-5 h-5" />} label="Documentos" active={activePage === 'Documentos'} onClick={() => { setActivePage('Documentos'); setIsMenuOpen(false); }} />}
                 {hasModule('Financeiro') && (
                   <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
                 )}
                 {hasModule('Equipe') && <MobileNavItem icon={<Stethoscope className="w-5 h-5" />} label="Equipe" active={activePage === 'Equipe'} onClick={() => { setActivePage('Equipe'); setIsMenuOpen(false); }} />}
+                {hasModule('Estoque') && <MobileNavItem icon={<Package className="w-5 h-5" />} label="Estoque & Suprimentos" active={activePage === 'Estoque'} onClick={() => { setActivePage('Estoque'); setIsMenuOpen(false); }} />}
                 {hasModule('Administração') && (
                   <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
                 )}
@@ -1962,66 +2674,132 @@ export default function App() {
       </AnimatePresence>
 
       {/* Filters Bar */}
-      <nav className="bg-slate-50 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-6 sticky top-[53px] md:top-[61px] z-40 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="relative group flex-1 md:flex-none">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-            <input 
-              type="text" 
-              placeholder="Buscar paciente..."
-              className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
-              value={searchPatient}
-              onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
-            />
+      <nav className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 sticky top-[53px] md:top-[61px] lg:top-0 z-40 shrink-0">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
+          <div className="flex items-center gap-2">
+            <div className="relative group flex-1 md:flex-none">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+              <input 
+                type="text" 
+                placeholder="Buscar paciente..."
+                className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
+                value={searchPatient}
+                onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 md:gap-4">
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
+                value={filterDateRange}
+                onChange={(e) => {
+                  const val = e.target.value as any;
+                  setFilterDateRange(val);
+                  if (val === 'today') {
+                    setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
+                  } else if (val === 'month') {
+                    setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+                  } else if (val === 'last_month') {
+                    const lastMonth = subMonths(new Date(), 1);
+                    setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+                    setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+                  }
+                }}
+              >
+                <option value="month">Este Mês</option>
+                <option value="last_month">Mês Passado</option>
+                <option value="today">Hoje</option>
+                <option value="custom">Customizado</option>
+              </select>
+
+              {filterDateRange === 'custom' && (
+                <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
+                  <input 
+                    type="date"
+                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                    value={filterStartDate}
+                    onChange={(e) => setFilterStartDate(e.target.value)}
+                  />
+                  <span className="text-[10px] text-slate-400">até</span>
+                  <input 
+                    type="date"
+                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                    value={filterEndDate}
+                    onChange={(e) => setFilterEndDate(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterProcedure}
+                onChange={(e) => setFilterProcedure(e.target.value)}
+              >
+                {procedures.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+              >
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 md:flex-none">
+              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
+              <select 
+                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                value={filterPayment}
+                onChange={(e) => setFilterPayment(e.target.value)}
+              >
+                {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                  value={filterDentista}
+                  onChange={(e) => setFilterDentista(e.target.value)}
+                >
+                  {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 md:gap-4">
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterProcedure}
-              onChange={(e) => setFilterProcedure(e.target.value)}
-            >
-              {procedures.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-            >
-              {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-2 flex-1 md:flex-none">
-            <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
-            <select 
-              className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-              value={filterPayment}
-              onChange={(e) => setFilterPayment(e.target.value)}
-            >
-              {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-
-          {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                value={filterDentista}
-                onChange={(e) => setFilterDentista(e.target.value)}
-              >
-                {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </div>
-          )}
+        {/* Relógio e Ícone (ao lado contrário do menu de busca no topo) */}
+        <div className="hidden lg:flex items-center gap-3 shrink-0 self-end lg:self-auto pl-4 border-l border-slate-200/60 ml-2">
+          <RealTimeClock />
+          
+          <button 
+            onClick={() => {
+              const url = window.location.origin + window.location.pathname + '?booking=true';
+              navigator.clipboard.writeText(url);
+              alert('Link de agendamento online copiado!');
+              setIsPublicBooking(true);
+            }}
+            className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
+            title="Copiar Link de Agendamento"
+          >
+            <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+          </button>
         </div>
       </nav>
 
@@ -2043,14 +2821,1001 @@ export default function App() {
       <Footer 
         onPrivacyPolicy={() => setShowPrivacyPolicy(true)} 
         onTerms={() => setShowTermsOfUse(true)} 
+        footerText={footerText}
       />
 
       {renderLegal()}
+      </div>
     </div>
   );
 }
 
-function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: string }) {
+function MessagesView({ data, patients, clinicName, db, currentUser }: { data: DentalRecord[], patients: any[], clinicName: string, db: any, currentUser: any }) {
+  const [activeSubTab, setActiveSubTab] = useState<'status' | 'templates' | 'configs'>('status');
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  
+  // Simulated chat messages thread state by record ID
+  const [chats, setChats] = useState<{[recordId: string]: any[]}>({});
+  const [isTyping, setIsTyping] = useState<{[recordId: string]: boolean}>({});
+  const [typedMessage, setTypedMessage] = useState("");
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom of chat when messages change
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chats, isTyping, selectedRecordId]);
+
+  const simulatePatientResponse = (recordId: string, userMsg: string) => {
+    // 1. Set typing status with a slight delay
+    setTimeout(() => {
+      setIsTyping(prev => ({ ...prev, [recordId]: true }));
+    }, 1000);
+
+    // 2. Clear typing and add response after 2.5s
+    setTimeout(() => {
+      setIsTyping(prev => ({ ...prev, [recordId]: false }));
+
+      const text = userMsg.toLowerCase();
+      let reply = "";
+
+      if (text.includes("bom dia") || text.includes("boa tarde") || text.includes("olá") || text.includes("ola")) {
+        reply = "Olá! Como vai? Tudo bem por aí?";
+      } else if (text.includes("confirma") || text.includes("sim") || text.includes("certo") || text.includes("ok")) {
+        reply = "Sim, está tudo confirmado! Já guardei na minha agenda.";
+      } else if (text.includes("dor") || text.includes("doendo") || text.includes("sensivel") || text.includes("sinto")) {
+        reply = "Estou sentindo um pouco de sensibilidade sim, doutor(a). Obrigado por perguntar.";
+      } else if (text.includes("atraso") || text.includes("atrasado") || text.includes("atrasar")) {
+        reply = "Sem problemas, eu compreendo! Nos vemos em instantes.";
+      } else if (text.includes("documento") || text.includes("carteira") || text.includes("rg") || text.includes("convenio")) {
+        reply = "Certo, vou levar sim! Obrigado pelo lembrete.";
+      } else {
+        const responses = [
+          "Combinado! Nos vemos no horário marcado. 👍",
+          "Muito obrigado(a) pela mensagem e pelo lembrete!",
+          "Tudo bem, anotado por aqui! Até breve.",
+          "Obrigado pelo aviso da clínica. Tenha um ótimo dia!"
+        ];
+        reply = responses[Math.floor(Math.random() * responses.length)];
+      }
+
+      const patientMsg = {
+        ids: `patient-${Date.now()}`,
+        text: reply,
+        sender: 'patient',
+        timestamp: 'Agora mesmo'
+      };
+
+      setChats(prev => {
+        const currentList = prev[recordId] || [
+          {
+            id: 'initial',
+            text: formatTemplate(templates.confirmacao, selectedRecord),
+            sender: 'clinic',
+            timestamp: 'Enviado às 08:30',
+            status: 'delivered'
+          }
+        ];
+        return {
+          ...prev,
+          [recordId]: [...currentList, patientMsg]
+        };
+      });
+
+      // If IA is active, the assistant replies shortly after!
+      if (configs.iaCoPilot) {
+        setTimeout(() => {
+          const iaMsg = {
+            id: `ia-${Date.now()}`,
+            text: `Excelente! Resposta automática recebida e computada com sucesso. Qualquer dúvida estamos à disposição! 🎉`,
+            sender: 'clinic-ia',
+            timestamp: 'Agora mesmo (Auto-resposta)'
+          };
+          setChats(prev => ({
+            ...prev,
+            [recordId]: [...(prev[recordId] || []), iaMsg]
+          }));
+        }, 1200);
+      }
+
+    }, 2800);
+  };
+
+  const handleSendClinicMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!typedMessage.trim() || !selectedRecordId || !selectedRecord) return;
+
+    const userMsgText = typedMessage.trim();
+    setTypedMessage("");
+
+    const newMsg = {
+      id: `clinic-${Date.now()}`,
+      text: userMsgText,
+      sender: 'clinic',
+      timestamp: 'Agora mesmo',
+      status: 'delivered'
+    };
+
+    setChats(prev => {
+      const currentList = prev[selectedRecordId] || [
+        {
+          id: 'initial',
+          text: formatTemplate(templates.confirmacao, selectedRecord),
+          sender: 'clinic',
+          timestamp: 'Enviado às 08:30 (Automático)',
+          status: 'delivered'
+        }
+      ];
+      return {
+        ...prev,
+        [selectedRecordId]: [...currentList, newMsg]
+      };
+    });
+
+    simulatePatientResponse(selectedRecordId, userMsgText);
+  };
+
+  // Message templates stored in state, hydrated from localStorage or defaults
+  const [templates, setTemplates] = useState({
+    confirmacao: localStorage.getItem('odonto_tpl_confirmacao') || 
+      "Olá, {paciente}! Aqui é da clínica {clinica}. Confirmamos sua consulta de {procedimento} amanhã ({data}) às {horario} com Dr(a). {dentista}. Responda SIM p/ confirmar ou NÃO p/ cancelar.",
+    retorno: localStorage.getItem('odonto_tpl_retorno') || 
+      "Olá, {paciente}! Já se passaram 6 meses desde o seu tratamento de {procedimento} na {clinica}. Recomendamos agendar um retorno preventivo para manter seu sorriso saudável! Vamos agendar?",
+    aniversario: localStorage.getItem('odonto_tpl_aniversario') || 
+      "Olá, {paciente}! 🎉 Nós da clínica {clinica} desejamos um feliz aniversário com muita saúde e motivos para sorrir! Parabéns!",
+    cobranca: localStorage.getItem('odonto_tpl_cobranca') || 
+      "Olá, {paciente}! Identificamos que há um orçamento pendente ou parcela em aberto para o procedimento {procedimento}. Entre em contato para facilitarmos as condições p/ você."
+  });
+
+  const [activeTemplateTab, setActiveTemplateTab] = useState<'confirmacao' | 'retorno' | 'aniversario' | 'cobranca'>('confirmacao');
+  const [templateText, setTemplateText] = useState(templates.confirmacao);
+
+  // Sync templates modification to localStorage
+  const handleSaveTemplate = () => {
+    localStorage.setItem(`odonto_tpl_${activeTemplateTab}`, templateText);
+    setTemplates(prev => ({ ...prev, [activeTemplateTab]: templateText }));
+    alert('Modelo de mensagem salvo com sucesso!');
+  };
+
+  useEffect(() => {
+    setTemplateText(templates[activeTemplateTab]);
+  }, [activeTemplateTab, templates]);
+
+  // Automation Settings Toggle States
+  const [configs, setConfigs] = useState({
+    autoWhatsapp: localStorage.getItem('odonto_cfg_autoWhatsapp') !== 'false',
+    autoSms: localStorage.getItem('odonto_cfg_autoSms') === 'true',
+    autoEmail: localStorage.getItem('odonto_cfg_autoEmail') !== 'false',
+    birthdayPromo: localStorage.getItem('odonto_cfg_birthdayPromo') !== 'false',
+    iaCoPilot: localStorage.getItem('odonto_cfg_iaCoPilot') !== 'false',
+    providerPhone: localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999',
+    providerName: localStorage.getItem('odonto_cfg_providerName') || 'MB.SISTEMAS',
+  });
+
+  const handleToggleConfig = (key: 'autoWhatsapp' | 'autoSms' | 'autoEmail' | 'birthdayPromo' | 'iaCoPilot') => {
+    const newVal = !configs[key];
+    setConfigs(prev => ({ ...prev, [key]: newVal }));
+    localStorage.setItem(`odonto_cfg_${String(key)}`, String(newVal));
+  };
+
+  const handleUpdateConfigString = (key: 'providerPhone' | 'providerName', value: string) => {
+    setConfigs(prev => ({ ...prev, [key]: value }));
+    localStorage.setItem(`odonto_cfg_${key}`, value);
+  };
+
+  // Only consider active/future appointments or valid records
+  const filteredAppointments = useMemo(() => {
+    return data.filter(record => record.status !== 'Realizado' && record.status !== 'Concluído')
+      .filter(record => {
+        // Guard check: Dentists can only see patients linked to them
+        if (currentUser?.role === 'Dentista') {
+          const isRecordDentist = record.dentista === currentUser.name;
+          const patient = findPatientByRobustMatch(record.paciente, patients);
+          const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+          return isRecordDentist || isPatientDentist;
+        }
+        return true;
+      })
+      .sort((a,b) => {
+        const da = a.data ? new Date(a.data).getTime() : 0;
+        const db = b.data ? new Date(b.data).getTime() : 0;
+        return da - db;
+      });
+  }, [data, currentUser, patients]);
+
+  // Set default selected record
+  useEffect(() => {
+    if (filteredAppointments.length > 0 && !selectedRecordId) {
+      setSelectedRecordId(filteredAppointments[0].id);
+    }
+  }, [filteredAppointments, selectedRecordId]);
+
+  const selectedRecord = useMemo(() => {
+    return data.find(r => r.id === selectedRecordId) || null;
+  }, [data, selectedRecordId]);
+
+  // Format Helper for printing templates
+  const formatTemplate = (text: string, record: any) => {
+    if (!record) return text;
+    const formattedDate = record.data && isValid(parseISO(record.data))
+      ? format(parseISO(record.data), "dd/MM")
+      : "N/D";
+    return text
+      .replace(/{paciente}/g, record.paciente || 'Paciente')
+      .replace(/{data}/g, formattedDate)
+      .replace(/{horario}/g, record.horario || 'Conforme agendado')
+      .replace(/{dentista}/g, record.dentista || 'Dr. Médico')
+      .replace(/{procedimento}/g, record.procedimento || 'Procedimento')
+      .replace(/{clinica}/g, clinicName);
+  };
+
+  // KPI calculations based on current data
+  const metrics = useMemo(() => {
+    const activeData = currentUser?.role === 'Dentista' ? data.filter(record => {
+      const isRecordDentist = record.dentista === currentUser.name;
+      const patient = findPatientByRobustMatch(record.paciente, patients);
+      const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+      return isRecordDentist || isPatientDentist;
+    }) : data;
+
+    const total = filteredAppointments.length;
+    // We can count records with 'confirmationStatus' === 'Confirmado' or record.status === 'Realizado' / Completed
+    const confirmed = activeData.filter(r => (r as any).confirmationStatus === 'Confirmado' || r.status === 'Realizado' || r.status === 'Concluído').length;
+    const pending = activeData.filter(r => (!(r as any).confirmationStatus || (r as any).confirmationStatus === 'Pendente') && r.status !== 'Cancelado' && r.status !== 'Realizado' && r.status !== 'Concluído').length;
+    const cancelled = activeData.filter(r => r.status === 'Cancelado' || (r as any).confirmationStatus === 'Cancelado').length;
+    return { total, confirmed, pending, cancelled };
+  }, [data, filteredAppointments, currentUser, patients]);
+
+  // Fetch or setup chat history for selected record
+  const currentChatMessages = useMemo(() => {
+    if (!selectedRecordId || !selectedRecord) return [];
+    
+    // Default messages
+    if (!chats[selectedRecordId]) {
+      const defaultMsg = formatTemplate(templates.confirmacao, selectedRecord);
+      return [
+        {
+          id: 'initial',
+          text: defaultMsg,
+          sender: 'clinic',
+          timestamp: 'Enviado às 08:30 (Automático)',
+          status: 'delivered'
+        }
+      ];
+    }
+    return chats[selectedRecordId];
+  }, [selectedRecordId, selectedRecord, chats, templates.confirmacao]);
+
+  // Trigger patient reply simulation
+  const handleSimulateResponse = async (type: 'SIM' | 'REAGENDAR' | 'NAO') => {
+    if (!selectedRecordId || !selectedRecord) return;
+
+    // 1. Set typing state
+    setIsTyping(prev => ({ ...prev, [selectedRecordId]: true }));
+
+    // Outgo/Incoming text structures
+    let patientText = "";
+    let finalConfirmationStatus = "Pendente";
+    let finalAppointmentStatus = selectedRecord.status;
+    let aiReplyText = "";
+
+    if (type === 'SIM') {
+      patientText = "Sim, está ótimo! Confirmado para amanhã. Obrigado pelo lembrete!";
+      finalConfirmationStatus = "Confirmado";
+      aiReplyText = "Excelente! Sua consulta está confirmada nos nossos sistemas. Tenha um ótimo dia e até amanhã! 👍😊";
+    } else if (type === 'REAGENDAR') {
+      patientText = "Olá, infelizmente não vou conseguir ir nesse horário. Conseguimos remarcar para sexta-feira de tarde?";
+      finalConfirmationStatus = "Reagendar";
+      aiReplyText = "Entendido! O nosso assistente inteligente entrará em contato ou você pode ligar diretamente na clínica para escolhermos o melhor horário. Muito obrigado!";
+    } else if (type === 'NAO') {
+      patientText = "Infelizmente não poderei comparecer. Favor cancelar ou remarcar para o mês que vem.";
+      finalConfirmationStatus = "Cancelado";
+      finalAppointmentStatus = "Cancelado";
+      aiReplyText = "Sentimos muito! Seu agendamento foi cancelado em nosso sistema. Deseja realizar um novo agendamento no futuro?";
+    }
+
+    // Add Simulated delay (1200ms)
+    setTimeout(async () => {
+      // 1. New dynamic messages
+      const patientMsg = {
+        id: `patient-${Date.now()}`,
+        text: patientText,
+        sender: 'patient',
+        timestamp: 'Agora mesmo'
+      };
+
+      const iaMsg = {
+        id: `ia-${Date.now() + 1}`,
+        text: aiReplyText,
+        sender: 'clinic-ia',
+        timestamp: 'Agora mesmo (Auto-resposta)'
+      };
+
+      // Set chat messages
+      setChats(prev => {
+        const currentList = prev[selectedRecordId] || [
+          {
+            id: 'initial',
+            text: formatTemplate(templates.confirmacao, selectedRecord),
+            sender: 'clinic',
+            timestamp: 'Enviado às 08:30',
+            status: 'delivered'
+          }
+        ];
+        return {
+          ...prev,
+          [selectedRecordId]: [...currentList, patientMsg]
+        };
+      });
+
+      setIsTyping(prev => ({ ...prev, [selectedRecordId]: false }));
+
+      // Trigger standard Firestore update so it updates real-time
+      try {
+        await setDoc(doc(db, 'records', selectedRecordId), {
+          status: finalAppointmentStatus,
+          confirmationStatus: finalConfirmationStatus,
+          reminderSent: true,
+          reminderSentAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.error("Erro ao registrar confirmação simulada em Firestore:", err);
+      }
+
+      // If IA activation is enabled, queue the smart response typing indicator and message
+      if (configs.iaCoPilot) {
+        setTimeout(() => {
+          setChats(prev => ({
+            ...prev,
+            [selectedRecordId]: [...(prev[selectedRecordId] || []), iaMsg]
+          }));
+        }, 1000);
+      }
+
+    }, 1200);
+  };
+
+  const currentConfirmationStatus = selectedRecord ? ((selectedRecord as any).confirmationStatus || 'Pendente') : 'Pendente';
+
+  // Internal WhatsApp proceed simulation
+  const proceedWithWhatsApp = (patient: any, record: DentalRecord) => {
+    // Guard check: Dentists can only send messages if the patient is linked to them
+    if (currentUser?.role === 'Dentista') {
+      const isRecordDentist = record.dentista === currentUser.name;
+      const isPatientDentist = patient?.dentistaResponsavel === currentUser.name;
+      if (!isRecordDentist && !isPatientDentist) {
+        alert("Acesso negado: Este paciente não está vinculado ao seu perfil.");
+        return;
+      }
+    }
+
+    const phone = patient.phone || patient.telefone || patient.celular || patient.mobile || patient.contato || '';
+    if (!phone) {
+      alert(`O paciente "${patient.name}" não tem um telefone cadastrado.\n\nPor favor, adicione seu celular.`);
+      return;
+    }
+    const timeStr = record.horario ? ` às ${record.horario}` : '';
+    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM") : "N/D";
+    const message = `Olá ${record.paciente}, confirmamos sua consulta de ${record.procedimento} para o dia ${dateFormatted}${timeStr} com ${record.dentista}. Podemos confirmar?`;
+    const encodedMessage = encodeURIComponent(message);
+    const cleanPhone = phone.toString().replace(/\D/g, '');
+    let finalPhone = cleanPhone;
+    if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+      finalPhone = `55${cleanPhone}`;
+    }
+    const whatsappUrl = `https://wa.me/${finalPhone}?text=${encodedMessage}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Indicadores KPI */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-slate-400 text-[10px] font-bold uppercase tracking-widest block">Lembretes Enviados</span>
+            <span className="text-2xl font-black text-slate-800">{metrics.total}</span>
+            <span className="text-[10px] text-slate-400 block">Agendamentos ativos</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan shrink-0">
+            <MessageSquare className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-emerald-500 text-[10px] font-bold uppercase tracking-widest block">Confirmados via IA/Paciente</span>
+            <span className="text-2xl font-black text-emerald-600">{metrics.confirmed}</span>
+            <span className="text-[10px] text-slate-400 block">Consultas garantidas</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-500 shrink-0">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-amber-500 text-[10px] font-bold uppercase tracking-widest block">Aguardando Resposta</span>
+            <span className="text-2xl font-black text-amber-600">{metrics.pending}</span>
+            <span className="text-[10px] text-slate-400 block">Confirmação pendente</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500 shrink-0">
+            <Clock className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white border border-slate-200/80 p-5 rounded-3xl shadow-sm flex items-center justify-between">
+          <div className="space-y-0.5">
+            <span className="text-rose-500 text-[10px] font-bold uppercase tracking-widest block">Cancelados / Desmarcados</span>
+            <span className="text-2xl font-black text-rose-600">{metrics.cancelled}</span>
+            <span className="text-[10px] text-slate-400 block">Vagas para encaixe</span>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 flex items-center justify-center text-rose-500 shrink-0">
+            <XCircle className="w-6 h-6" />
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs Menu */}
+      <div className="border-b border-slate-200/80 flex items-center justify-between">
+        <div className="flex gap-4">
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('status')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'status' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Central de Confirmações</span>
+            {activeSubTab === 'status' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+          
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('templates')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'templates' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Modelos de Mensagem</span>
+            {activeSubTab === 'templates' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => setActiveSubTab('configs')}
+            className={cn(
+              "pb-3.5 text-xs font-bold transition-all relative cursor-pointer select-none",
+              activeSubTab === 'configs' ? "text-brand-cyan" : "text-slate-400 hover:text-slate-600"
+            )}
+          >
+            <span>Configurações & Canais</span>
+            {activeSubTab === 'configs' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-cyan rounded-full" />}
+          </button>
+        </div>
+
+        {configs.iaCoPilot && (
+          <div className="flex items-center gap-1.5 px-3 py-1 bg-brand-cyan/10 border border-brand-cyan/20 rounded-full text-[10px] font-bold text-brand-cyan">
+            <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+            <span>Co-Pilot IA Ativo</span>
+          </div>
+        )}
+      </div>
+
+      {/* Rendering different sub-tabs */}
+      {activeSubTab === 'status' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Appointment list for confirmation */}
+          <div className="lg:col-span-7 bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Próximos Lembretes Automatizados</h3>
+              <p className="text-[10px] text-slate-400">Selecione um paciente para simular a resposta dele via WhatsApp no smartphone ao lado.</p>
+            </div>
+
+            <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
+              {filteredAppointments.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-xs">
+                  Não há novos agendamentos ativos na lista de confirmações automáticas.
+                </div>
+              ) : (
+                filteredAppointments.map(record => {
+                  const isSelected = record.id === selectedRecordId;
+                  const itemStatus = (record as any).confirmationStatus || 'Pendente';
+                  
+                  return (
+                    <div 
+                      key={record.id}
+                      onClick={() => setSelectedRecordId(record.id)}
+                      className={cn(
+                        "p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-4 text-left",
+                        isSelected 
+                          ? "bg-slate-50 border-brand-cyan/30 ring-1 ring-brand-cyan/25" 
+                          : "border-slate-100 hover:bg-slate-50/50"
+                      )}
+                    >
+                      <div className="space-y-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-slate-800 truncate">{record.paciente}</span>
+                          <span className={cn(
+                            "text-[8px] uppercase tracking-wider font-extrabold px-1.5 py-0.5 rounded-full select-none leading-none",
+                            itemStatus === 'Confirmado' ? "bg-emerald-50 text-emerald-600 border border-emerald-100" :
+                            itemStatus === 'Cancelado' ? "bg-rose-50 text-rose-600 border border-rose-100" :
+                            itemStatus === 'Reagendar' ? "bg-indigo-50 text-indigo-600 border border-indigo-100" :
+                            "bg-amber-50 text-amber-600 border border-amber-100"
+                          )}>
+                            {itemStatus}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                          <span className="font-semibold text-slate-600">{record.procedimento}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>{record.data ? format(parseISO(record.data), "dd/MM/yyyy") : 'N/D'} às {record.horario || 'N/D'}</span>
+                          <span className="text-slate-300">•</span>
+                          <span>Dr(a). {record.dentista}</span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const patient = findPatientByRobustMatch(record.paciente, patients);
+                            if (patient) proceedWithWhatsApp(patient, record);
+                            else alert(`Lembrete disparado para o canal WhatsApp. Aguardando processamento...`);
+                          }}
+                          className="p-1.5 bg-slate-50 hover:bg-emerald-50 border border-slate-200 rounded-lg text-emerald-500 hover:text-emerald-600 transition-all cursor-pointer"
+                          title="Enviar Mensagem Manual via Web WhatsApp"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {/* Sandbox Interactive Mobile Preview */}
+          <div className="lg:col-span-5 flex flex-col gap-4">
+            {selectedRecord ? (
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800">Simulador de WhatsApp IA</h4>
+                    <p className="text-[9px] text-slate-400">Envie respostas simuladas por parte do paciente.</p>
+                  </div>
+                  <div className="flex items-center gap-1 text-slate-400 shrink-0">
+                    <Smartphone className="w-4 h-4 text-slate-400" />
+                    <span className="text-[10px] font-bold">Smartphone Mock</span>
+                  </div>
+                </div>
+
+                {/* Smartphone Box container */}
+                <div className="border border-slate-300 rounded-3xl overflow-hidden shadow-lg bg-[#e5ddd5] flex flex-col h-[420px] relative">
+                  {/* Whatsapp Client Header */}
+                  <div className="bg-[#075e54] text-white px-3 py-2 flex items-center justify-between shrink-0 select-none border-b border-black/5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-full bg-slate-300 text-[10px] font-bold text-slate-700 uppercase flex items-center justify-center shrink-0 border border-white/20 font-sans">
+                        {selectedRecord.paciente?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+                      </div>
+                      <div className="flex flex-col min-w-0 text-left">
+                        <span className="text-xs font-bold truncate leading-tight block">{selectedRecord.paciente}</span>
+                        <span className="text-[8px] text-emerald-200 leading-normal block font-medium">
+                          {isTyping[selectedRecordId!] ? "digitando..." : "online"}
+                        </span>
+                      </div>
+                    </div>
+                    {configs.iaCoPilot && (
+                      <div className="px-1.5 py-0.5 bg-emerald-400/20 rounded border border-emerald-400/30 text-[7px] tracking-wider uppercase font-extrabold text-emerald-200 animate-pulse leading-none">
+                        Co-Pilot Ativo
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Messages Area */}
+                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-2 flex flex-col justify-start">
+                    <div className="self-center bg-white/80 text-[8px] text-slate-500 font-bold px-2 py-0.5 rounded-md uppercase tracking-wider mb-2 select-none border border-black/5 font-sans">
+                      Hoje
+                    </div>
+
+                    {/* Provedor Homologado Info Box */}
+                    <div className="self-center bg-amber-50/95 text-[8px] text-amber-800 font-medium px-3 py-1.5 rounded-lg text-center leading-tight mb-2 max-w-[90%] border border-amber-200/40 shadow-xs font-sans select-none">
+                      🔒 Esta conversa ocorre através do seu provedor homologado
+                      <strong className="block mt-0.5 text-amber-950">{configs.providerName} ({configs.providerPhone})</strong>
+                    </div>
+
+                    {currentChatMessages.map((msg: any) => {
+                      const isClinic = msg.sender === 'clinic' || msg.sender === 'clinic-ia';
+                      return (
+                        <div 
+                          key={msg.id || msg.ids}
+                          className={cn(
+                            "max-w-[85%] rounded-xl px-2.5 py-1.5 text-[11px] leading-snug relative shadow-sm text-left font-sans animate-in fade-in slide-in-from-bottom-1 duration-150",
+                            isClinic 
+                              ? "self-end bg-[#dcf8c6] text-slate-800" 
+                              : "self-start bg-white text-slate-800"
+                          )}
+                        >
+                          {isClinic && (
+                            <span className="text-[7px] text-[#075e54] font-extrabold block mb-1 select-none tracking-wide uppercase border-b border-[#075e54]/10 pb-0.5">
+                              {configs.providerName} ({configs.providerPhone})
+                            </span>
+                          )}
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                          <div className="flex items-center justify-end gap-1 mt-1 select-none">
+                            <span className="text-[8px] text-slate-400 font-medium block text-right leading-none">
+                              {msg.timestamp}
+                            </span>
+                            {isClinic && <Check className="w-3 h-3 text-sky-500 shrink-0" />}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {isTyping[selectedRecordId!] && (
+                      <div className="self-start bg-white max-w-[85%] rounded-xl px-3 py-2 text-[11px] leading-snug shadow-sm flex items-center gap-1 text-slate-400 font-sans">
+                        <span className="animate-bounce">●</span>
+                        <span className="animate-bounce delay-75">●</span>
+                        <span className="animate-bounce delay-150">●</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Real interactive footer input */}
+                  <form onSubmit={handleSendClinicMessage} className="bg-[#f0f0f0] border-t border-slate-200 p-2 flex items-center gap-2 shrink-0">
+                    <div className="flex-1 bg-white rounded-full px-3 py-1.5 flex items-center gap-2 border border-slate-200 shadow-sm">
+                      <input 
+                        type="text"
+                        placeholder="Digite uma mensagem real..."
+                        value={typedMessage}
+                        onChange={(e) => setTypedMessage(e.target.value)}
+                        className="flex-1 bg-transparent text-xs text-slate-800 focus:outline-none placeholder-slate-400 font-sans"
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      className="w-8 h-8 rounded-full bg-[#128c7e] text-white flex items-center justify-center hover:bg-[#075e54] transition-all cursor-pointer shrink-0 shadow-sm hover:scale-105 active:scale-95"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </form>
+                </div>
+
+                {/* Simulated trigger actions */}
+                <div className="space-y-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[9px] font-extrabold text-slate-400 block uppercase tracking-wide text-left">Simular Ação do Paciente</span>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('SIM')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Confirmado'}
+                      className={cn(
+                        "py-2 bg-emerald-50 border border-emerald-100 hover:bg-emerald-100 text-emerald-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Confirmado' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Responder SIM</span>
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('REAGENDAR')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Reagendar'}
+                      className={cn(
+                        "py-2 bg-indigo-50 border border-indigo-100 hover:bg-indigo-100 text-indigo-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Reagendar' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Pedir Reagenda</span>
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => handleSimulateResponse('NAO')}
+                      disabled={isTyping[selectedRecordId!] || currentConfirmationStatus === 'Cancelado'}
+                      className={cn(
+                        "py-2 bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-1 cursor-pointer",
+                        currentConfirmationStatus === 'Cancelado' && "opacity-50 cursor-not-allowed"
+                      )}
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Responder NÃO</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-8 shadow-sm flex flex-col items-center justify-center text-center h-[400px]">
+                <Smartphone className="w-12 h-12 text-slate-200 mb-3" />
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block">Nenhum Paciente Selecionado</span>
+                <p className="text-[10px] text-slate-400 mt-1 max-w-[200px]">Selecione um paciente na lista ao lado para abrir o simulador de mensagens instantâneas.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'templates' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Editor block */}
+          <div className="lg:col-span-8 bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Gerenciador de Modelos Acadêmicos</h3>
+              <p className="text-[10px] text-slate-400">Personalize os textos padrões das mensagens. Use as tags na caixa para puxar dados inteligentes.</p>
+            </div>
+
+            {/* Template select tabs */}
+            <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-3">
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('confirmacao')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'confirmacao' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Confirmação de Consulta
+              </button>
+              
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('retorno')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'retorno' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Lembrete de Retorno (6M)
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('aniversario')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'aniversario' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Parabéns de Aniversário
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => setActiveTemplateTab('cobranca')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative border cursor-pointer select-none",
+                  activeTemplateTab === 'cobranca' 
+                    ? "bg-brand-cyan/10 border-brand-cyan/25 text-brand-cyan font-bold" 
+                    : "border-transparent text-slate-500 hover:bg-slate-50"
+                )}
+              >
+                Cobrança de Orçamento
+              </button>
+            </div>
+
+            {/* Textarea fields and helper variable tags */}
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider text-left">Texto do Modelo</label>
+              <textarea 
+                rows={5}
+                className="w-full text-xs font-sans tracking-wide leading-relaxed border border-slate-200 rounded-xl p-3 shadow-inner focus:ring-1 focus:ring-brand-cyan outline-none resize-none"
+                value={templateText}
+                onChange={(e) => setTemplateText(e.target.value)}
+              />
+
+              {/* Tag Injectors Helper Box */}
+              <div className="space-y-1.5 text-left">
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Atalhos de Chaves Inteligentes</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { tag: '{paciente}', label: 'Nome do Paciente' },
+                    { tag: '{data}', label: 'Dia da Consulta' },
+                    { tag: '{horario}', label: 'Horário do Lembrete' },
+                    { tag: '{dentista}', label: 'Dr(a). da Consulta' },
+                    { tag: '{procedimento}', label: 'Procedimento' },
+                    { tag: '{clinica}', label: 'Nome de Fantasia' }
+                  ].map(item => (
+                    <button 
+                      type="button"
+                      key={item.tag}
+                      onClick={() => setTemplateText(prev => prev + item.tag)}
+                      className="px-2 py-1 bg-slate-50 hover:bg-slate-100 border border-slate-200/60 rounded text-[10px] font-mono text-slate-600 transition-all cursor-pointer select-none"
+                      title={`Inserir ${item.label}`}
+                    >
+                      {item.tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button 
+                type="button"
+                onClick={handleSaveTemplate}
+                className="px-4 py-2 bg-brand-cyan hover:bg-brand-cyan/90 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Salvar Alterações</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Side preview card */}
+          <div className="lg:col-span-4 space-y-4">
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm space-y-4 text-left">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-2.5">
+                <Smartphone className="w-4.5 h-4.5 text-brand-cyan" />
+                <span className="text-xs font-bold text-slate-800">Visualização de Amostra</span>
+              </div>
+              <div className="bg-[#e5ddd5] p-3 rounded-2xl min-h-[150px] flex flex-col justify-center border border-slate-200">
+                <div className="self-end max-w-[90%] bg-[#dcf8c6] rounded-xl px-2.5 py-1.5 text-[10px] leading-snug shadow-sm">
+                  <p className="whitespace-pre-wrap">
+                    {formatTemplate(templateText, selectedRecord || (filteredAppointments[0] || null))}
+                  </p>
+                  <span className="text-[8px] text-slate-400 block text-right mt-1 select-none">Agora</span>
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400">Assim é como o cliente receberá a mensagem pelo canal automatizado selecionado (WhatsApp/SMS).</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'configs' && (
+        <div className="max-w-2xl bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm space-y-6 text-left">
+          <div>
+            <h3 className="text-sm font-bold text-slate-800">Canais de Confirmação & Assistência Inteligente</h3>
+            <p className="text-[10px] text-slate-400">Habilite, configure e audite disparos automatizados de confirmação odontológica.</p>
+          </div>
+
+          <div className="space-y-4">
+            {/* Setting Item 1 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <MessageCircle className="w-4 h-4 text-emerald-500" />
+                  <span className="text-xs font-bold text-slate-700">Automação de WhatsApp Co-Pilot</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Dispara lembretes de consultas 24 horas antes do horário marcado coletando dados inteligentes dos agendamentos.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoWhatsapp')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoWhatsapp ? "bg-emerald-500 border-emerald-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 2 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <Bot className="w-4 h-4 text-brand-cyan" />
+                  <span className="text-xs font-bold text-slate-700">Assistente IA de Confirmação</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Permite que a inteligência artificial interprete respostas complexas ("não poderei ir", "posso sim", "quero mudar de dia") e atualize faturamentos e calendários sem necessidade de intervenção humana.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('iaCoPilot')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.iaCoPilot ? "bg-brand-cyan border-brand-cyan flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 3 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4 text-indigo-500" />
+                  <span className="text-xs font-bold text-slate-700">Automação de Backup via SMS Torpedo</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Ativa o envio de SMS tradicional automático se o cliente não responder ao WhatsApp em até 4 horas.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoSms')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoSms ? "bg-indigo-500 border-indigo-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Setting Item 4 */}
+            <div className="flex items-start justify-between p-4 border border-slate-100 rounded-2xl hover:bg-slate-50/40 transition-all gap-4">
+              <div className="space-y-1 pr-4">
+                <div className="flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-yellow-500" />
+                  <span className="text-xs font-bold text-slate-700">Notificações e Lembretes de E-mail</span>
+                </div>
+                <p className="text-[10px] text-slate-400">Envia lembretes por e-mail com botões inteligentes p/ confirmação instantânea direto do provedor configurado.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => handleToggleConfig('autoEmail')}
+                className={cn(
+                  "w-11 h-6 rounded-full p-0.5 transition-all outline-none border cursor-pointer shrink-0 mt-0.5",
+                  configs.autoEmail ? "bg-yellow-500 border-yellow-600 flex justify-end" : "bg-slate-100 border-slate-200 flex justify-start"
+                )}
+              >
+                <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
+              </button>
+            </div>
+
+            {/* Provedor Homologado Integrador Section */}
+            <div className="border-t border-slate-100 pt-5 mt-5 space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  Conexão com Provedor de Mensagens (MB.SISTEMAS)
+                </h4>
+                <p className="text-[10px] text-slate-400 mt-1">Configure o seu número de contato oficial e nome da sua marca de tecnologia. Essas informações serão mostradas na tela de recebimento do seu cliente final no simulador.</p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 uppercase">Seu Número de WhatsApp Provedor</label>
+                  <input 
+                    type="text"
+                    value={configs.providerPhone}
+                    onChange={(e) => handleUpdateConfigString('providerPhone', e.target.value)}
+                    placeholder="Ex: +55 (47) 99347-1234"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-medium focus:border-brand-cyan focus:outline-none transition-all placeholder:text-slate-300 font-sans"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 uppercase">Nome / Marca do Provedor</label>
+                  <input 
+                    type="text"
+                    value={configs.providerName}
+                    onChange={(e) => handleUpdateConfigString('providerName', e.target.value)}
+                    placeholder="Ex: MB.SISTEMAS"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-medium focus:border-brand-cyan focus:outline-none transition-all placeholder:text-slate-300 font-sans"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-50/50 border border-emerald-100/50 rounded-2xl flex items-start gap-2.5">
+                <span className="text-[14px]">📱</span>
+                <p className="text-[9.5px] text-emerald-800 leading-relaxed font-medium">
+                  <strong>Simulação com Provedor Ativa:</strong> Toda mensagem enviada por esta central de disparo exibirá como remetente oficial a marca <strong className="text-emerald-900">{configs.providerName || 'MB.SISTEMAS'}</strong> de número <strong className="text-emerald-950">{configs.providerPhone || '+55 (47) 99999-9999'}</strong>, oferecendo total credibilidade visual e profissionalismo para demonstrações de venda reais!
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecallView({ data, clinicName, patients }: { data: DentalRecord[], clinicName: string, patients: any[] }) {
   const recallList = useMemo(() => {
     const lastVisits: { [key: string]: string } = {};
     data.forEach(r => {
@@ -2094,39 +3859,59 @@ function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: st
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {recallList.map((p) => (
-          <div key={p.name} className="bg-white border border-slate-200 p-5 rounded-2xl hover:shadow-md transition-all group">
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-500 transition-colors">
-                <User className="w-5 h-5" />
+        {recallList.map((p) => {
+          // Resolve patient's actual phone number
+          const patObj = patients?.find(pat => pat.name && pat.name.trim().toLowerCase() === p.name.trim().toLowerCase());
+          const rawPhone = patObj?.phone || patObj?.telefone || patObj?.celular || patObj?.mobile || '';
+          
+          return (
+            <div key={p.name} className="bg-white border border-slate-200 p-5 rounded-2xl hover:shadow-md transition-all group text-left">
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-500 transition-colors">
+                  <User className="w-5 h-5" />
+                </div>
+                <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-2 py-1 rounded-full">
+                  {p.monthsAway} meses ausente
+                </span>
               </div>
-              <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-2 py-1 rounded-full">
-                {p.monthsAway} meses ausente
-              </span>
+              <h3 className="font-bold text-slate-800 mb-1">{p.name}</h3>
+              <p className="text-[10px] text-slate-400 uppercase font-mono mb-4">
+                Última consulta: {p.lastDate && isValid(parseISO(p.lastDate)) ? format(parseISO(p.lastDate), 'dd/MM/yyyy') : 'N/D'}
+              </p>
+              {rawPhone && (
+                <p className="text-[10px] text-slate-500 font-mono mb-4 flex items-center gap-1">
+                  📞 {rawPhone}
+                </p>
+              )}
+              
+              <button 
+                onClick={() => {
+                  const cleanPhone = rawPhone.replace(/\D/g, '');
+                  let finalPhone = cleanPhone;
+                  if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+                    finalPhone = '55' + cleanPhone;
+                  }
+                  if (!finalPhone) {
+                    alert(`O paciente "${p.name}" não possui um número de telefone registrado no cadastro geral.`);
+                    return;
+                  }
+                  const msg = encodeURIComponent(`Olá ${p.name}, aqui é da ${clinicName}! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
+                  window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
+                }}
+                className="w-full py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-600 transition-colors cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Chamar no WhatsApp
+              </button>
             </div>
-            <h3 className="font-bold text-slate-800 mb-1">{p.name}</h3>
-            <p className="text-[10px] text-slate-400 uppercase font-mono mb-4">
-              Última consulta: {p.lastDate && isValid(parseISO(p.lastDate)) ? format(parseISO(p.lastDate), 'dd/MM/yyyy') : 'N/D'}
-            </p>
-            
-            <button 
-              onClick={() => {
-                const msg = encodeURIComponent(`Olá ${p.name}, aqui é da ${clinicName}! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
-                window.open(`https://wa.me/5511999999999?text=${msg}`, '_blank');
-              }}
-              className="w-full py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-600 transition-colors"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Chamar no WhatsApp
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function DocumentsView({ data, users, currentUser, clinicName }: { data: DentalRecord[], users: any[], currentUser: any, clinicName: string }) {
+function DocumentsView({ data, users, currentUser, clinicName, clinicLogo, footerText }: { data: DentalRecord[], users: any[], currentUser: any, clinicName: string, clinicLogo: string | null, footerText: string }) {
   const [docType, setDocType] = useState<'Receita' | 'Atestado'>('Receita');
   const [selectedPatient, setSelectedPatient] = useState('');
   const [content, setContent] = useState('');
@@ -2212,11 +3997,16 @@ function DocumentsView({ data, users, currentUser, clinicName }: { data: DentalR
           !isGenerated ? "opacity-20 blur-sm scale-95 pointer-events-none" : "opacity-100 blur-0 scale-100"
         )}>
           {/* Document Header */}
-          <div className="text-center border-b-2 border-slate-100 pb-6 mb-8">
+          <div className="text-center border-b-2 border-slate-100 pb-6 mb-8 flex flex-col items-center">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain mb-2" />
+            ) : (
+              <Stethoscope className="w-8 h-8 text-brand-cyan mb-2" />
+            )}
             <h1 className="text-xl font-bold text-slate-800 uppercase tracking-tighter">
               {docType === 'Receita' ? 'Receituário Odontológico' : 'Atestado de Comparecimento'}
             </h1>
-            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">{clinicName} • CRO-SP 123456</p>
+            <p className="text-[9px] text-slate-400 font-mono mt-1 uppercase">{footerText}</p>
           </div>
 
           {/* Document Body */}
@@ -2289,12 +4079,34 @@ function MobileNavItem({ icon, label, active = false, onClick }: { icon: React.R
   );
 }
 
+function SidebarNavItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs font-bold border cursor-pointer select-none text-left",
+        active 
+          ? "bg-brand-cyan/20 border-brand-cyan/35 text-white font-bold shadow-sm" 
+          : "border-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
+      )}
+    >
+      <div className={cn(
+        "transition-transform duration-200 shrink-0",
+        active ? "scale-105 text-brand-cyan" : "hover:scale-105 text-slate-400"
+      )}>
+        {icon}
+      </div>
+      <span className="truncate tracking-wide">{label}</span>
+    </button>
+  );
+}
+
 function RibbonItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "flex flex-col items-center justify-center px-4 py-2 gap-1 border-b-2 transition-all group min-w-[80px] cursor-pointer",
+        "flex flex-col items-center justify-center px-1.5 py-1 gap-0.5 border-b-2 transition-all group min-w-[62px] md:min-w-[70px] cursor-pointer",
         active 
           ? "border-brand-cyan bg-cyan-50/30 text-brand-cyan" 
           : "border-transparent text-slate-400 hover:text-slate-600 hover:bg-slate-50"
@@ -2302,32 +4114,37 @@ function RibbonItem({ icon, label, active = false, onClick }: { icon: React.Reac
     >
       <div className={cn(
         "transition-transform duration-200",
-        active ? "scale-110" : "group-hover:scale-110"
+        active ? "scale-105" : "group-hover:scale-105"
       )}>
         {icon}
       </div>
-      <span className="text-[9px] uppercase font-bold tracking-widest">{label}</span>
+      <span className="text-[8.5px] md:text-[9px] uppercase font-bold tracking-wider leading-none">{label}</span>
     </button>
   );
 }
 
 function DashboardView({ 
   filteredData,
+  upcomingAppointments = [],
   onSendWhatsApp,
   onSendReminder,
   canSeeFinancials = true
 }: { 
   filteredData: DentalRecord[];
+  upcomingAppointments?: DentalRecord[];
   onSendWhatsApp: (record: DentalRecord) => void;
   onSendReminder: (record: DentalRecord) => void;
   canSeeFinancials?: boolean;
 }) {
   // Metrics
   const metrics = useMemo(() => {
-    const totalValue = filteredData.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
-    const uniquePatients = new Set(filteredData.map(r => r.paciente)).size;
-    const realized = filteredData.filter(r => r.status === 'Realizado').length;
-    const scheduled = filteredData.filter(r => r.status === 'Agendado').length;
+    const activeRecords = filteredData.filter(r => r.status !== 'Cancelado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    
+    const totalValue = realizedRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const uniquePatients = new Set(realizedRecords.map(r => r.paciente).filter(Boolean)).size;
+    const realized = realizedRecords.length;
+    const scheduled = activeRecords.filter(r => r.status === 'Agendado').length;
     
     const ticketMedio = uniquePatients > 0 ? totalValue / uniquePatients : 0;
     const taxaConversao = (realized + scheduled) > 0 ? realized / (realized + scheduled) : 0;
@@ -2338,17 +4155,18 @@ function DashboardView({
       ticketMedio,
       taxaConversao,
       realized,
-      pending: filteredData.filter(r => r.status === 'Pendente').length
+      pending: activeRecords.filter(r => r.status === 'Pendente').length
     };
   }, [filteredData]);
 
   // Chart Data: Monthly Billing
   const monthlyData = useMemo(() => {
     const months: { [key: string]: number } = {};
-    filteredData.slice(0).reverse().forEach(r => {
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.slice(0).reverse().forEach(r => {
       if (r.data && isValid(parseISO(r.data))) {
         const month = format(parseISO(r.data), 'MMM', { locale: ptBR });
-        months[month] = (months[month] || 0) + r.valor;
+        months[month] = (months[month] || 0) + (Number(r.valor) || 0);
       }
     });
     return Object.entries(months).map(([name, value]) => ({ name, value }));
@@ -2357,30 +4175,37 @@ function DashboardView({
   // Chart Data: Productivity by Dentist
   const dentistProductivity = useMemo(() => {
     const dentists: { [key: string]: number } = {};
-    filteredData.forEach(r => {
-      dentists[r.dentista] = (dentists[r.dentista] || 0) + r.valor;
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.forEach(r => {
+      const dentista = r.dentista || 'Não definido';
+      dentists[dentista] = (dentists[dentista] || 0) + (Number(r.valor) || 0);
     });
     return Object.entries(dentists).map(([name, value]) => ({ name, value }));
   }, [filteredData]);
 
+  const getFriendlyDate = (dateStr: string) => {
+    if (!dateStr || !isValid(parseISO(dateStr))) return '';
+    const parsed = parseISO(dateStr);
+    if (isToday(parsed)) {
+      return 'Hoje';
+    }
+    const tomorrow = addDays(new Date(), 1);
+    const parsedDateStr = format(parsed, 'yyyy-MM-dd');
+    const tomorrowDateStr = format(tomorrow, 'yyyy-MM-dd');
+    if (parsedDateStr === tomorrowDateStr) {
+      return 'Amanhã';
+    }
+    return format(parsed, 'dd/MM');
+  };
+
   // Chart Data: Procedure Distribution
   const procedureDistribution = useMemo(() => {
     const counts: { [key: string]: number } = {};
-    filteredData.forEach(r => {
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    realizedRecords.forEach(r => {
       counts[r.procedimento] = (counts[r.procedimento] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [filteredData]);
-
-  // Upcoming appointments (simulated from filteredData based on status 'Agendado' and date)
-  const upcomingAppointments = useMemo(() => {
-    return filteredData
-      .filter(r => (r.status === 'Agendado' || r.status === 'Pendente') && r.data && isValid(parseISO(r.data)) && isToday(parseISO(r.data)))
-      .sort((a, b) => {
-        const dateA = parseISO(a.data);
-        const dateB = parseISO(b.data);
-        return dateA.getTime() - dateB.getTime();
-      });
   }, [filteredData]);
 
   const COLORS = ['#0ea5e9', '#6366f1', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6'];
@@ -2409,9 +4234,9 @@ function DashboardView({
         ) : (
           <>
             <MetricCard 
-              label="Agendamentos Hoje" 
+              label="Agendamentos Próximos" 
               value={upcomingAppointments.length.toString()} 
-              description="Pacientes marcados para hoje"
+              description="Pacientes com consulta marcada"
               trend={5.2}
               icon={<Calendar className="w-4 h-4" />}
             />
@@ -2451,49 +4276,52 @@ function DashboardView({
                 Agendamentos Próximos
               </h2>
             </div>
-            <span className="text-[10px] font-black bg-brand-cyan/10 text-brand-cyan px-2 py-0.5 rounded-full uppercase">Hoje</span>
+            <span className="text-[10px] font-black bg-brand-cyan/10 text-brand-cyan px-2 py-0.5 rounded-full uppercase">Próximos</span>
           </div>
           <div className="flex-1 overflow-y-auto">
             {upcomingAppointments.length > 0 ? (
               <div className="divide-y divide-slate-100">
-                {upcomingAppointments.map((record) => (
-                  <div key={record.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-2xl bg-brand-cyan/5 flex items-center justify-center text-brand-cyan font-black text-xs">
-                        {record.paciente.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-slate-900 leading-tight">{record.paciente}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] font-black text-brand-cyan uppercase font-mono tracking-wider">
-                          {record.horario || '--:--'}
-                        </span>
-                          <span className="text-slate-300">•</span>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate max-w-[120px]">{record.procedimento}</span>
+                {upcomingAppointments.map((record) => {
+                  const friendlyDate = getFriendlyDate(record.data);
+                  return (
+                    <div key={record.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-brand-cyan/5 flex items-center justify-center text-brand-cyan font-black text-xs shrink-0">
+                          {record.paciente.charAt(0)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 leading-tight truncate">{record.paciente}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[9px] font-black text-brand-cyan uppercase font-mono tracking-wider bg-brand-cyan/5 px-1.5 py-0.5 rounded">
+                              {friendlyDate} {record.horario || '--:--'}
+                            </span>
+                            <span className="text-slate-300 font-bold">•</span>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate max-w-[130px]" title={record.procedimento}>{record.procedimento}</span>
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-1 opacity-10 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => onSendWhatsApp(record)}
+                          className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors cursor-pointer"
+                          title="Enviar WhatsApp"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => onSendWhatsApp(record)}
-                        className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors"
-                        title="Enviar WhatsApp"
-                      >
-                        <MessageCircle className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full py-12 text-center opacity-40">
                 <Calendar className="w-12 h-12 mb-4 text-slate-300" />
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Sem agendamentos para hoje.</p>
+                <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Sem agendamentos próximos.</p>
               </div>
             )}
           </div>
           <div className="p-3 bg-slate-50 border-t border-slate-200">
-            <button className="w-full py-2 bg-white border border-slate-200 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest hover:border-brand-cyan hover:text-brand-cyan transition-all">
+            <button className="w-full py-2 bg-white border border-slate-200 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest hover:border-brand-cyan hover:text-brand-cyan transition-all cursor-pointer">
               Ver Agenda Completa
             </button>
           </div>
@@ -2678,17 +4506,23 @@ function PatientsView({
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 7;
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const itemsPerPage = viewMode === 'list' ? 8 : 12;
 
   const canDelete = currentUserRole?.toLowerCase() === 'admin' || currentUserRole?.toLowerCase() === 'dentista';
 
   const allPatients = useMemo(() => {
-    return patients.map(pat => {
-      const patientRecords = data.filter(r => r.paciente === pat.name);
+    return (patients || []).filter(p => p && typeof p === 'object').map(pat => {
+      const patientName = pat.name || 'Paciente Sem Nome';
+      const patientRecords = (data || []).filter(r => r && r.paciente === patientName);
       const totalSpent = patientRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
       const sortedByDate = [...patientRecords]
-        .filter(r => r.data && isValid(parseISO(r.data)))
-        .sort((a,b) => parseISO(b.data).getTime() - parseISO(a.data).getTime());
+        .filter(r => r && r.data && isValid(parseISO(r.data)))
+        .sort((a,b) => {
+          try {
+            return parseISO(b.data).getTime() - parseISO(a.data).getTime();
+          } catch(e) { return 0; }
+        });
 
       const lastVisit = sortedByDate.length > 0 
         ? sortedByDate[0].data 
@@ -2696,10 +4530,10 @@ function PatientsView({
       
       return {
         id: pat.id,
-        name: pat.name,
+        name: patientName,
         lastVisit,
         totalSpent,
-        procedures: patientRecords.length,
+        proceduresCount: patientRecords.length,
         ...pat
       };
     });
@@ -2707,230 +4541,329 @@ function PatientsView({
 
   const filteredPatients = useMemo(() => {
     return allPatients
-      .filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .filter(p => 
+        (p.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+        (p.cpf || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+        (p.email || '').toLowerCase().includes((searchTerm || '').toLowerCase())
+      )
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [allPatients, searchTerm]);
 
   const stats = useMemo(() => {
+    const now = new Date();
+    const sixMonthsAgo = now.getTime() - 6 * 30 * 24 * 60 * 60 * 1000;
+    const monthStart = startOfMonth(now);
+    
     return {
       total: allPatients.length,
-      active: allPatients.filter(p => p.lastVisit && isValid(parseISO(p.lastVisit)) && parseISO(p.lastVisit).getTime() > Date.now() - 6 * 30 * 24 * 60 * 60 * 1000).length,
-      newThisMonth: allPatients.filter(p => isWithinInterval(parseISO(p.createdAt || new Date().toISOString()), {
-        start: startOfMonth(new Date()),
-        end: new Date()
-      })).length
+      active: allPatients.filter(p => {
+        if (!p.lastVisit) return false;
+        const d = parseISO(p.lastVisit);
+        return isValid(d) && d.getTime() > sixMonthsAgo;
+      }).length,
+      newThisMonth: allPatients.filter(p => {
+        const d = parseISO(p.createdAt || p.dataCadastro || new Date().toISOString());
+        if (!isValid(d)) return false;
+        try {
+          return isWithinInterval(d, { start: monthStart, end: now });
+        } catch (e) {
+          return false;
+        }
+      }).length
     };
   }, [allPatients]);
 
-  // Reset pagination when search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, viewMode]);
 
   const totalPages = Math.ceil(filteredPatients.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const currentPatients = filteredPatients.slice(startIndex, startIndex + itemsPerPage);
 
+  const getAvatarColor = (name: string) => {
+    const colors = ['bg-blue-500', 'bg-purple-500', 'bg-emerald-500', 'bg-amber-500', 'bg-brand-cyan', 'bg-rose-500'];
+    const index = name.length % colors.length;
+    return colors[index];
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Search and Action Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="flex items-center gap-4 flex-1 max-w-2xl">
-          <div className="relative flex-1">
-            <Search className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-            <input 
-              type="text"
-              placeholder="Pesquisar por nome ou CPF..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 bg-white border border-slate-200 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan outline-none rounded-2xl transition-all shadow-sm"
-            />
+      {/* Header & Stats Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-black text-slate-800 tracking-tight">Pacientes</h1>
+          <p className="text-sm text-slate-400 font-medium italic">Gestão completa e acompanhamento clínico</p>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="flex bg-white p-1 border border-slate-200 rounded-2xl shadow-sm">
+            <button 
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "p-2 rounded-xl transition-all",
+                viewMode === 'list' ? "bg-slate-900 text-white shadow-md" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              <LayoutList className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => setViewMode('grid')}
+              className={cn(
+                "p-2 rounded-xl transition-all",
+                viewMode === 'grid' ? "bg-slate-900 text-white shadow-md" : "text-slate-400 hover:text-slate-600"
+              )}
+            >
+              <Grid className="w-4 h-4" />
+            </button>
           </div>
-          <button className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-500 hover:text-brand-cyan transition-colors shadow-sm">
-            <Filter className="w-5 h-5" />
+          <button 
+            onClick={onAdd}
+            className="flex items-center gap-2 bg-brand-cyan text-white px-6 py-3 font-bold text-[10px] uppercase tracking-widest rounded-2xl cursor-pointer hover:bg-slate-900 transition-all shadow-lg shadow-brand-cyan/20 active:scale-95"
+          >
+            <UserPlus className="w-4 h-4" />
+            Novo Paciente
           </button>
         </div>
-
-        <button 
-          onClick={onAdd}
-          className="flex items-center gap-2 bg-brand-cyan text-white px-6 py-3 font-semibold text-xs uppercase tracking-widest rounded-2xl cursor-pointer hover:bg-slate-900 transition-all shadow-lg shadow-brand-cyan/20 active:scale-95"
-        >
-          <UserPlus className="w-4 h-4" />
-          Adicionar Paciente
-        </button>
       </div>
 
-      {/* Quick Stats Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      {/* Modern Stats Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: 'Total de Pacientes', value: stats.total, icon: Users, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5' },
-          { label: 'Pacientes Ativos', value: stats.active, icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-          { label: 'Novos este mês', value: stats.newThisMonth, icon: UserPlus, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5' }
+          { label: 'Total cadastrados', value: stats.total, icon: Users, color: 'text-brand-cyan', bg: 'bg-brand-cyan/5', trend: '+12% este mês' },
+          { label: 'Em tratamento', value: stats.active, icon: Activity, color: 'text-amber-500', bg: 'bg-amber-50', trend: 'Ativos' },
+          { label: 'Novos registros', value: stats.newThisMonth, icon: Heart, color: 'text-rose-500', bg: 'bg-rose-50', trend: 'Meta: 80%' }
         ].map((stat, i) => (
-          <div key={i} className="bg-white p-5 rounded-[28px] border border-slate-100 shadow-sm flex items-center gap-4">
-            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", stat.bg)}>
-              <stat.icon className={cn("w-5 h-5", stat.color)} />
+          <div key={i} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden group hover:shadow-md transition-all">
+            <div className="flex justify-between items-start mb-3">
+              <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", stat.bg)}>
+                <stat.icon className={cn("w-5 h-5", stat.color)} />
+              </div>
+              <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tight">{stat.trend}</span>
             </div>
             <div>
-              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">{stat.label}</p>
-              <p className="text-xl font-bold text-slate-800">{stat.value}</p>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">{stat.label}</p>
+              <p className="text-2xl font-bold text-slate-800">{stat.value}</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Main Content: Patient Grid/List */}
-      <div className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead className="bg-slate-50/50 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-              <tr>
-                <th className="px-8 py-5">Identificação</th>
-                <th className="px-6 py-5">Última Visita</th>
-                <th className="px-6 py-5 text-center">Consultas</th>
-                {canSeeFinancials && <th className="px-6 py-5 text-right">Investimento</th>}
-                <th className="px-8 py-5 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {currentPatients.length > 0 ? (
-                currentPatients.map((p) => (
-                  <tr key={p.id} className="group hover:bg-slate-50/80 transition-colors">
-                    <td className="px-8 py-5">
-                      <div className="flex items-center gap-4">
-                        <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 font-semibold text-sm border-2 border-white shadow-sm ring-1 ring-slate-100">
-                          {p.name.charAt(0)}
-                        </div>
-                        <div className="flex flex-col">
-                          <button 
-                            onClick={() => onViewDetail(p)}
-                            className="text-left group/name hover:text-brand-cyan transition-colors"
-                          >
-                            <span className="font-sans font-semibold text-slate-800 text-sm leading-tight block">{p.name}</span>
-                          </button>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight mt-0.5">{p.email || 'Sem e-mail'}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-600 italic font-serif">
-                          {p.lastVisit && isValid(parseISO(p.lastVisit)) 
-                            ? format(parseISO(p.lastVisit), "dd 'de' MMM, yyyy", { locale: ptBR }) 
-                            : 'Bem-vindo'}
-                        </span>
-                        <span className="text-[9px] font-semibold text-slate-300 uppercase tracking-widest mt-0.5">
-                          {p.lastVisit && isValid(parseISO(p.lastVisit)) 
-                            ? (differenceInYears(new Date(), parseISO(p.lastVisit)) === 0 ? 'alguns meses' : `${differenceInYears(new Date(), parseISO(p.lastVisit))} anos`)
-                            : 'Primeira vez'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 text-center">
-                      <div className="inline-flex items-center justify-center min-w-8 h-8 px-2 bg-slate-100 rounded-xl text-[10px] font-semibold text-slate-500 ring-4 ring-slate-50 group-hover:bg-brand-cyan group-hover:text-white transition-all">
-                        {p.procedures}
-                      </div>
-                    </td>
-                    {canSeeFinancials && (
-                      <td className="px-6 py-5 text-right">
-                        <span className="font-semibold text-slate-700 text-sm">{formatCurrency(p.totalSpent)}</span>
-                      </td>
-                    )}
-                    <td className="px-8 py-5">
-                      <div className="flex items-center justify-end gap-3">
-                        <button 
-                          onClick={() => onOpenChart(p.id)}
-                          className="flex items-center gap-2 px-4 py-2 bg-brand-cyan text-white text-[10px] font-semibold uppercase tracking-widest rounded-xl shadow-lg shadow-brand-cyan/20 hover:scale-105 active:scale-95 transition-all"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          Prontuário
-                        </button>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => onOpenEdit(p.id)}
-                            className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-slate-50 rounded-xl transition-all"
-                            title="Editar Perfil"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          {canDelete && (
-                            <button 
-                              onClick={() => onDelete(p.id)}
-                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
-                              title="Excluir Permanente"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </td>
+      {/* Search Bar - Floating Style */}
+      <div className="relative group">
+        <Search className="w-4 h-4 text-slate-400 absolute left-5 top-1/2 -translate-y-1/2 group-focus-within:text-brand-cyan transition-colors" />
+        <input 
+          type="text"
+          placeholder="Pesquisar por nome, CPF ou e-mail..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full pl-12 pr-5 py-3.5 bg-white border border-slate-200 text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-brand-cyan/10 focus:border-brand-cyan outline-none rounded-2xl transition-all shadow-sm"
+        />
+        {searchTerm && (
+          <button 
+            onClick={() => setSearchTerm('')}
+            className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+          >
+            <XCircle className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      <AnimatePresence mode="wait">
+        {viewMode === 'list' ? (
+          <motion.div 
+            key="list"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50/50 text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                  <tr>
+                    <th className="px-6 py-4">Paciente</th>
+                    <th className="px-5 py-4">Última Visita</th>
+                    <th className="px-5 py-4 text-center">Atendimentos</th>
+                    {canSeeFinancials && <th className="px-5 py-4 text-right">Total</th>}
+                    <th className="px-6 py-4 text-right">Ações</th>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={5} className="px-6 py-24 text-center">
-                    <div className="max-w-xs mx-auto">
-                      <Search className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                      <p className="text-sm font-black text-slate-400 uppercase tracking-widest leading-loose">
-                        Nenhum paciente encontrado para "{searchTerm}"
-                      </p>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {currentPatients.length > 0 ? (
+                    currentPatients.map((p) => (
+                      <tr key={p.id} className="group hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              "w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-sm ring-1 ring-slate-100",
+                              getAvatarColor(p.name || '')
+                            )}>
+                              {(p.name || '?').charAt(0)}
+                            </div>
+                            <div className="flex flex-col">
+                              <button 
+                                onClick={() => onViewDetail(p)}
+                                className="text-left group/name"
+                              >
+                                <span className="font-sans font-bold text-slate-800 text-sm hover:text-brand-cyan transition-colors">{p.name}</span>
+                              </button>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-[10px] font-medium text-slate-400">{p.cpf || 'Sem CPF'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className="text-xs font-semibold text-slate-600">
+                            {p.lastVisit && isValid(parseISO(p.lastVisit)) 
+                              ? format(parseISO(p.lastVisit), "dd/MM/yyyy") 
+                              : '---'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-center">
+                          <div className="inline-flex items-center justify-center px-2 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-500">
+                            {p.proceduresCount}
+                          </div>
+                        </td>
+                        {canSeeFinancials && (
+                          <td className="px-5 py-4 text-right">
+                            <span className="font-bold text-slate-700 text-sm">{formatCurrency(p.totalSpent)}</span>
+                          </td>
+                        )}
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-end gap-2">
+                            <button 
+                              onClick={() => onOpenChart(p.id)}
+                              className="px-3 py-1.5 bg-slate-900 text-white text-[10px] font-bold uppercase tracking-tight rounded-lg hover:bg-brand-cyan transition-all"
+                            >
+                              Prontuário
+                            </button>
+                            <button 
+                              onClick={() => onOpenEdit(p.id)}
+                              className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-slate-100 rounded-lg transition-all"
+                            >
+                              <Settings className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-20 text-center">
+                        <p className="text-sm font-medium text-slate-400">Nenhum paciente encontrado.</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div 
+            key="grid"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="w-full"
+          >
+            {currentPatients.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {currentPatients.map((p) => (
+                  <div 
+                    key={p.id}
+                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <div className={cn(
+                        "w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow ring-1 ring-slate-100",
+                        getAvatarColor(p.name || '')
+                      )}>
+                        {(p.name || '?').charAt(0)}
+                      </div>
+                      <div className="flex gap-1">
+                        <button 
+                          onClick={() => onOpenEdit(p.id)}
+                          className="p-1.5 text-slate-400 hover:text-brand-cyan transition-all"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        {canDelete && (
+                          <button 
+                            onClick={() => onDelete(p.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-500 transition-all"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-sm leading-tight mb-0.5 truncate">{p.name}</h3>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-tight">{p.cpf || 'Sem CPF'}</p>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <div className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Última</p>
+                          <p className="text-[10px] font-bold text-slate-600 truncate">
+                            {p.lastVisit && isValid(parseISO(p.lastVisit)) ? format(parseISO(p.lastVisit), 'dd/MM/yy') : '--'}
+                          </p>
+                        </div>
+                        <div className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                          <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">Total</p>
+                          <p className="text-[10px] font-bold text-slate-600">{p.proceduresCount}</p>
+                        </div>
+                      </div>
+
+                      <button 
+                        onClick={() => onOpenChart(p.id)}
+                        className="w-full py-2.5 bg-slate-900 text-white font-bold text-[10px] uppercase tracking-widest rounded-xl hover:bg-brand-cyan transition-all shadow-sm"
+                      >
+                        Prontuário
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200 rounded-2xl py-20 text-center shadow-sm">
+                <p className="text-sm font-medium text-slate-400">Nenhum resultado.</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modern Pagination Overlay */}
+      <div className="bg-white/90 backdrop-blur-sm border border-slate-200 rounded-2xl p-3 flex items-center justify-between shadow-lg max-w-xl mx-auto">
+        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4">
+          Pág. <span className="text-brand-cyan">{currentPage}</span> / {totalPages || 1}
+        </div>
+        
+        <div className="flex items-center gap-1.5">
+          <button 
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 hover:border-brand-cyan hover:text-brand-cyan transition-all shadow-sm"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          
+          <button 
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages || totalPages === 0}
+            className="w-9 h-9 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 hover:border-brand-cyan hover:text-brand-cyan transition-all shadow-sm"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* Footer with Pagination */}
-        <div className="bg-slate-50/50 border-t border-slate-100 px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-            Página <span className="text-slate-800">{currentPage}</span> de <span className="text-slate-800">{totalPages || 1}</span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="p-2 rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-brand-cyan/30 hover:text-brand-cyan transition-all"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            
-            <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-2xl shadow-sm">
-              {[...Array(totalPages)].map((_, i) => {
-                const page = i + 1;
-                if (page <= 3 || page === totalPages || (page >= currentPage - 1 && page <= currentPage + 1)) {
-                  return (
-                    <button
-                      key={page}
-                      onClick={() => setCurrentPage(page)}
-                      className={cn(
-                        "w-8 h-8 flex items-center justify-center rounded-xl text-[10px] font-black transition-all",
-                        currentPage === page 
-                          ? 'bg-brand-cyan text-white shadow-md shadow-brand-cyan/20' 
-                          : 'text-slate-400 hover:text-slate-800'
-                      )}
-                    >
-                      {page}
-                    </button>
-                  );
-                } else if (page === 4 && totalPages > 5) {
-                   return <span key={page} className="text-slate-300">...</span>;
-                }
-                return null;
-              })}
-            </div>
-
-            <button 
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages || totalPages === 0}
-              className="p-2 rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-30 disabled:cursor-not-allowed hover:border-brand-cyan/30 hover:text-brand-cyan transition-all"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
+        <div className="px-4 text-[10px] font-bold text-slate-300 uppercase tracking-tight hidden sm:block">
+          {filteredPatients.length} TOTAL
         </div>
       </div>
     </div>
@@ -3456,148 +5389,222 @@ function TeamView({ data, users, currentUser, onViewAgenda, onDeleteUser }: { da
   );
 }
 
-function ImportView({ onImport }: { onImport: (records: any[]) => Promise<void> }) {
-  const [data, setData] = useState('');
-  const [isImporting, setIsImporting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+function BackupView({ data, patients, users, documents, clinicName, onRestore }: { data: any[]; patients: any[]; users: any[]; documents: any[]; clinicName: string; onRestore: (data: any) => Promise<void> }) {
+  const [isExporting, setIsExporting] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImport = async () => {
+  const handleExport = () => {
+    setIsExporting(true);
     try {
-      setIsImporting(true);
-      setError(null);
-      setSuccess(null);
-      
-      const parsed = JSON.parse(data);
-      if (!Array.isArray(parsed)) {
-        throw new Error("Os dados devem ser uma lista (array) de objetos.");
-      }
-      
-      parsed.forEach((item, index) => {
-        if (!item.paciente || !item.data || !item.procedimento) {
-          throw new Error(`Item na posição ${index} está incompleto (faltando paciente, data ou procedimento).`);
-        }
-      });
+      const backupData = {
+        clinicName,
+        exportDate: new Date().toISOString(),
+        records: data,
+        patients,
+        users,
+        documents,
+        version: '1.0.0'
+      };
 
-      await onImport(parsed);
-      setSuccess(`${parsed.length} registros importados com sucesso!`);
-      setData('');
-    } catch (e: any) {
-      setError(e.message || "Erro ao processar dados JSON. Verifique o formato.");
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `backup-${clinicName.replace(/\s+/g, '-').toLowerCase()}-${format(new Date(), 'yyyy-MM-dd-HHmm')}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Erro ao exportar backup:", error);
+      alert("Erro ao gerar o arquivo de backup.");
     } finally {
-      setIsImporting(false);
+      setIsExporting(false);
     }
   };
 
-  const downloadTemplate = () => {
-    const template = [
-      {
-        "paciente": "João da Silva",
-        "data": new Date().toISOString(),
-        "procedimento": "Procedimento Exemplo",
-        "dentista": "Nome do Dentista",
-        "status": "Realizado",
-        "statusPagamento": "Pago",
-        "valor": 100.00
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const confirmRestore = window.confirm(
+      "ATENÇÃO: A restauração de backup irá mesclar os dados do arquivo com os dados atuais. Deseja prosseguir?"
+    );
+
+    if (!confirmRestore) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsRestoring(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const backupData = JSON.parse(content);
+
+        if (!backupData.records || !backupData.patients) {
+          throw new Error("Arquivo de backup inválido ou incompatível.");
+        }
+
+        await onRestore(backupData);
+        alert("Backup restaurado com sucesso!");
+      } catch (err: any) {
+        console.error("Erro ao restaurar backup:", err);
+        alert("Erro ao processar o arquivo: " + err.message);
+      } finally {
+        setIsRestoring(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-    ];
-    const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'modelo_importacao.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    };
+    reader.readAsText(file);
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-2xl p-8 space-y-6 shadow-sm animate-in fade-in zoom-in-95 duration-300">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h3 className="text-lg font-bold text-slate-800">Importação de Dados Legados</h3>
-          <p className="text-xs text-slate-500">Traga seu histórico de atendimentos e pacientes de outros sistemas.</p>
+    <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in zoom-in-95 duration-300 pb-20">
+      <div className="bg-white border border-slate-200 p-8 rounded-3xl space-y-6 shadow-sm overflow-hidden relative">
+        <div className="absolute top-0 right-0 p-8 opacity-5">
+          <ShieldCheck className="w-32 h-32 text-brand-cyan" />
         </div>
-        <button 
-          onClick={downloadTemplate}
-          className="px-4 py-2 bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-bold uppercase rounded-lg hover:bg-slate-100 transition-all flex items-center gap-2"
-        >
-          <FileText className="w-4 h-4 text-brand-cyan" />
-          Baixar Modelo JSON
-        </button>
-      </div>
 
-      <div className="space-y-4">
-        <div className="flex justify-between items-end">
-          <label className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Interface de Transferência (JSON)</label>
-          <span className="text-[8px] font-mono text-slate-300">UTF-8 Format</span>
+        <div className="space-y-2 border-b border-slate-100 pb-6">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <ShieldCheck className="w-6 h-6 text-brand-cyan" />
+            Backup de Segurança
+          </h2>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Exporte todos os dados da sua clínica para um arquivo seguro ou restaure dados de um backup anterior.
+          </p>
         </div>
-        <textarea 
-          value={data}
-          onChange={(e) => setData(e.target.value)}
-          placeholder='Ex: [ { "paciente": "Paciente Exemplo", "data": "2023-10-01", "procedimento": "Limpeza", ... } ]'
-          className="w-full h-80 p-6 font-mono text-[11px] bg-slate-50 border border-slate-200 rounded-3xl focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 outline-none transition-all shadow-inner"
-        />
-      </div>
 
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-100 text-red-600 rounded-2xl flex items-center gap-3">
-          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-          <p className="text-[10px] font-bold uppercase">{error}</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Pacientes</div>
+            <div className="text-2xl font-bold text-slate-800">{patients.length}</div>
+          </div>
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Registros</div>
+            <div className="text-2xl font-bold text-slate-800">{data.length}</div>
+          </div>
         </div>
-      )}
 
-      {success && (
-        <div className="p-4 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-2xl flex items-center gap-3">
-          <CheckCircle2 className="w-4 h-4" />
-          <p className="text-[10px] font-bold uppercase">{success}</p>
+        <div className="space-y-4">
+          <button 
+            onClick={handleExport}
+            disabled={isExporting || isRestoring}
+            className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:bg-brand-cyan transition-all flex items-center justify-center gap-2 text-xs uppercase tracking-widest shadow-lg shadow-slate-200 disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            {isExporting ? 'Processando Backup...' : 'Gerar Arquivo de Backup (.json)'}
+          </button>
+
+          <div className="relative">
+            <input 
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept=".json"
+              className="hidden"
+            />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isExporting || isRestoring}
+              className="w-full py-4 bg-white border-2 border-dashed border-slate-200 text-slate-500 font-bold rounded-2xl hover:border-brand-cyan hover:text-brand-cyan transition-all flex items-center justify-center gap-2 text-xs uppercase tracking-widest disabled:opacity-50"
+            >
+              {isRestoring ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {isRestoring ? 'Restaurando...' : 'Restaurar de um Arquivo'}
+            </button>
+          </div>
         </div>
-      )}
 
-      <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl">
-        <p className="text-[9px] text-amber-700 leading-relaxed font-bold uppercase opacity-80">
-          Nota: A importação em massa é uma operação sensível. Certifique-se de que os campos coincidam com os nomes das colunas exigidas no modelo.
+        <div className="bg-brand-cyan/5 border border-brand-cyan/20 p-6 rounded-2xl space-y-4">
+          <h3 className="text-xs font-bold text-brand-cyan uppercase tracking-widest flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            Informações Importantes
+          </h3>
+          <ul className="text-xs text-slate-600 space-y-2 list-disc list-inside">
+            <li>Recomendamos realizar backups antes de grandes mudanças.</li>
+            <li>A restauração adiciona dados novos, mas não remove os atuais.</li>
+            <li>Backup inclui: Pacientes, Agenda, Financeiro e Documentos.</li>
+          </ul>
+        </div>
+
+        <p className="text-[10px] text-slate-400 text-center italic">
+          O arquivo é processado localmente. Seus dados estão seguros.
         </p>
       </div>
-
-      <button 
-        disabled={isImporting || !data.trim()}
-        onClick={handleImport}
-        className="group relative w-full py-5 bg-slate-900 border border-slate-800 text-white font-bold uppercase text-[10px] tracking-[0.2em] rounded-2xl hover:bg-brand-cyan transition-all shadow-2xl disabled:opacity-50 overflow-hidden"
-      >
-        <div className="relative z-10 flex items-center justify-center gap-3">
-          {isImporting ? <Activity className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5 group-hover:scale-110 transition-transform" />}
-          {isImporting ? 'Processando Lote de Dados...' : 'Iniciar Ingestão de Dados'}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000" />
-      </button>
     </div>
   );
 }
 
+
+
 function SettingsView({ 
   clinicName, 
-  onUpdateClinicName, 
+  clinicLogo,
+  footerText,
+  providerPhone,
+  providerName,
+  onUpdateSettings, 
   onResetDatabase,
-  isAdmin 
+  isAdmin,
+  deferredPrompt,
+  onInstallPWA
 }: { 
   clinicName: string; 
-  onUpdateClinicName: (n: string) => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+  providerPhone: string;
+  providerName: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   isAdmin?: boolean;
+  deferredPrompt: any;
+  onInstallPWA: () => void;
 }) {
   const [localClinicName, setLocalClinicName] = useState(clinicName);
+  const [localFooterText, setLocalFooterText] = useState(footerText);
+  const [localLogo, setLocalLogo] = useState<string | null>(clinicLogo);
+  const [localProviderPhone, setLocalProviderPhone] = useState(providerPhone);
+  const [localProviderName, setLocalProviderName] = useState(providerName);
   const [isSaving, setIsSaving] = useState(false);
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [confirmText, setConfirmText] = useState('');
 
   useEffect(() => {
     setLocalClinicName(clinicName);
-  }, [clinicName]);
+    setLocalFooterText(footerText);
+    setLocalLogo(clinicLogo);
+    setLocalProviderPhone(providerPhone);
+    setLocalProviderName(providerName);
+  }, [clinicName, footerText, clinicLogo, providerPhone, providerName]);
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 500000) {
+        alert("A imagem deve ter no máximo 500KB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLocalLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onUpdateClinicName(localClinicName);
+      await onUpdateSettings({
+        clinicName: localClinicName,
+        clinicLogo: localLogo,
+        footerText: localFooterText,
+        providerPhone: localProviderPhone,
+        providerName: localProviderName
+      });
       alert('Configurações salvas com sucesso!');
     } catch (e) {
       console.error("Erro ao salvar:", e);
@@ -3616,8 +5623,36 @@ function SettingsView({
       
       <div className="space-y-8">
         <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Institucional</h3>
-          <div className="grid grid-cols-2 gap-6">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Identidade Visual</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            <div className="space-y-3">
+              <label className="text-[9px] uppercase font-bold text-slate-400">Logotipo da Clínica</label>
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center overflow-hidden">
+                  {localLogo ? (
+                    <img src={localLogo} alt="Logo Preview" className="w-full h-full object-contain" />
+                  ) : (
+                    <ImagePlus className="w-6 h-6 text-slate-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <label className="bg-white border border-slate-200 px-4 py-1.5 text-[10px] font-bold uppercase rounded cursor-pointer hover:bg-slate-50 transition-colors">
+                    Fazer Upload
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                  </label>
+                  {localLogo && (
+                    <button 
+                      onClick={() => setLocalLogo(null)}
+                      className="text-rose-500 text-[10px] font-bold uppercase text-left hover:underline"
+                    >
+                      Remover Logo
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-[9px] text-slate-400">Formato recomendado: PNG transparente ou SVG. Máx 500KB.</p>
+            </div>
+
             <div className="space-y-1">
               <label className="text-[9px] uppercase font-bold text-slate-400">Nome da Clínica</label>
               <input 
@@ -3627,9 +5662,51 @@ function SettingsView({
                 className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all" 
               />
             </div>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Rodapé & Rodapé de Documentos</h3>
+          <div className="space-y-1">
+            <label className="text-[9px] uppercase font-bold text-slate-400">Informações Institucionais</label>
+            <textarea 
+              value={localFooterText}
+              onChange={(e) => setLocalFooterText(e.target.value)}
+              placeholder="Ex: Av. Paulista, 1000 - São Paulo, SP | Tel: (11) 9999-9999 | CRO-SP 123456"
+              className="w-full text-xs p-3 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan min-h-[80px] resize-none"
+            />
+            <p className="text-[9px] text-slate-400 italic">Essas informações aparecerão no rodapé da plataforma e em documentos gerados.</p>
+          </div>
+        </section>
+
+        <section className="space-y-4 border-t border-slate-100 pt-6">
+          <div>
+            <h3 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Canal de Disparo & Meu WhatsApp
+            </h3>
+            <p className="text-[10px] text-slate-400 mt-0.5">Configure o número oficial da clínica e a assinatura da sua marca integradora de mensagens.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400">CRO Responsável</label>
-              <input type="text" defaultValue="SP-123456" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
+              <label className="text-[9px] uppercase font-bold text-slate-400">Meu Número de WhatsApp Emissor</label>
+              <input 
+                type="text" 
+                value={localProviderPhone} 
+                onChange={(e) => setLocalProviderPhone(e.target.value)}
+                placeholder="Ex: +55 (47) 99999-9999"
+                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-mono" 
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] uppercase font-bold text-slate-400">Nome / Marca do Provedor</label>
+              <input 
+                type="text" 
+                value={localProviderName} 
+                onChange={(e) => setLocalProviderName(e.target.value)}
+                placeholder="Ex: MB.SISTEMAS"
+                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-sans" 
+              />
             </div>
           </div>
         </section>
@@ -3639,6 +5716,37 @@ function SettingsView({
           <div className="space-y-1">
             <label className="text-[9px] uppercase font-bold text-slate-400">Endereço Principal</label>
             <input type="text" defaultValue="Av. Paulista, 1000 - São Paulo, SP" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Aplicativo (PWA)</h3>
+          <div className="bg-slate-50 p-6 border border-slate-100 rounded-lg space-y-4">
+            <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
+              Transforme o sistema em um aplicativo desktop ou mobile. Isso permite acesso rápido pela área de trabalho e funcionamento offline básico.
+            </p>
+            
+            <div className="bg-amber-50 border border-amber-100 p-3 rounded text-[9px] text-amber-700 flex items-start gap-2">
+              <Info className="w-3 h-3 shrink-0 mt-0.5" />
+              <p>
+                <strong>Nota:</strong> Para instalar, você deve estar acessando o sistema diretamente em uma aba do navegador (fora do visualizador do editor). Abra o "Shared App URL" ou use o botão de abrir em nova aba.
+              </p>
+            </div>
+
+            {deferredPrompt ? (
+              <button 
+                onClick={onInstallPWA}
+                className="bg-brand-cyan text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-cyan-600 transition-all rounded shadow-sm flex items-center gap-2"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                Instalar Aplicativo
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 text-slate-400">
+                <ShieldCheck className="w-4 h-4" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Pendente de sinal do navegador ou já instalado</span>
+              </div>
+            )}
           </div>
         </section>
 
@@ -3656,73 +5764,7 @@ function SettingsView({
           </div>
         </section>
         
-        {isAdmin && onResetDatabase && (
-          <section className="pt-8 border-t-2 border-rose-100 mt-8 space-y-4">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-3 h-3 text-rose-500" />
-              <h3 className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Zona de Perigo</h3>
-            </div>
-            <div className="bg-rose-50 p-6 border border-rose-100 rounded-lg space-y-4">
-              {!showConfirmReset ? (
-                <>
-                  <p className="text-[10px] text-rose-700 leading-relaxed font-medium">
-                    Limpar o sistema irá remover permanentemente todos os registros, pacientes e documentos do banco de dados. 
-                    Esta ação é irreversível e apagará todos os dados inseridos por Admins, Dentistas e Recepcionistas.
-                  </p>
-                  <button 
-                    onClick={() => setShowConfirmReset(true)}
-                    className="bg-rose-500 text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-rose-600 transition-all rounded shadow-sm flex items-center gap-2"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Limpar Todo o Sistema
-                  </button>
-                </>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-[11px] text-rose-800 font-bold">
-                    VOCÊ TEM CERTEZA ABSOLUTA? Esta ação NÃO pode ser desfeita.
-                  </p>
-                  <p className="text-[10px] text-rose-600">
-                    Digite <span className="font-mono bg-rose-100 px-1 rounded">LIMPAR AGORA</span> para confirmar a exclusão total.
-                  </p>
-                  <input 
-                    type="text" 
-                    value={confirmText}
-                    onChange={(e) => setConfirmText(e.target.value)}
-                    className="w-full text-xs p-2 border border-rose-200 outline-none focus:border-rose-500"
-                    placeholder="Digite LIMPAR AGORA"
-                  />
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => {
-                        if (confirmText === 'LIMPAR AGORA') {
-                          onResetDatabase();
-                          setShowConfirmReset(false);
-                          setConfirmText('');
-                        } else {
-                          alert("Digite o texto de confirmação corretamente.");
-                        }
-                      }}
-                      disabled={confirmText !== 'LIMPAR AGORA'}
-                      className="flex-1 bg-rose-600 text-white py-2 text-[10px] font-bold uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                    >
-                      Confirmar Exclusão Total
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setShowConfirmReset(false);
-                        setConfirmText('');
-                      }}
-                      className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-800"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+
 
         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
           <button className="text-[10px] font-bold uppercase text-slate-400">Restaurar Padrões</button>
@@ -3734,167 +5776,6 @@ function SettingsView({
             {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
             Salvar Preferências
           </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Tooth({ 
-  number, 
-  status = 'Normal', 
-  onClick 
-}: { 
-  number: number; 
-  status?: string; 
-  onClick: () => void;
-  key?: number | string;
-}) {
-  const getStatusColor = (s: string) => {
-    switch(s) {
-      case 'Cárie': return 'bg-red-500 border-red-700';
-      case 'Extraído': return 'bg-slate-800 border-slate-900 opacity-20';
-      case 'Restauração': return 'bg-emerald-500 border-emerald-700';
-      case 'Endodontia': return 'bg-purple-500 border-purple-700';
-      default: return 'bg-white border-slate-200';
-    }
-  };
-
-  return (
-    <div 
-      onClick={onClick}
-      className={cn(
-        "w-8 h-10 border-2 rounded-sm cursor-pointer flex items-center justify-center text-[10px] font-bold transition-all hover:scale-110 shrink-0",
-        getStatusColor(status),
-        status === 'Normal' ? 'text-slate-400' : 'text-white'
-      )}
-      title={`Dente ${number}: ${status}`}
-    >
-      {number}
-    </div>
-  );
-}
-
-function Odontogram({ 
-  patientName,
-  currentUser,
-  onUpdate 
-}: { 
-  patientName: string;
-  currentUser: any;
-  onUpdate?: () => void;
-}) {
-  const [data, setData] = useState<Record<number, string>>({});
-  const [selectedTooth, setSelectedTooth] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  React.useEffect(() => {
-    const docRef = doc(db, 'odontograms', patientName.toLowerCase().replace(/\s+/g, '-'));
-    const unsub = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setData(docSnap.data().teeth || {});
-      }
-      setLoading(false);
-    }, (error) => {
-      console.warn("Odontogram sync error:", error);
-      setLoading(false);
-    });
-    return unsub;
-  }, [patientName]);
-
-  const handleUpdateTooth = async (status: string) => {
-    if (selectedTooth === null) return;
-    
-    const patientId = patientName.toLowerCase().replace(/\s+/g, '-');
-    const newData = { ...data, [selectedTooth]: status };
-    
-    try {
-      await setDoc(doc(db, 'odontograms', patientId), {
-        patientName,
-        teeth: newData,
-        dentista: currentUser?.name || '',
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-      
-      setData(newData);
-      setSelectedTooth(null);
-      if (onUpdate) onUpdate();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const upperRight = [18, 17, 16, 15, 14, 13, 12, 11];
-  const upperLeft = [21, 22, 23, 24, 25, 26, 27, 28];
-  const lowerRight = [48, 47, 46, 45, 44, 43, 42, 41];
-  const lowerLeft = [31, 32, 33, 34, 35, 36, 37, 38];
-
-  if (loading) return <div className="h-40 flex items-center justify-center text-slate-400 text-xs">Carregando Odontograma...</div>;
-
-  return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-200">
-      <div className="flex flex-col items-center gap-8 relative overflow-x-auto pb-4 custom-scrollbar">
-        
-        {/* Upper Arch */}
-        <div className="flex gap-4 min-w-max">
-          <div className="flex gap-1">
-            {upperRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-          <div className="w-[1px] bg-slate-200 h-10"></div>
-          <div className="flex gap-1">
-            {upperLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-        </div>
-
-        {/* Lower Arch */}
-        <div className="flex gap-4 min-w-max">
-          <div className="flex gap-1">
-            {lowerRight.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-          <div className="w-[1px] bg-slate-200 h-10"></div>
-          <div className="flex gap-1">
-            {lowerLeft.map(n => <Tooth key={n} number={n} status={data[n] || 'Normal'} onClick={() => setSelectedTooth(n)} />)}
-          </div>
-        </div>
-
-        {/* Floating Menu for Selected Tooth */}
-        <AnimatePresence>
-          {selectedTooth && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 10 }}
-              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white shadow-2xl border border-slate-200 p-4 rounded-xl z-10 w-48"
-            >
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Dente {selectedTooth}</span>
-                <button onClick={() => setSelectedTooth(null)} className="p-1 hover:bg-slate-50 rounded-full transition-colors">
-                  <X className="w-3 h-3 text-slate-300 hover:text-slate-600" />
-                </button>
-              </div>
-              <div className="grid grid-cols-1 gap-1">
-                {['Normal', 'Cárie', 'Extraído', 'Restauração', 'Endodontia'].map(status => (
-                  <button 
-                    key={status}
-                    onClick={() => handleUpdateTooth(status)}
-                    className={cn(
-                      "text-left px-3 py-1.5 rounded text-[10px] font-bold transition-all",
-                      data[selectedTooth] === status ? "bg-brand-cyan text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"
-                    )}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <div className="flex flex-wrap justify-center gap-4 text-[9px] uppercase font-bold text-slate-400 mt-4 border-t border-slate-50 pt-4 w-full">
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-red-500 rounded-full"></div> Cárie</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-slate-800 rounded-full opacity-20"></div> Extraído</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-emerald-500 rounded-full"></div> Restauração</div>
-          <div className="flex items-center gap-1"><div className="w-2 h-2 bg-purple-500 rounded-full"></div> Endodontia</div>
         </div>
       </div>
     </div>
@@ -4130,28 +6011,80 @@ function PatientDetailModal({ patient, onClose, onDelete, currentUserRole, canSe
   );
 }
 
-function OdontogramView({ patientName }: { patientName: string }) {
+function OdontogramView({ patientName, currentUser }: { patientName: string; currentUser?: any }) {
   const [selectedTooth, setSelectedTooth] = useState<number | null>(null);
   const [teethData, setTeethData] = useState<Record<number, any>>({});
-  const [statusFilter, setStatusFilter] = useState<'todos' | 'cárie' | 'restaurado' | 'extraído'>('todos');
+  const [loading, setLoading] = useState(true);
+
+  // Sync with Firestore
+  useEffect(() => {
+    const docId = patientName.toLowerCase().replace(/\s+/g, '-');
+    const docRef = doc(db, 'odontograms', docId);
+    
+    const unsub = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setTeethData(docSnap.data().teethData || {});
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("Error syncing odontogram:", error);
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, [patientName]);
+
+  const updateFirestore = async (newData: Record<number, any>) => {
+    const docId = patientName.toLowerCase().replace(/\s+/g, '-');
+    try {
+      await setDoc(doc(db, 'odontograms', docId), {
+        patientName,
+        teethData: newData,
+        lastUpdatedBy: currentUser?.name || 'Sistema',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (e) {
+      console.error("Error saving tooth status:", e);
+    }
+  };
+
+  const toggleToothStatus = (num: number, status: string) => {
+    const newStatus = teethData[num]?.status === status ? null : status;
+    const newData = {
+      ...teethData,
+      [num]: { ...teethData[num], status: newStatus, updatedAt: new Date().toISOString() }
+    };
+    setTeethData(newData);
+    updateFirestore(newData);
+  };
+
+  const updateToothNotes = (num: number, notes: string) => {
+    const newData = {
+      ...teethData,
+      [num]: { ...teethData[num], notes, updatedAt: new Date().toISOString() }
+    };
+    setTeethData(newData);
+    updateFirestore(newData);
+  };
 
   const teethNumbersUpper = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
   const teethNumbersLower = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
-
-  const toggleToothStatus = (num: number, status: string) => {
-    setTeethData(prev => ({
-      ...prev,
-      [num]: { ...prev[num], status: prev[num]?.status === status ? null : status }
-    }));
-  };
 
   const getToothColor = (num: number) => {
     const status = teethData[num]?.status;
     if (status === 'cárie') return 'fill-rose-500 stroke-rose-600';
     if (status === 'restaurado') return 'fill-brand-cyan stroke-cyan-600';
     if (status === 'extraído') return 'fill-slate-200 stroke-slate-300 opacity-30';
+    if (status === 'hígido') return 'fill-emerald-500 stroke-emerald-600';
     return 'fill-white stroke-slate-300 hover:fill-slate-50';
   };
+
+  if (loading) return (
+    <div className="h-64 flex flex-col items-center justify-center gap-3 text-slate-400">
+      <Loader2 className="w-8 h-8 animate-spin text-brand-cyan" />
+      <p className="text-[10px] font-bold uppercase tracking-widest">Carregando Histórico Dental...</p>
+    </div>
+  );
 
   return (
     <div className="space-y-8 animate-in fade-in zoom-in-95 duration-500">
@@ -4278,6 +6211,8 @@ function OdontogramView({ patientName }: { patientName: string }) {
               <div className="pt-4 mt-4 border-t border-white/10">
                 <p className="text-[10px] font-bold text-white/40 uppercase tracking-widest mb-3">Observação Clínica</p>
                 <textarea 
+                  value={teethData[selectedTooth]?.notes || ''}
+                  onChange={(e) => updateToothNotes(selectedTooth, e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-xs outline-none focus:border-brand-cyan/50 resize-none h-20"
                   placeholder="Descreva observações específicas para este dente..."
                 />
@@ -4298,8 +6233,10 @@ function OdontogramView({ patientName }: { patientName: string }) {
               Histórico de Procedimentos por Dente
             </h4>
             <div className="space-y-4">
-              {Object.entries(teethData).length > 0 ? (
-                Object.entries(teethData).map(([num, data]: [any, any]) => (
+              {Object.entries(teethData).filter(([_, d]: [any, any]) => d.status).length > 0 ? (
+                Object.entries(teethData)
+                  .filter(([_, d]: [any, any]) => d.status)
+                  .map(([num, data]: [any, any]) => (
                   <div key={num} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center font-black text-slate-400">
@@ -4307,7 +6244,10 @@ function OdontogramView({ patientName }: { patientName: string }) {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-slate-700 capitalize">{data.status || 'Hígido'}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">Atualizado em {format(new Date(), 'dd/MM/yyyy')}</p>
+                        <p className="text-[10px] text-slate-400 font-bold">
+                          {data.updatedAt && isValid(parseISO(data.updatedAt)) ? `Atualizado em ${format(parseISO(data.updatedAt), 'dd/MM/yyyy HH:mm')}` : 'Sem data'}
+                        </p>
+                        {data.notes && <p className="text-[10px] text-brand-cyan mt-1 italic">"{data.notes}"</p>}
                       </div>
                     </div>
                     <button className="p-2 text-slate-400 hover:text-brand-cyan">
@@ -4826,7 +6766,7 @@ function MedicalChartView({
           )}
 
           {activeTab === 'Odontograma' && (
-            <OdontogramView patientName={patientName} />
+            <OdontogramView patientName={patientName} currentUser={currentUser} />
           )}
 
           {activeTab === 'Anamnese' && (
@@ -6492,8 +8432,18 @@ function AdminView({
   onDeleteUser,
   currentUser,
   clinicName,
-  onUpdateClinicName,
-  onResetDatabase
+  clinicLogo,
+  footerText,
+  providerPhone,
+  providerName,
+  onUpdateSettings,
+  onResetDatabase,
+  deferredPrompt,
+  onInstallPWA,
+  data,
+  patients,
+  documents,
+  onRestore
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
@@ -6501,8 +8451,18 @@ function AdminView({
   onDeleteUser: (id: string) => Promise<boolean>;
   currentUser: any;
   clinicName: string;
-  onUpdateClinicName: (n: string) => Promise<void>;
-  onResetDatabase: () => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+  providerPhone: string;
+  providerName: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => Promise<void>;
+  onResetDatabase?: () => Promise<void>;
+  deferredPrompt: any;
+  onInstallPWA: () => void;
+  data: any[];
+  patients: any[];
+  documents: any[];
+  onRestore: (data: any) => Promise<void>;
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -6517,9 +8477,9 @@ function AdminView({
   const [newUserModules, setNewUserModules] = useState<string[]>(['Dashboard', 'Agenda', 'Pacientes']);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'import'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'backup'>('users');
 
-  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
+  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
 
   const toggleModule = (module: string, currentModules: string[], setter: (m: string[]) => void) => {
     if (currentModules.includes(module)) {
@@ -6560,39 +8520,40 @@ function AdminView({
           </button>
           <button 
             type="button"
-            onClick={() => setActiveTab('import')}
+            onClick={() => setActiveTab('backup')}
             className={cn(
               "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
-              activeTab === 'import' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+              activeTab === 'backup' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
             )}
           >
-            Importar
+            Backup
           </button>
         </div>
       </div>
 
       <div className="min-h-[500px]">
+        {activeTab === 'backup' && (
+          <BackupView 
+            data={data}
+            patients={patients}
+            users={users}
+            documents={documents}
+            clinicName={clinicName}
+            onRestore={onRestore}
+          />
+        )}
         {activeTab === 'settings' && (
           <SettingsView 
             clinicName={clinicName} 
-            onUpdateClinicName={onUpdateClinicName} 
+            clinicLogo={clinicLogo}
+            footerText={footerText}
+            providerPhone={providerPhone}
+            providerName={providerName}
+            onUpdateSettings={onUpdateSettings} 
             onResetDatabase={onResetDatabase}
             isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
-          />
-        )}
-        
-        {activeTab === 'import' && (
-          <ImportView 
-            onImport={async (records) => {
-              for (const record of records) {
-                const id = `rec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                await setDoc(doc(db, 'records', id), {
-                  ...record,
-                  id,
-                  createdAt: new Date().toISOString()
-                });
-              }
-            }} 
+            deferredPrompt={deferredPrompt}
+            onInstallPWA={onInstallPWA}
           />
         )}
         
@@ -6792,6 +8753,29 @@ function AdminView({
                     </div>
                   </div>
 
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold text-slate-400">Usuário (Login)</label>
+                      <input 
+                        type="text" 
+                        value={editingUser.username || ''}
+                        onChange={(e) => setEditingUser({...editingUser, username: SecurityUtils.limit(e.target.value.toLowerCase().trim(), 30)})}
+                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg font-mono" 
+                        placeholder="nome.usuario"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold text-slate-400">Nova Senha</label>
+                      <input 
+                        type="password" 
+                        value={editingUser.password || ''}
+                        onChange={(e) => setEditingUser({...editingUser, password: e.target.value})}
+                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
+                        placeholder="Senha de acesso"
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-[9px] uppercase font-bold text-slate-400 block ml-1">Módulos Acessíveis</label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -6846,6 +8830,7 @@ function AdminView({
                         try {
                           const success = await onUpdateUser(editingUser.id, editingUser); 
                           if (success) {
+                            alert('Usuário atualizado com sucesso!');
                             setEditingUser(null);
                           }
                         } finally {
@@ -7058,7 +9043,10 @@ function LoginView({
   onOpenBooking,
   onPrivacyPolicy,
   onTerms,
-  clinicName
+  clinicName,
+  clinicLogo,
+  footerText,
+  onOpenFreeTrial
 }: { 
   users: any[]; 
   onLogin: (user: any) => void; 
@@ -7066,6 +9054,9 @@ function LoginView({
   onPrivacyPolicy: () => void;
   onTerms: () => void;
   clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
+  onOpenFreeTrial?: () => void;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -7085,8 +9076,13 @@ function LoginView({
     e.preventDefault();
     setError(null);
     
+    // Sanitize credentials before checking
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    // Layer 1: Local Device Lockout
     if (lockout.isLocked) {
-      setError(`Muitas tentativas. Tente novamente em ${lockout.remaining}s.`);
+      setError(`Seu dispositivo está bloqueado devido a múltiplas tentativas malsucedidas de login. Tente de novo em ${lockout.remaining}s.`);
       return;
     }
 
@@ -7096,28 +9092,52 @@ function LoginView({
     }
 
     setIsLoading(true);
+
+    // Layer 2: Firestore Database Lockout (distributed protection per username)
+    try {
+      const dbLockout = await SecurityUtils.checkFirestoreLockout(cleanUsername);
+      if (dbLockout.isLocked) {
+        setError(`Esta conta ("${cleanUsername}") encontra-se bloqueada temporariamente para conter ataques de força bruta. Tente de novo em ${dbLockout.remaining}s.`);
+        setIsLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+    }
     
     // Simulate server delay/security check
     await new Promise(resolve => setTimeout(resolve, 1200));
-
-    // Sanitize credentials before checking
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = password.trim();
 
     // Try to find user in the reactive 'users' list
     let user = users.find(u => {
       const dbUsername = (u.username || "").toString().trim().toLowerCase();
       const dbPassword = (u.password || "").toString().trim();
-      return dbUsername === cleanUsername && dbPassword === cleanPassword;
+      
+      const userMatch = dbUsername === cleanUsername;
+      const pwdMatch = dbPassword === cleanPassword;
+      
+      if (userMatch) {
+         console.log(`[LoginCheck] Usuário ${cleanUsername} encontrado. Senha coincide? ${pwdMatch}`);
+         if (!pwdMatch) {
+            console.warn(`[LoginCheck] Senha para ${cleanUsername} em memória: "${dbPassword}" (len: ${dbPassword.length}). Digitada: "${cleanPassword}" (len: ${cleanPassword.length})`);
+         }
+      }
+      
+      return userMatch && pwdMatch;
     });
 
-    // ABSOLUTE FALLBACK: If reactive list fails but credentials match the original constants
+    // ABSOLUTE FALLBACK ONLY if not found in ANY reactive list and using original default
     if (!user && cleanUsername === 'ana.admin' && cleanPassword === '123') {
-      user = INITIAL_USERS.find(u => u.username === 'ana.admin');
+       const initialAna = INITIAL_USERS.find(u => u.username === 'ana.admin');
+       // Only fallback if INITIAL_USERS ana still has '123'
+       if (initialAna && initialAna.password === '123') {
+         user = initialAna;
+       }
     }
 
     if (user) {
       SecurityUtils.recordAttempt(true);
+      await SecurityUtils.recordAttemptFirestore(cleanUsername, true);
       try {
         await onLogin(user);
       } catch (e: any) {
@@ -7126,8 +9146,20 @@ function LoginView({
       }
     } else {
       SecurityUtils.recordAttempt(false);
-      setLockout(SecurityUtils.getLockoutStatus());
-      setError('Credenciais inválidas.');
+      await SecurityUtils.recordAttemptFirestore(cleanUsername, false);
+      const updatedLocalLockout = SecurityUtils.getLockoutStatus();
+      setLockout(updatedLocalLockout);
+
+      // Verify if username just got locked in Firestore to show specific message
+      const dbLockoutAfter = await SecurityUtils.checkFirestoreLockout(cleanUsername);
+      
+      if (dbLockoutAfter.isLocked) {
+        setError(`Múltiplas falhas detectadas. A conta "${cleanUsername}" foi bloqueada temporariamente por ${dbLockoutAfter.remaining}s por motivos de segurança.`);
+      } else if (updatedLocalLockout.isLocked) {
+        setError(`Este dispositivo foi temporariamente bloqueado por ${updatedLocalLockout.remaining}s devido a sucessivas tentativas malsucedidas.`);
+      } else {
+        setError('Credenciais inválidas.');
+      }
       setIsLoading(false);
     }
   };
@@ -7140,6 +9172,18 @@ function LoginView({
         <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-blue-400/10 blur-[100px]" />
       </div>
 
+      {/* MB.SISTEMAS Background Watermark */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0 overflow-hidden">
+        <span className="text-[10vw] font-black tracking-[0.2em] text-slate-950/[0.025] uppercase pointer-events-none -rotate-12 whitespace-nowrap select-none">
+          MB.SISTEMAS
+        </span>
+      </div>
+
+      {/* Discrete Corner Support Watermark */}
+      <div className="absolute bottom-5 right-5 pointer-events-none select-none text-[8px] font-black tracking-[0.3em] text-slate-950/[0.15] uppercase z-10">
+        MB.SISTEMAS
+      </div>
+
       <div className="w-full max-w-[400px] px-6 relative z-10">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -7148,12 +9192,18 @@ function LoginView({
         >
           <div className="mb-8 text-center text-slate-800">
             <div className="flex items-center justify-center gap-2 mb-4">
-              <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
-                <Plus className="w-6 h-6" />
-              </div>
-              <h1 className="text-xl font-black text-slate-800 tracking-tighter">
-                {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
-              </h1>
+              {clinicLogo ? (
+                <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain" />
+              ) : (
+                <>
+                  <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
+                    <Plus className="w-6 h-6" />
+                  </div>
+                  <h1 className="text-xl font-black text-slate-800 tracking-tighter">
+                    {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
+                  </h1>
+                </>
+              )}
             </div>
             <h3 className="text-2xl font-bold tracking-tight mb-2 text-slate-900">Bem-vindo de volta</h3>
             <p className="text-sm text-slate-500">Insira suas credenciais para continuar.</p>
@@ -7218,38 +9268,32 @@ function LoginView({
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenBooking}
-              className="w-full py-3 text-xs font-bold text-slate-500 hover:text-brand-cyan transition-colors flex items-center justify-center gap-2"
-            >
-              <Calendar className="w-4 h-4" />
-              Agendar Consulta Online
-            </button>
           </form>
 
-          {/* Quick Access for Demo */}
-          <div className="mt-8 pt-6 border-t border-slate-50">
-            <div className="flex flex-wrap justify-center gap-2">
-              {['ana.admin', 'roberto', 'mariana'].map(u => (
-                <button 
-                  key={u}
-                  onClick={() => { setUsername(u); setPassword('123'); }}
-                  className="text-[10px] text-slate-500 font-bold bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 hover:border-brand-cyan hover:text-brand-cyan transition-all"
-                >
-                  {u}
-                </button>
-              ))}
+          {onOpenFreeTrial && (
+            <div className="mt-6 pt-6 border-t border-slate-100 flex flex-col items-center gap-3">
+              <div className="text-center">
+                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Ainda não é cliente?</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Crie um ambiente de testes personalizado</p>
+              </div>
+              <button
+                type="button"
+                onClick={onOpenFreeTrial}
+                className="w-full bg-emerald-50 hover:bg-emerald-100/85 text-emerald-600 border border-emerald-200/50 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-wide transition-all shadow-sm flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                Experimentar Teste Grátis
+              </button>
             </div>
-          </div>
+          )}
         </motion.div>
         
-        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8">
+        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8 px-4 text-center">
           <Shield className="w-3 h-3 text-brand-cyan/40" />
-          Conexão Segura | {clinicName} Protocol
+          {footerText}
         </p>
       </div>
-      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
     </div>
   );
 }
@@ -7281,7 +9325,10 @@ function PublicBookingView({
   data,
   onPrivacyPolicy,
   onTerms,
-  clinicName
+  clinicName,
+  clinicLogo,
+  footerText,
+  initialFormData
 }: { 
   onBack: () => void; 
   users: any[]; 
@@ -7289,17 +9336,27 @@ function PublicBookingView({
   onPrivacyPolicy: () => void;
   onTerms: () => void;
   clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
+  initialFormData?: {
+    dentista?: string;
+    data?: string;
+    horario?: string;
+    paciente?: string;
+    telefone?: string;
+    procedimento?: string;
+  };
 }) {
   const minDate = getSystemInitialDate();
 
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(() => initialFormData ? 2 : 1);
   const [bookingData, setBookingData] = useState({
-    dentista: '',
-    data: minDate,
-    horario: '',
-    paciente: '',
-    telefone: '',
-    procedimento: 'Consulta Inicial'
+    dentista: initialFormData?.dentista || '',
+    data: initialFormData?.data || minDate,
+    horario: initialFormData?.horario || '',
+    paciente: initialFormData?.paciente || '',
+    telefone: initialFormData?.telefone || '',
+    procedimento: initialFormData?.procedimento || 'Consulta Inicial'
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -7346,12 +9403,52 @@ function PublicBookingView({
 
     setIsSubmitting(true);
     try {
+      let finalPatientId = '';
+      try {
+        console.log("[PortalBooking] Buscando pacientes para verificar duplicados...");
+        const patientsSnap = await getDocs(collection(db, 'patients'));
+        const patientsList = patientsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const existingPatient = findPatientByRobustMatch(trimmedName, patientsList);
+
+        if (!existingPatient) {
+          finalPatientId = `pat-${Date.now()}`;
+          console.log("[PortalBooking] Paciente não cadastrado. Criando registro para o paciente:", finalPatientId);
+          const patientData = {
+            id: finalPatientId,
+            name: trimmedName,
+            email: '',
+            phone: bookingData.telefone || '',
+            cpf: '',
+            dentistaResponsavel: bookingData.dentista || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          await setDoc(doc(db, 'patients', finalPatientId), patientData);
+        } else {
+          finalPatientId = existingPatient.id;
+          console.log("[PortalBooking] Paciente já cadastrado:", existingPatient.name);
+          const needsUpdate = !existingPatient.phone || !existingPatient.dentistaResponsavel;
+          if (needsUpdate) {
+            const updatedPatientData = {
+              phone: existingPatient.phone || bookingData.telefone || '',
+              dentistaResponsavel: existingPatient.dentistaResponsavel || bookingData.dentista || '',
+              updatedAt: new Date().toISOString()
+            };
+            await setDoc(doc(db, 'patients', existingPatient.id), updatedPatientData, { merge: true });
+          }
+        }
+      } catch (patientAutoErr) {
+        console.error("[PortalBooking] Erro ao cadastrar paciente automaticamente:", patientAutoErr);
+      }
+
       const id = `booking-${Date.now()}`;
       const record: DentalRecord = {
         id,
         data: bookingData.data,
         horario: bookingData.horario,
         paciente: trimmedName,
+        pacienteId: finalPatientId || undefined,
+        telefone: bookingData.telefone,
         procedimento: bookingData.procedimento,
         dentista: bookingData.dentista,
         status: 'Pendente',
@@ -7384,277 +9481,433 @@ function PublicBookingView({
 
   if (isSuccess) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+      <div className="min-h-screen bg-white md:bg-slate-50 flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
+        {/* Background blobs */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-cyan/5 blur-[100px] pointer-events-none rounded-full" />
+        <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500/5 blur-[100px] pointer-events-none rounded-full" />
+
         <motion.div 
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-[32px] shadow-2xl p-10 text-center max-w-md w-full border border-slate-100"
+          className="bg-white md:rounded-[40px] md:shadow-2xl md:shadow-slate-200/50 p-8 md:p-12 text-center max-w-lg w-full md:border border-slate-100 relative z-10"
         >
-          <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+          <div className="w-24 h-24 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500 -rotate-3" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">Solicitação Enviada!</h2>
-          <p className="text-slate-500 text-sm leading-relaxed mb-8">
-            Seu pré-agendamento foi recebido. Nossa equipe entrará em contato via WhatsApp ({bookingData.telefone}) para confirmar seu horário.
+          <h2 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Tudo pronto!</h2>
+          <p className="text-slate-500 text-base leading-relaxed mb-10">
+            Sua solicitação de agendamento foi enviada. Nossa equipe entrará em contato via WhatsApp 
+            <span className="font-bold text-slate-800"> ({bookingData.telefone})</span> para confirmar seu horário.
           </p>
           <button 
             onClick={onBack}
-            className="w-full py-4 bg-brand-cyan text-white font-bold rounded-2xl hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
+            className="w-full py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98]"
           >
-            Voltar ao Início
+            Voltar para a home
           </button>
         </motion.div>
-        <div className="fixed bottom-0 left-0 w-full z-10">
-           <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+        
+        <div className="mt-12 text-center relative z-10">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mb-4">Ambiente Seguro por ClinicalGate</p>
+          <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-      <div className="w-full max-w-2xl">
-        <div className="flex items-center gap-4 mb-6">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      {/* Dynamic Header */}
+      <header className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-50 py-4 px-6">
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-4">
+             {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-8 md:h-10 w-auto object-contain" />
+            ) : (
+              <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tighter">
+                {clinicName} <span className="text-brand-cyan font-normal">Agendamento</span>
+              </h1>
+            )}
+          </div>
+          <div className="hidden md:flex items-center gap-2">
+            {[1, 2, 3].map((s) => (
+              <div 
+                key={s} 
+                className={cn(
+                  "w-8 h-1 rounded-full transition-all duration-500",
+                  step === s ? "bg-brand-cyan w-12" : (step > s ? "bg-emerald-400" : "bg-slate-100")
+                )} 
+              />
+            ))}
+          </div>
           <button 
             onClick={onBack}
-            className="p-3 bg-white rounded-2xl text-slate-400 hover:text-brand-cyan shadow-sm border border-slate-100 transition-all"
+            className="text-xs font-bold text-slate-400 hover:text-brand-cyan uppercase tracking-widest transition-colors flex items-center gap-2"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
+            <span className="hidden sm:inline">Sair</span>
           </button>
-          <div className="flex-1">
-            <h1 className="text-xl font-bold text-slate-800">{clinicName} <span className="text-brand-cyan font-normal">Agendamento</span></h1>
-            <p className="text-xs text-slate-400 uppercase tracking-widest font-bold">Passo {step} de 3</p>
-          </div>
         </div>
+      </header>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-[32px] shadow-xl shadow-slate-200/50 p-8 border border-slate-100 overflow-hidden relative"
-        >
-          {/* Progress Bar */}
-          <div className="absolute top-0 left-0 w-full h-1 bg-slate-50">
-            <motion.div 
-              className="h-full bg-brand-cyan"
-              initial={{ width: '0%' }}
-              animate={{ width: `${(step / 3) * 100}%` }}
-            />
+      <main className="flex-1 flex items-center justify-center p-4 py-8 md:py-16">
+        <div className="w-full max-w-4xl">
+          <div className="text-center mb-8 md:mb-12">
+            <h2 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight mb-2">
+              {step === 1 && "Com qual profissional deseja agendar?"}
+              {step === 2 && "Quando você prefere vir?"}
+              {step === 3 && "Só mais alguns detalhes..."}
+            </h2>
+            <p className="text-slate-500 text-sm md:text-base">
+              Passo {step} de 3 — {step === 1 ? "Escolha do Especialista" : step === 2 ? "Dia e Horário" : "Confirmação"}
+            </p>
           </div>
 
-          <div className="pt-4">
-            {step === 1 && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                    <Stethoscope className="w-5 h-5 text-brand-cyan" />
-                    Selecione o Profissional
-                  </h2>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {doctors.map(doc => (
-                      <button
-                        key={doc.id}
-                        onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
-                        className={cn(
-                          "p-4 rounded-2xl border text-left transition-all group",
-                          bookingData.dentista === doc.name 
-                            ? "border-brand-cyan bg-cyan-50/30 ring-4 ring-brand-cyan/5" 
-                            : "border-slate-100 hover:border-slate-200 bg-white"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
+          <div className="bg-white md:rounded-[40px] shadow-2xl shadow-slate-200/40 p-6 md:p-12 border border-white relative overflow-hidden">
+            {/* Background pattern */}
+            <div className="absolute top-0 right-0 p-12 opacity-[0.03] pointer-events-none">
+              <Calendar className="w-64 h-64 text-slate-900" />
+            </div>
+
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={step}
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                transition={{ duration: 0.3 }}
+              >
+                {step === 1 && (
+                  <div className="space-y-8">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {doctors.map(doc => (
+                        <button
+                          key={doc.id}
+                          onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
+                          className={cn(
+                            "p-6 rounded-[32px] border-2 text-left transition-all relative group flex flex-col items-center text-center overflow-hidden",
+                            bookingData.dentista === doc.name 
+                              ? "border-brand-cyan bg-brand-cyan/[0.03] shadow-2xl shadow-brand-cyan/10 ring-1 ring-brand-cyan/20" 
+                              : "border-slate-50 hover:border-slate-200 bg-white hover:shadow-xl hover:shadow-slate-200/40"
+                          )}
+                        >
+                          {/* Selection Indicator */}
                           <div className={cn(
-                            "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-colors",
-                            bookingData.dentista === doc.name ? "bg-brand-cyan text-white" : "bg-slate-100 text-slate-400"
+                            "absolute -top-12 -right-12 w-24 h-24 bg-brand-cyan transition-transform duration-500 rounded-full",
+                            bookingData.dentista === doc.name ? "translate-x-0 translate-y-0" : "translate-x-full translate-y-full"
+                          )}>
+                            <CheckCircle2 className="absolute bottom-6 left-6 w-5 h-5 text-white" />
+                          </div>
+
+                          <div className={cn(
+                            "relative w-24 h-24 rounded-3xl flex items-center justify-center text-3xl font-black mb-6 transition-all duration-500",
+                            bookingData.dentista === doc.name 
+                              ? "bg-brand-cyan text-white shadow-2xl shadow-brand-cyan/40 scale-110" 
+                              : "bg-slate-50 text-slate-300 group-hover:bg-slate-100 group-hover:text-brand-cyan"
                           )}>
                             {doc.name[0]}
                           </div>
-                          <div>
-                            <p className="text-sm font-bold text-slate-800">{doc.name}</p>
-                            <p className="text-[10px] text-slate-400 uppercase tracking-tighter font-bold">
-                              {doc.role === 'Admin' ? 'Especialista' : 'Clínico Geral'}
+
+                          <div className="space-y-2 relative z-10">
+                            <p className="text-xl font-black text-slate-900 tracking-tight">{doc.name}</p>
+                            <div className="flex flex-col gap-2 items-center">
+                              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+                                {doc.role === 'Admin' ? 'Especialista Sênior' : 'Clínico Geral'}
+                              </span>
+                              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Disponível</span>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    
+                    <div className="flex justify-center pt-4">
+                      <button 
+                        disabled={!bookingData.dentista}
+                        onClick={() => setStep(2)}
+                        className="w-full max-w-sm py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        Continuar para data e hora
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 2 && (
+                  <div className="space-y-10">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                      <div className="space-y-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-brand-cyan/10 rounded-xl flex items-center justify-center">
+                            <Calendar className="w-5 h-5 text-brand-cyan" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Selecione o melhor dia</h3>
+                        </div>
+                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          <input 
+                            id="booking-date"
+                            type="date" 
+                            min={minDate}
+                            value={bookingData.data}
+                            onChange={(e) => {
+                              const newData = e.target.value;
+                              if (!newData) return;
+                              
+                              const dateObj = parseISO(newData);
+                              const day = getDay(dateObj);
+
+                              if (day === 0 || day === 6) {
+                                alert("Desculpe, a clínica não realiza atendimentos aos sábados e domingos. Por favor, escolha um dia útil de segunda a sexta.");
+                                e.target.value = bookingData.data; // Reset visually
+                                return;
+                              }
+
+                              setBookingData(prev => {
+                                const newBookingData = { ...prev, data: newData };
+                                if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
+                                  if (prev.horario < format(new Date(), 'HH:mm')) {
+                                    newBookingData.horario = '';
+                                  }
+                                }
+                                return newBookingData;
+                              });
+                            }}
+                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all font-bold text-slate-800"
+                          />
+                          <p className="mt-4 text-xs text-slate-500 flex items-center gap-2 px-1">
+                            <Info className="w-3.5 h-3.5 text-brand-cyan" />
+                            Atendimentos de Segunda a Sexta das 08h às 17h.
+                          </p>
+                          <p className="mt-2 text-xs text-slate-500 flex items-center gap-2 px-1">
+                            <Calendar className="w-3.5 h-3.5" />
+                            Exibindo horários para {format(parseISO(bookingData.data), "eeee, dd 'de' MMMM", { locale: ptBR })}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
+                            <Clock className="w-5 h-5 text-indigo-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Horários disponíveis</h3>
+                        </div>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 bg-slate-50 p-6 rounded-[32px] border border-slate-100">
+                          {timeSlots.map(time => {
+                            const isTaken = data.some(r => 
+                              r.dentista === bookingData.dentista && 
+                              r.data === bookingData.data && 
+                              r.horario === time &&
+                              r.status !== 'Cancelado'
+                            );
+
+                            const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
+                            const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
+                            
+                            return (
+                              <button
+                                key={time}
+                                disabled={isTaken || isPast}
+                                onClick={() => setBookingData(prev => ({ ...prev, horario: time }))}
+                                className={cn(
+                                  "py-3 text-sm font-black rounded-xl border transition-all flex flex-col items-center justify-center gap-0.5",
+                                  bookingData.horario === time
+                                    ? "bg-brand-cyan text-white border-brand-cyan shadow-lg shadow-brand-cyan/20 scale-105 z-10"
+                                    : (isTaken || isPast)
+                                      ? "bg-slate-100/50 text-slate-300 border-transparent cursor-not-allowed grayscale"
+                                      : "bg-white text-slate-600 border-white hover:border-brand-cyan hover:shadow-md"
+                                )}
+                              >
+                                {time}
+                                {isTaken && <span className="text-[7px] uppercase opacity-50">Ocupado</span>}
+                                {isPast && !isTaken && <span className="text-[7px] uppercase opacity-50">Passou</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
+                      <button 
+                        onClick={() => setStep(1)}
+                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
+                      >
+                        Voltar
+                      </button>
+                      <button 
+                        disabled={!bookingData.horario}
+                        onClick={() => setStep(3)}
+                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        Próximo passo
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 3 && (
+                  <div className="space-y-10">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                      <div className="space-y-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center">
+                            <User className="w-5 h-5 text-emerald-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Seus dados para contato</h3>
+                        </div>
+
+                        <div className="space-y-6 bg-slate-50 p-8 rounded-[40px] border border-slate-100">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
+                            <input 
+                              type="text"
+                              placeholder="Como devemos lhe chamar?"
+                              value={bookingData.paciente}
+                              onChange={(e) => setBookingData(prev => ({ ...prev, paciente: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100) }))}
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-bold placeholder:font-normal"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">WhatsApp / Telefone</label>
+                            <input 
+                              type="tel"
+                              placeholder="(00) 00000-0000"
+                              value={bookingData.telefone}
+                              onChange={(e) => setBookingData(prev => ({ ...prev, telefone: SecurityUtils.maskPhone(e.target.value) }))}
+                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-mono font-bold placeholder:font-normal"
+                            />
+                          </div>
+                          <div className="flex items-start gap-3 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
+                             <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                             <p className="text-[10px] text-blue-600 leading-relaxed font-medium">
+                              Ao finalizar, você autoriza o contato de nossa equipe via WhatsApp para confirmação definitiva do seu horário.
                             </p>
                           </div>
                         </div>
+                      </div>
+
+                      <div className="space-y-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
+                            <ClipboardList className="w-5 h-5 text-amber-500" />
+                          </div>
+                          <h3 className="text-xl font-bold text-slate-900">Resumo da solicitação</h3>
+                        </div>
+
+                        <div className="bg-slate-900 rounded-[48px] p-8 text-white relative overflow-hidden shadow-2xl shadow-slate-900/40 border border-white/5">
+                          {/* Design accents */}
+                          <div className="absolute top-0 right-0 w-32 h-32 bg-brand-cyan/10 blur-[60px] pointer-events-none" />
+                          <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-500/10 blur-[40px] pointer-events-none" />
+                          
+                          {/* Ticket edge pattern visual */}
+                          <div className="absolute left-0 top-1/2 -ml-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
+                          <div className="absolute right-0 top-1/2 -mr-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
+
+                          <div className="space-y-8 relative z-10">
+                            <div className="pb-6 border-b border-white/10 text-center">
+                              <p className="text-[10px] text-white/30 uppercase font-black tracking-[0.3em] mb-3">Profissional Selecionado</p>
+                              <div className="flex items-center justify-center gap-4">
+                                <div className="w-12 h-12 bg-brand-cyan rounded-2xl flex items-center justify-center text-xl font-black">
+                                  {bookingData.dentista[0]}
+                                </div>
+                                <p className="text-2xl font-black text-white tracking-tight">{bookingData.dentista}</p>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
+                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">Data Marcada</p>
+                                <p className="text-lg font-black text-brand-cyan">{format(parseISO(bookingData.data), 'dd/MM')}</p>
+                                <p className="text-[9px] text-white/50 font-bold">{format(parseISO(bookingData.data), 'yyyy')}</p>
+                              </div>
+                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
+                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">Início Previsto</p>
+                                <p className="text-lg font-black text-brand-cyan">{bookingData.horario}</p>
+                                <p className="text-[9px] text-white/50 font-bold">Horário Local</p>
+                              </div>
+                            </div>
+
+                            <div className="pt-2">
+                                <div className="flex items-center justify-between px-2">
+                                  <p className="text-[10px] text-white/30 uppercase font-black tracking-widest">Procedimento</p>
+                                  <span className="w-2 h-2 rounded-full bg-brand-cyan animate-pulse" />
+                                </div>
+                                <div className="mt-2 p-4 rounded-2xl bg-white/5 border border-white/5 flex items-center gap-3">
+                                  <Stethoscope className="w-4 h-4 text-brand-cyan" />
+                                  <p className="text-sm font-bold">Primeira Avaliação Clínica</p>
+                                </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
+                      <button 
+                        onClick={() => setStep(2)}
+                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
+                      >
+                        Voltar
                       </button>
-                    ))}
-                  </div>
-                </div>
-                <button 
-                  disabled={!bookingData.dentista}
-                  onClick={() => setStep(2)}
-                  className="w-full py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
-                >
-                  Continuar para Data e Hora
-                </button>
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-slate-800">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <Calendar className="w-5 h-5 text-brand-cyan" />
-                      Escolha o Dia
-                    </h2>
-                    <input 
-                      id="booking-date"
-                      type="date" 
-                      min={minDate}
-                      value={bookingData.data}
-                      onChange={(e) => {
-                        const newData = e.target.value;
-                        setBookingData(prev => {
-                          const newBookingData = { ...prev, data: newData };
-                          // If today is selected, and current time is past selected time, clear time
-                          if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
-                            if (prev.horario < format(new Date(), 'HH:mm')) {
-                              newBookingData.horario = '';
-                            }
-                          }
-                          return newBookingData;
-                        });
-                      }}
-                      className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all"
-                    />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                      <Clock className="w-5 h-5 text-brand-cyan" />
-                      Escolha o Horário
-                    </h2>
-                    <div className="grid grid-cols-3 gap-2">
-                      {timeSlots.map(time => {
-                        const isTaken = data.some(r => 
-                          r.dentista === bookingData.dentista && 
-                          r.data === bookingData.data && 
-                          r.horario === time &&
-                          r.status !== 'Cancelado'
-                        );
-
-                        const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
-                        const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
-                        
-                        return (
-                          <button
-                            key={time}
-                            disabled={isTaken || isPast}
-                            onClick={() => {
-                          if (bookingData.data === format(new Date(), 'yyyy-MM-dd')) {
-                            if (time < format(new Date(), 'HH:mm')) {
-                              alert('Este horário já passou. Por favor, escolha um horário futuro.');
-                              return;
-                            }
-                          }
-                          setBookingData(prev => ({ ...prev, horario: time }));
-                        }}
-                            className={cn(
-                              "py-2 text-xs font-bold rounded-lg border transition-all",
-                              bookingData.horario === time
-                                ? "bg-brand-cyan text-white border-brand-cyan shadow-md shadow-brand-cyan/20"
-                                : (isTaken || isPast)
-                                  ? "bg-slate-100 text-slate-300 border-slate-100 cursor-not-allowed italic"
-                                  : "bg-white text-slate-500 border-slate-100 hover:border-brand-cyan"
-                            )}
-                          >
-                            {time}
-                            {isTaken && <span className="block text-[8px] opacity-60">Ocupado</span>}
-                            {isPast && !isTaken && <span className="block text-[8px] opacity-60">Passou</span>}
-                          </button>
-                        );
-                      })}
+                      <button 
+                        disabled={isSubmitting || !bookingData.paciente || !bookingData.telefone}
+                        onClick={handleSubmit}
+                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
+                      >
+                        {isSubmitting ? (
+                          <motion.div 
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+                          />
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-5 h-5" />
+                            Finalizar agora
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-                </div>
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setStep(1)}
-                    className="flex-1 py-4 text-slate-400 font-bold border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    disabled={!bookingData.horario}
-                    onClick={() => setStep(3)}
-                    className="flex-[2] py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20"
-                  >
-                    Próximo Passo
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {step === 3 && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                    <User className="w-5 h-5 text-brand-cyan" />
-                    Seus Dados
-                  </h2>
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
-                      <input 
-                        type="text"
-                        placeholder="Como devemos lhe chamar?"
-                        value={bookingData.paciente}
-                        onChange={(e) => setBookingData(prev => ({ ...prev, paciente: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100) }))}
-                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">WhatsApp / Telefone</label>
-                      <input 
-                        type="tel"
-                        placeholder="(00) 00000-0000"
-                        value={bookingData.telefone}
-                        onChange={(e) => setBookingData(prev => ({ ...prev, telefone: SecurityUtils.maskPhone(e.target.value) }))}
-                        className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-mono"
-                      />
-                    </div>
-                    <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
-                      <p className="text-[10px] text-blue-600 leading-relaxed italic">
-                        * Ao finalizar, você concorda que entraremos em contato para confirmar a disponibilidade do horário selecionado.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setStep(2)}
-                    className="flex-1 py-4 text-slate-400 font-bold border border-slate-100 rounded-2xl hover:bg-slate-50 transition-all"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    disabled={isSubmitting || !bookingData.paciente || !bookingData.telefone}
-                    onClick={handleSubmit}
-                    className="flex-[2] py-4 bg-brand-cyan text-white font-bold rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-lg shadow-brand-cyan/20 flex items-center justify-center gap-2"
-                  >
-                    {isSubmitting ? (
-                      <motion.div 
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
-                      />
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-5 h-5" />
-                        Finalizar Agendamento
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
+                )}
+              </motion.div>
+            </AnimatePresence>
           </div>
-        </motion.div>
-        
-        <p className="text-center text-slate-400 text-[10px] mt-8 uppercase tracking-widest font-medium mb-12">
-          Ambiente Seguro | Agendamento via {clinicName} Cloud
-        </p>
-      </div>
-      <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} />
+
+          <p className="text-center text-slate-400 text-[10px] mt-12 uppercase tracking-[0.3em] font-black opacity-40">
+            ClinicalGate Security Protocol 2.0
+          </p>
+        </div>
+      </main>
+
+      <footer className="py-12 bg-white border-t border-slate-100 px-6">
+        <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+           <div className="text-center md:text-left">
+            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">{footerText}</p>
+          </div>
+          <div className="flex gap-8">
+            <button 
+              onClick={onPrivacyPolicy} 
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
+            >
+              Privacidade
+            </button>
+            <button 
+              onClick={onTerms} 
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
+            >
+              Termos
+            </button>
+            <span className="text-[10px] font-black uppercase tracking-widest text-brand-cyan/50">Brasil</span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
@@ -7809,6 +10062,92 @@ function PrivacyPolicyModal({ isOpen, onClose }: { isOpen: boolean, onClose: () 
   );
 }
 
+function KeyboardShortcutsModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  if (!isOpen) return null;
+
+  const shortcuts = [
+    { keys: ['Ctrl', 'H'], label: 'Início / Dashboard', desc: 'Acessa a visão geral dos indicadores e metas da clínica.' },
+    { keys: ['Ctrl', 'A'], label: 'Agenda / Calendário', desc: 'Abre a visualização do calendário de consultas.' },
+    { keys: ['Ctrl', 'P'], label: 'Base de Pacientes', desc: 'Acessa a listagem geral com pesquisa dos pacientes cadastrados.' },
+    { keys: ['Ctrl', 'N'], label: 'Novo Paciente', desc: 'Abre diretamente o formulário de cadastro de paciente.' },
+    { keys: ['Ctrl', 'B'], label: 'Nova Consulta (Booking)', desc: 'Abre diretamente a tela de novo agendamento de consulta.' },
+    { keys: ['Ctrl', 'M'], label: 'Central de Mensagens', desc: 'Gerencie e simule envios de WhatsApp.' },
+    { keys: ['Ctrl', 'F'], label: 'Módulo Financeiro', desc: 'Acessa faturamentos, receitas e fluxo de caixa.' },
+    { keys: ['Ctrl', 'K'], label: 'Guia de Atalhos', desc: 'Abra ou feche este guia de atalhos a qualquer momento.' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-xs z-[99999] flex items-center justify-center p-4 shadow-2xl animate-in fade-in duration-200" id="shortcut-modal">
+      <div className="bg-white rounded-[24px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-slate-900 to-slate-850 text-white p-5 flex items-center justify-between border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <div className="bg-brand-cyan/25 p-2 rounded-xl text-brand-cyan">
+              <Keyboard className="w-5 h-5 animate-pulse" />
+            </div>
+            <div className="text-left">
+              <h3 className="font-bold text-sm tracking-wide">Atalhos de Teclado</h3>
+              <p className="text-[10px] text-slate-300">Navegue com velocidade e agilidade no OdontoDash</p>
+            </div>
+          </div>
+          <button 
+            type="button" 
+            onClick={onClose} 
+            className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer select-none"
+            aria-label="Fechar"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Shortcuts List */}
+        <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
+          <p className="text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-3 leading-relaxed text-left">
+            💡 <strong>DICA DO PRO:</strong> Os modificadores funcionam tanto com a tecla <strong>Control (Ctrl)</strong> quanto no macOS com a tecla <strong>Command (⌘)</strong>. Atalhos são bloqueados dinamicamente quando você está escrevendo em campos de digitação para garantir sua escrita!
+          </p>
+
+          <div className="divide-y divide-slate-100 text-left">
+            {shortcuts.map((shortcut, idx) => (
+              <div key={idx} className="py-2.5 flex items-center justify-between gap-4">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-slate-800 leading-normal flex items-center gap-1.5">
+                    {shortcut.label}
+                  </span>
+                  <span className="text-[10px] text-slate-400 leading-normal truncate">
+                    {shortcut.desc}
+                  </span>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  {shortcut.keys.map((k, kIdx) => (
+                    <kbd 
+                      key={kIdx} 
+                      className="px-2 py-1 bg-slate-100 text-[#0f172a] text-[10px] font-black tracking-wide rounded-md border border-slate-300 shadow-xs font-mono uppercase"
+                    >
+                      {k === 'Ctrl' ? 'Ctrl / ⌘' : k}
+                    </kbd>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="bg-slate-50 px-5 py-4 border-t border-slate-100 flex items-center justify-between">
+          <span className="text-[10px] text-slate-400 font-medium">Use <strong className="font-black text-slate-600">Ctrl + K</strong> em qualquer lugar do sistema</span>
+          <button 
+            type="button" 
+            onClick={onClose} 
+            className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[11px] font-bold hover:bg-slate-800 transition-all cursor-pointer active:scale-95 shadow-sm"
+          >
+            Entendido
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TermsOfUseModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   if (!isOpen) return null;
   return (
@@ -7892,17 +10231,18 @@ function CookieBanner({ onAccept, onDecline }: { onAccept: () => void, onDecline
 
 function Footer({ 
   onPrivacyPolicy, 
-  onTerms 
+  onTerms,
+  footerText
 }: { 
   onPrivacyPolicy: () => void; 
   onTerms: () => void;
+  footerText: string;
 }) {
   return (
     <footer className="mt-auto py-8 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
         <div className="text-center md:text-left">
-          <span className="text-brand-cyan font-black tracking-tighter text-lg">Sorriso & Saúde</span>
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">© 2026 Todos os direitos reservados</p>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">{footerText}</p>
         </div>
         
         <div className="flex flex-wrap justify-center gap-6">
@@ -7932,6 +10272,2024 @@ function Footer({
         </div>
       </div>
     </footer>
+  );
+}
+
+interface FreeTrialDetails {
+  fullName: string;
+  clinicName: string;
+  email: string;
+  phone: string;
+  plan: string;
+  specialty: string;
+  username: string;
+  password: string;
+}
+
+function FreeTrialView({
+  onBack,
+  onStartTrial,
+  clinicLogo,
+  footerText
+}: {
+  onBack: () => void;
+  onStartTrial: (details: FreeTrialDetails) => Promise<void>;
+  clinicLogo: string | null;
+  footerText: string;
+}) {
+  const [fullName, setFullName] = useState('');
+  const [clinicName, setClinicName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [plan, setPlan] = useState('Pro'); // Default Pro
+  const [specialty, setSpecialty] = useState('Geral');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const steps = [
+    "Validando dados cadastrais...",
+    "Instanciando banco de dados privado no Cloud Run...",
+    "Preparando módulos de faturamento e fluxo de caixa...",
+    "Configurando o painel inteligente para odontologia..."
+  ];
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!fullName.trim() || !clinicName.trim() || !email.trim() || !phone.trim() || !username.trim() || !password.trim()) {
+      setError('Por favor, preencha todos os campos obrigatórios do formulário.');
+      return;
+    }
+
+    if (username.trim().includes(' ')) {
+      setError('O nome de usuário não pode conter espaços.');
+      return;
+    }
+
+    if (password.trim().length < 3) {
+      setError('A senha deve ter pelo menos 3 caracteres.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setCurrentStep(0);
+
+    // Simulate gorgeous loading steps with specific delays
+    for (let i = 0; i < steps.length; i++) {
+      setCurrentStep(i);
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
+
+    try {
+      await onStartTrial({
+        fullName,
+        clinicName,
+        email,
+        phone,
+        plan,
+        specialty,
+        username,
+        password
+      });
+    } catch (err: any) {
+      setError(err?.message || 'Erro ao inicializar o teste grátis.');
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen w-screen bg-[#f8fafc] flex flex-col items-center justify-start py-12 px-4 md:px-8 relative overflow-x-hidden font-sans">
+      {/* Background patterns */}
+      <div className="absolute top-0 left-0 w-full h-full opacity-30 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-brand-cyan/15 blur-[120px]" />
+        <div className="absolute bottom-[-15%] right-[-10%] w-[700px] h-[700px] rounded-full bg-blue-400/10 blur-[130px]" />
+      </div>
+
+      <div className="w-full max-w-5xl relative z-10 flex flex-col gap-8">
+        
+        {/* Back Button and Logo */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-6">
+          <button 
+            type="button"
+            onClick={onBack}
+            className="group px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors flex items-center gap-1 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/50 shadow-sm self-start sm:self-auto"
+          >
+            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+            Voltar ao Login
+          </button>
+          
+          <div className="flex items-center gap-2">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt="OdontoDash" className="h-10 w-auto object-contain" />
+            ) : (
+              <>
+                <div className="w-8 h-8 bg-brand-cyan rounded-lg flex items-center justify-center text-white shadow-lg">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <span className="text-lg font-black text-slate-800 tracking-tight">
+                  Odonto<span className="text-brand-cyan">Dash</span>
+                </span>
+              </>
+            )}
+            <span className="text-[10px] bg-brand-cyan/10 text-brand-cyan font-bold uppercase tracking-wider px-2 py-0.5 rounded-full">
+              Free Trial Hub
+            </span>
+          </div>
+        </div>
+
+        {/* Central Grid container */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          
+          {/* Left Column: Premium Value Proposition & Plan choice */}
+          <div className="lg:col-span-5 space-y-6 text-left">
+            <div className="space-y-3">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 text-[10px] font-bold uppercase tracking-widest">
+                <Sparkles className="w-3 h-3 text-emerald-500 animate-pulse" />
+                Sem compromisso, cancele quando quiser
+              </span>
+              <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                Experimente o <span className="text-brand-cyan">OdontoDash</span> gratuitamente por 14 dias
+              </h2>
+              <p className="text-sm text-slate-500 leading-relaxed">
+                Acesse todas as ferramentas de gestão, faturamento d3, controle de agendamentos e prontuários que vão alavancar os lucros da sua clínica.
+              </p>
+            </div>
+
+            {/* Core Features list */}
+            <div className="space-y-3 bg-white/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200/50">
+              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Incluso na versão de Teste:</h4>
+              {[
+                { title: "Dashboards analíticos de faturamento", desc: "Fluxo de caixa claro e transparente" },
+                { title: "Agenda Inteligente integrada", desc: "Prevenção de faltas com lembretes WhatsApp" },
+                { title: "Prontuário Odontológico Digital", desc: "Grave evoluções de tratamento e receitas" },
+                { title: "Gestão completa de pacientes", desc: "Ficha médica, histórico financeiro e anamnese" }
+              ].map((item, idx) => (
+                <div key={idx} className="flex gap-3">
+                  <div className="w-5 h-5 rounded-full bg-emerald-50 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-100">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-bold text-slate-800">{item.title}</h5>
+                    <p className="text-[10px] text-slate-500">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Secure Badging */}
+            <div className="bg-slate-100/60 p-4 rounded-2xl border border-slate-200/40 flex items-center gap-3">
+              <Shield className="w-8 h-8 text-slate-400 shrink-0" />
+              <p className="text-[10px] text-slate-500 leading-normal font-medium">
+                Seus dados de teste estão seguros em um ambiente sandbox criptografado com conformidade total à <strong>LGPD médica</strong>.
+              </p>
+            </div>
+          </div>
+
+          {/* Right Column: Loading Setup Wizard OR Setup Form */}
+          <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/60 shadow-xl shadow-slate-200/40 p-8 relative overflow-hidden">
+            <AnimatePresence mode="wait">
+              {isSubmitting ? (
+                // Setup loader animation wizard
+                <motion.div 
+                  key="loader-wizard"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="py-12 flex flex-col items-center justify-center text-center space-y-8"
+                >
+                  <div className="relative">
+                    {/* Ring loader */}
+                    <div className="w-20 h-20 rounded-full border-4 border-slate-100 border-t-brand-cyan animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Cpu className="w-7 h-7 text-brand-cyan animate-pulse" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 max-w-sm">
+                    <h3 className="text-lg font-bold text-slate-800">Preparando seu Espaço Virtual</h3>
+                    <p className="text-xs text-slate-400 font-mono transition-all duration-300">
+                      {steps[currentStep]}
+                    </p>
+                  </div>
+
+                  {/* Progress dots bar */}
+                  <div className="flex gap-2 justify-center">
+                    {steps.map((_, i) => (
+                      <div 
+                        key={i} 
+                        className={cn(
+                          "h-1.5 rounded-full transition-all duration-300", 
+                          i === currentStep ? "w-6 bg-brand-cyan" : i < currentStep ? "w-3 bg-brand-cyan/40" : "w-1.5 bg-slate-100"
+                        )} 
+                      />
+                    ))}
+                  </div>
+                </motion.div>
+              ) : (
+                // Form View
+                <motion.div 
+                  key="trial-form"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="space-y-6 text-left"
+                >
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800 tracking-tight">Configure sua Conta Experimental</h3>
+                    <p className="text-xs text-slate-400">Preencha os dados e tenha acesso imediato ao painel de testes.</p>
+                  </div>
+
+                  {error && (
+                    <div className="p-4 bg-rose-50 border border-rose-100 text-rose-600 rounded-2xl text-[10px] uppercase font-bold flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    
+                    {/* Input name and Email */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Seu Nome Completo *</label>
+                        <div className="relative">
+                          <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="text"
+                            required
+                            value={fullName}
+                            onChange={(e) => setFullName(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: Dr. Arthur Rezende"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">E-mail Profissional *</label>
+                        <div className="relative">
+                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="email"
+                            required
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: darthur@odonto.com"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Clinic Name and Phone/WhatsApp */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome da Clínica / Consultório *</label>
+                        <div className="relative">
+                          <Stethoscope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="text"
+                            required
+                            value={clinicName}
+                            onChange={(e) => setClinicName(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: Clínica Sorriso Novo"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">WhatsApp para Ativação *</label>
+                        <div className="relative">
+                          <MessageCircle className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="tel"
+                            required
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: (11) 99999-9999"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Custom Credentials for subsequent logins */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100/80">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+                          <User className="w-3.5 h-3.5 text-slate-400" />
+                          Nome de Usuário para Acesso *
+                        </label>
+                        <input 
+                          type="text"
+                          required
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                          placeholder="Ex: arthur.odonto (sem espaços)"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
+                          <Lock className="w-3.5 h-3.5 text-slate-400" />
+                          Senha de Acesso *
+                        </label>
+                        <input 
+                          type="password"
+                          required
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                          placeholder="Ex: darthur123"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Select Specialty Preset */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Especialidade Principal da Clínica</label>
+                      <select
+                        value={specialty}
+                        onChange={(e) => setSpecialty(e.target.value)}
+                        className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                      >
+                        <option value="Geral">Clínica Geral & Estética</option>
+                        <option value="Ortodontia">Ortodontia & Alinhadores</option>
+                        <option value="Implantodontia">Implantodontia & Próteses</option>
+                        <option value="Odontopediatria">Odontopediatria & Endodontia</option>
+                      </select>
+                    </div>
+
+                    {/* Desired Plan Tabs Selector */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Plano desejado para simular</label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {[
+                          { title: 'Lite', desc: '1 consultório, agenda simples', price: 'R$ 149/mês' },
+                          { title: 'Pro', desc: 'Multi-cadeiras, KPI, WhatsApp', price: 'R$ 299/mês', flag: 'Recomendado' },
+                          { title: 'Platinum', desc: 'Franquias, suporte 24h dedicado', price: 'R$ 599/mês' }
+                        ].map((p, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => setPlan(p.title)}
+                            className={cn(
+                              "text-left p-4 rounded-xl border transition-all relative flex flex-col justify-between h-28 focus:outline-none",
+                              plan === p.title 
+                                ? "bg-brand-cyan/[0.03] border-brand-cyan ring-4 ring-brand-cyan/5 shadow-md" 
+                                : "bg-white border-slate-200/60 hover:border-slate-300"
+                            )}
+                          >
+                            {p.flag && (
+                              <span className="absolute -top-2 right-3 px-2 py-0.5 rounded-full bg-brand-cyan text-white text-[8px] font-bold uppercase tracking-wider">
+                                {p.flag}
+                              </span>
+                            )}
+                            <div>
+                              <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight">{p.title}</h5>
+                              <p className="text-[9px] text-slate-400 leading-tight mt-0.5">{p.desc}</p>
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-700">{p.price}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Launch Trial CTA Button */}
+                    <button
+                      type="submit"
+                      className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold uppercase text-xs tracking-wider py-4 rounded-2xl transition-all shadow-xl shadow-slate-900/10 active:scale-[0.99] flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4 text-white animate-pulse" />
+                      Inicializar Meu OdontoDash Grátis
+                    </button>
+
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+        </div>
+
+        {/* Footing disclaimer */}
+        <p className="text-[10px] text-slate-400 text-center mt-4">
+          {footerText} | Dental Analytics trial sandbox env.
+        </p>
+
+      </div>
+    </div>
+  );
+}
+
+interface StockItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  minQuantity: number;
+  unit: string;
+  priceUnit: number;
+  supplier: string;
+  location: string;
+  lastUpdated: string;
+}
+
+interface StockMovement {
+  id: string;
+  itemId: string;
+  itemName: string;
+  type: 'in' | 'out';
+  quantity: number;
+  reason: string;
+  operator: string;
+  date: string;
+}
+
+const DEFAULT_STOCK_ITEMS: StockItem[] = [
+  {
+    id: 'st-1',
+    name: 'Anestésico Lidofrim 2%',
+    category: 'Anestésicos',
+    quantity: 45,
+    minQuantity: 20,
+    unit: 'Frascos',
+    priceUnit: 3.50,
+    supplier: 'Dental Cremer',
+    location: 'Gaveta A2-Consultório 1',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-2',
+    name: 'Luva de Látex Descartável M',
+    category: 'Descartáveis',
+    quantity: 8,
+    minQuantity: 15,
+    unit: 'Caixas',
+    priceUnit: 28.00,
+    supplier: 'OdontoMed Corp',
+    location: 'Armário Geral Prateleira 1',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-3',
+    name: 'Resina Aplic Z350 XT A2',
+    category: 'Dentística',
+    quantity: 12,
+    minQuantity: 5,
+    unit: 'Seringas',
+    priceUnit: 130.00,
+    supplier: 'Dental Cremer',
+    location: 'Gaveta B1-Consultório 2',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-4',
+    name: 'Babador Descartável c/ 100',
+    category: 'Descartáveis',
+    quantity: 4,
+    minQuantity: 5,
+    unit: 'Pacotes',
+    priceUnit: 15.00,
+    supplier: 'OdontoMed Corp',
+    location: 'Armário Geral Prateleira 2',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-5',
+    name: 'Broca Diamantada FG 1014',
+    category: 'Instrumentais',
+    quantity: 25,
+    minQuantity: 15,
+    unit: 'Unidades',
+    priceUnit: 12.50,
+    supplier: 'Dental Speed',
+    location: 'Gaveta C3-Esterilização',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-6',
+    name: 'Álcool em Gel 70% 1L',
+    category: 'Higienização',
+    quantity: 2,
+    minQuantity: 4,
+    unit: 'Frascos',
+    priceUnit: 18.90,
+    supplier: 'Comercial Sul',
+    location: 'Esterilização Pia',
+    lastUpdated: new Date().toISOString()
+  },
+  {
+    id: 'st-7',
+    name: 'Fio de Sutura Nylon 4-0',
+    category: 'Ortodontia',
+    quantity: 18,
+    minQuantity: 8,
+    unit: 'Envelopes',
+    priceUnit: 8.40,
+    supplier: 'Dental Speed',
+    location: 'Gaveta D1-Consultório 1',
+    lastUpdated: new Date().toISOString()
+  }
+];
+
+const DEFAULT_MOVEMENTS: StockMovement[] = [
+  {
+    id: 'm-1',
+    itemId: 'st-1',
+    itemName: 'Anestésico Lidofrim 2%',
+    type: 'in',
+    quantity: 50,
+    reason: 'Compra periódica via distribuidor',
+    operator: 'Dra. Ana Admin',
+    date: subMonths(new Date(), 1).toISOString()
+  },
+  {
+    id: 'm-2',
+    itemId: 'st-2',
+    itemName: 'Luva de Látex Descartável M',
+    type: 'out',
+    quantity: 12,
+    reason: 'Uso clínico intensivo cirurgias',
+    operator: 'Dr. Arthur Rezende',
+    date: subMonths(new Date(), 1).toISOString()
+  },
+  {
+    id: 'm-3',
+    itemId: 'st-4',
+    itemName: 'Babador Descartável c/ 100',
+    type: 'out',
+    quantity: 2,
+    reason: 'Consumo do consultório 3',
+    operator: 'Dr. Arthur Rezende',
+    date: new Date().toISOString()
+  }
+];
+
+function StockView({ currentUser }: { currentUser: any }) {
+  // Initialize from LocalStorage
+  const [items, setItems] = useState<StockItem[]>(() => {
+    const saved = localStorage.getItem('odonto_stock_items');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    localStorage.setItem('odonto_stock_items', JSON.stringify(DEFAULT_STOCK_ITEMS));
+    return DEFAULT_STOCK_ITEMS;
+  });
+
+  const [movements, setMovements] = useState<StockMovement[]>(() => {
+    const saved = localStorage.getItem('odonto_stock_movements');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { console.error(e); }
+    }
+    localStorage.setItem('odonto_stock_movements', JSON.stringify(DEFAULT_MOVEMENTS));
+    return DEFAULT_MOVEMENTS;
+  });
+
+  // Save changes to LocalStorage whenever state updates
+  useEffect(() => {
+    localStorage.setItem('odonto_stock_items', JSON.stringify(items));
+  }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem('odonto_stock_movements', JSON.stringify(movements));
+  }, [movements]);
+
+  // Filter States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('Todos');
+  const [statusFilter, setStatusFilter] = useState('Todos'); // 'Todos', 'Baixo', 'Adequado'
+
+  // Modals / Actions
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [showMovementForm, setShowMovementForm] = useState(false);
+  const [selectedItemForMovement, setSelectedItemForMovement] = useState<StockItem | null>(null);
+  const [movementType, setMovementType] = useState<'in' | 'out'>('in');
+  const [showHistory, setShowHistory] = useState(false);
+
+  // New Item Form State
+  const [newItem, setNewItem] = useState({
+    name: '',
+    category: 'Descartáveis',
+    quantity: '',
+    minQuantity: '',
+    unit: 'Unidades',
+    priceUnit: '',
+    supplier: '',
+    location: ''
+  });
+
+  // Movement Form State
+  const [movementQty, setMovementQty] = useState('');
+  const [movementReason, setMovementReason] = useState('Consumo rotina clínica');
+
+  // Edit State
+  const [editingItem, setEditingItem] = useState<StockItem | null>(null);
+  const [deletingItem, setDeletingItem] = useState<StockItem | null>(null);
+
+  // Calculated Properties
+  const lowStockCount = useMemo(() => {
+    return items.filter(item => item.quantity <= item.minQuantity).length;
+  }, [items]);
+
+  const totalStockValue = useMemo(() => {
+    return items.reduce((sum, item) => sum + (item.quantity * item.priceUnit), 0);
+  }, [items]);
+
+  const uniqueCategories = useMemo(() => {
+    return ['Todos', ...new Set(items.map(i => i.category))];
+  }, [items]);
+
+  // Filtered Items
+  const filteredItems = useMemo(() => {
+    return items.filter(item => {
+      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                            item.supplier.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            item.location.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const matchesCategory = categoryFilter === 'Todos' || item.category === categoryFilter;
+      
+      let matchesStatus = true;
+      if (statusFilter === 'Baixo') {
+        matchesStatus = item.quantity <= item.minQuantity;
+      } else if (statusFilter === 'Adequado') {
+        matchesStatus = item.quantity > item.minQuantity;
+      }
+
+      return matchesSearch && matchesCategory && matchesStatus;
+    });
+  }, [items, searchQuery, categoryFilter, statusFilter]);
+
+  // Add Item Handler
+  const handleAddItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItem.name.trim()) return;
+
+    const item: StockItem = {
+      id: `st-${Date.now()}`,
+      name: newItem.name.trim(),
+      category: newItem.category,
+      quantity: Math.max(0, parseInt(newItem.quantity) || 0),
+      minQuantity: Math.max(0, parseInt(newItem.minQuantity) || 0),
+      unit: newItem.unit,
+      priceUnit: Math.max(0, parseFloat(newItem.priceUnit) || 0),
+      supplier: newItem.supplier.trim() || 'Não especificado',
+      location: newItem.location.trim() || 'Almoxarifado',
+      lastUpdated: new Date().toISOString()
+    };
+
+    setItems(prev => [item, ...prev]);
+
+    // Add movement for initial stock
+    if (item.quantity > 0) {
+      const movement: StockMovement = {
+        id: `m-${Date.now()}`,
+        itemId: item.id,
+        itemName: item.name,
+        type: 'in',
+        quantity: item.quantity,
+        reason: 'Cadastro inicial de estoque',
+        operator: currentUser?.name || 'Administrador',
+        date: new Date().toISOString()
+      };
+      setMovements(prev => [movement, ...prev]);
+    }
+
+    // Reset Form
+    setNewItem({
+      name: '',
+      category: 'Descartáveis',
+      quantity: '',
+      minQuantity: '',
+      unit: 'Unidades',
+      priceUnit: '',
+      supplier: '',
+      location: ''
+    });
+    setShowAddForm(false);
+  };
+
+  // Edit Item Handler
+  const handleEditItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingItem || !editingItem.name.trim()) return;
+
+    setItems(prev => prev.map(item => {
+      if (item.id === editingItem.id) {
+        return {
+          ...editingItem,
+          lastUpdated: new Date().toISOString()
+        };
+      }
+      return item;
+    }));
+
+    setEditingItem(null);
+  };
+
+  // Delete Item Handler
+  const handleDeleteItem = (id: string) => {
+    const item = items.find(i => i.id === id);
+    if (item) {
+      setDeletingItem(item);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!deletingItem) return;
+    const targetId = deletingItem.id;
+
+    setItems(prev => {
+      const updated = prev.filter(i => i.id !== targetId);
+      localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
+      return updated;
+    });
+
+    setMovements(prev => {
+      const updated = prev.filter(m => m.itemId !== targetId);
+      localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
+      return updated;
+    });
+
+    setDeletingItem(null);
+  };
+
+  // Registrar Entrada / Saída
+  const handleAddMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      if (!selectedItemForMovement) {
+        alert("Por favor, selecione um material cadastrado para registrar a movimentação.");
+        return;
+      }
+
+      const liveItem = items.find(i => i.id === selectedItemForMovement.id);
+      if (!liveItem) {
+        alert("Produto não encontrado no estoque atual.");
+        return;
+      }
+
+      const qty = Math.max(1, parseInt(movementQty) || 1);
+
+      // If outflow, check boundaries
+      if (movementType === 'out' && liveItem.quantity < qty) {
+        alert(`Quantidade insuficiente no estoque atual para o material "${liveItem.name}".\n\nEstoque Atual: ${liveItem.quantity} ${liveItem.unit}\nQuantidade Solicitada: ${qty} ${liveItem.unit}\n\nPor favor, ajuste o valor.`);
+        return;
+      }
+
+      // Update quantities
+      setItems(prev => {
+        const updated = prev.map(item => {
+          if (item.id === liveItem.id) {
+            const newQty = movementType === 'in' ? item.quantity + qty : item.quantity - qty;
+            return {
+              ...item,
+              quantity: newQty,
+              lastUpdated: new Date().toISOString()
+            };
+          }
+          return item;
+        });
+        localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
+        return updated;
+      });
+
+      // Record movement logs
+      const movement: StockMovement = {
+        id: `m-${Date.now()}`,
+        itemId: liveItem.id,
+        itemName: liveItem.name,
+        type: movementType,
+        quantity: qty,
+        reason: movementReason.trim() || (movementType === 'in' ? 'Entrada manual' : 'Saída manual'),
+        operator: currentUser?.name || 'Clínico',
+        date: new Date().toISOString()
+      };
+
+      setMovements(prev => {
+        const updated = [movement, ...prev];
+        localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
+        return updated;
+      });
+
+      // Reset Form
+      setMovementQty('');
+      setMovementReason('Consumo rotina clínica');
+      setSelectedItemForMovement(null);
+      setShowMovementForm(false);
+
+      // Success alerts in Portuguese matching exactly the requested confirmation
+      alert(`Movimentação salva com sucesso!\n\nMaterial: ${liveItem.name}\nOperação: ${movementType === 'in' ? 'Entrada (+)' : 'Saída (-)'}\nQuantidade: ${qty} ${liveItem.unit}\nNovo Estoque: ${movementType === 'in' ? liveItem.quantity + qty : liveItem.quantity - qty} ${liveItem.unit}`);
+
+    } catch (error: any) {
+      console.error("Erro ao registrar movimentação:", error);
+      alert("Ocorreu um erro ao salvar a movimentação: " + error.message);
+    }
+  };
+
+  return (
+    <div className="space-y-6 container mx-auto pb-12 font-sans text-left">
+      {/* Header Panel */}
+      <div className="flex flex-col md:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-4">
+        <div>
+          <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight flex items-center gap-2">
+            <Package className="w-7 h-7 text-brand-cyan" />
+            Controle de Estoque & Suprimentos
+          </h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Gerencie o consumo de materiais clínicos, receba alertas de compras críticas e mantenha sua clínica operando sem interrupções.
+          </p>
+        </div>
+        
+        <div className="flex gap-2 shrink-0">
+          <button 
+            onClick={() => {
+              setSelectedItemForMovement(null);
+              setMovementType('out');
+              setMovementQty('1');
+              setMovementReason('Consumo rotina clínica');
+              setShowMovementForm(true);
+            }}
+            className="px-4 py-2 bg-rose-50 text-rose-600 border border-rose-200/50 hover:bg-rose-100 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <TrendingDown className="w-4 h-4 text-rose-500" />
+            Registrar Saída / Consumo
+          </button>
+          
+          <button 
+            onClick={() => {
+              setSelectedItemForMovement(null);
+              setMovementType('in');
+              setMovementQty('1');
+              setMovementReason('Nova compra / Reposição de estoque');
+              setShowMovementForm(true);
+            }}
+            className="px-4 py-2 bg-emerald-50 text-emerald-600 border border-emerald-200/50 hover:bg-emerald-100 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4 text-emerald-500 animate-pulse" />
+            Adicionar Entrada de Lote
+          </button>
+
+          <button 
+            onClick={() => setShowAddForm(true)}
+            className="px-4 py-2 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md active:scale-[0.98] flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            Cadastrar Novo Item
+          </button>
+        </div>
+      </div>
+
+      {/* Grid KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        
+        {/* Total Itens card */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Total de Itens</span>
+            <p className="text-2xl font-black text-slate-800 tracking-tight mt-1">{items.length}</p>
+            <span className="text-[10px] text-slate-400 mt-1 block">Variedade de suprimentos</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500">
+            <Package className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* Low Stock Alerts card */}
+        <button 
+          onClick={() => {
+            setStatusFilter('Baixo');
+            setCategoryFilter('Todos');
+          }}
+          className={cn(
+            "p-5 rounded-2xl border text-left shadow-sm flex items-center justify-between transition-all outline-none focus:outline-none",
+            lowStockCount > 0 
+              ? "bg-amber-50/[0.3] border-amber-200 shadow-amber-100/10 cursor-pointer hover:bg-amber-50" 
+              : "bg-white border-slate-100 cursor-default"
+          )}
+        >
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Estoque Crítico / Baixo</span>
+            <p className={cn("text-2xl font-black tracking-tight mt-1", lowStockCount > 0 ? "text-amber-500" : "text-slate-800")}>
+              {lowStockCount}
+            </p>
+            <span className={cn("text-[10px] mt-1 block font-bold", lowStockCount > 0 ? "text-amber-600 animate-pulse" : "text-slate-400")}>
+              {lowStockCount > 0 ? "Exige reposição imediata" : "Nenhuma pendência"}
+            </span>
+          </div>
+          <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", lowStockCount > 0 ? "bg-amber-100/60 text-amber-500 animate-bounce" : "bg-slate-50 text-slate-400")}>
+            <AlertCircle className="w-6 h-6" />
+          </div>
+        </button>
+
+        {/* Financial Value card */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Valor total de Estoque</span>
+            <p className="text-2xl font-black text-rose-500 tracking-tight mt-1">{formatCurrency(totalStockValue)}</p>
+            <span className="text-[10px] text-slate-400 mt-1 block">Patrimônio ativo estocado</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500">
+            <DollarSign className="w-6 h-6" />
+          </div>
+        </div>
+
+        {/* History tracker widget */}
+        <button 
+          onClick={() => setShowHistory(true)}
+          className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:bg-slate-50 text-left transition-all outline-none"
+        >
+          <div>
+            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Log de Movimentações</span>
+            <p className="text-2xl font-black text-brand-cyan tracking-tight mt-1">{movements.length}</p>
+            <span className="text-[10px] text-brand-cyan underline block font-bold">Ver histórico de entradas/saídas</span>
+          </div>
+          <div className="w-12 h-12 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan">
+            <History className="w-6 h-6" />
+          </div>
+        </button>
+
+      </div>
+
+      {/* Filter and Table area */}
+      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-lg p-6 space-y-6">
+        
+        {/* Actions bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            
+            {/* Search */}
+            <div className="relative group w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+              <input 
+                type="text" 
+                placeholder="Buscar por nome, fornecedor, local..."
+                className="pl-9 pr-3 py-2.5 w-full bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all shadow-sm"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+
+            {/* Category Filter dropdown */}
+            <div className="w-full sm:w-auto shrink-0">
+              <select 
+                className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 outline-none cursor-pointer shadow-sm font-semibold text-slate-700"
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+              >
+                {uniqueCategories.map((cat, i) => (
+                  <option key={i} value={cat}>Categorias: {cat}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Status Filter buttons */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100/80 rounded-xl border border-slate-200/50 w-full sm:w-auto overflow-x-auto">
+              {[
+                { label: 'Todos', value: 'Todos' },
+                { label: 'Crítico/Baixo ⚠️', value: 'Baixo' },
+                { label: 'Adequado', value: 'Adequado' }
+              ].map((btn, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setStatusFilter(btn.value)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap",
+                    statusFilter === btn.value
+                      ? "bg-white text-slate-800 shadow-sm font-black"
+                      : "text-slate-500 hover:text-slate-800 hover:bg-white/40"
+                  )}
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setCategoryFilter('Todos');
+              setStatusFilter('Todos');
+            }}
+            className="text-[10px] font-black uppercase text-slate-400 tracking-wider hover:text-slate-700 underline focus:outline-none"
+          >
+            Limpar Filtros
+          </button>
+        </div>
+
+        {/* Stock Items Table */}
+        <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/70 border-b border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                  <th className="py-4 px-5">Material / Suprimento</th>
+                  <th className="py-4 px-4">Categoria</th>
+                  <th className="py-4 px-4 text-center">Nível / Quantidade</th>
+                  <th className="py-4 px-4 text-right">Preço Unitário</th>
+                  <th className="py-4 px-4 text-right">Valor Total Estocado</th>
+                  <th className="py-4 px-4 hidden md:table-cell">Fornecedor & Localização</th>
+                  <th className="py-4 px-5 text-center">Ações Rápidas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/20 font-medium">
+                      Nenhum material encontrado com as especificações inseridas.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredItems.map((item) => {
+                    const isLow = item.quantity <= item.minQuantity;
+                    const pct = item.minQuantity > 0 ? Math.min(100, Math.round((item.quantity / (item.minQuantity * 2.5)) * 100)) : 100;
+                    
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
+                        
+                        {/* Material Info */}
+                        <td className="py-4 px-5">
+                          <div>
+                            <div className="font-bold text-slate-800 text-sm group-hover:text-brand-cyan transition-colors">{item.name}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[9px] text-slate-400 font-mono">Última atualização: {new Date(item.lastUpdated).toLocaleDateString()}</span>
+                              {isLow && (
+                                <span className="inline-flex items-center gap-0.5 text-[8.5px] bg-red-50 text-red-600 font-black px-1.5 py-0.5 rounded uppercase tracking-wider animate-pulse">
+                                  CRÍTICO/BAIXO
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Category Badge */}
+                        <td className="py-4 px-4">
+                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium text-[10px]">
+                            {item.category}
+                          </span>
+                        </td>
+
+                        {/* Stock Quantity */}
+                        <td className="py-4 px-4 min-w-[150px]">
+                          <div className="flex flex-col items-center justify-center">
+                            <span className="font-bold text-slate-700 text-sm">
+                              {item.quantity} <span className="text-[10px] text-slate-400 font-normal">/ {item.minQuantity} {item.unit}</span>
+                            </span>
+                            <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 text-center">
+                              <div 
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-300",
+                                  isLow ? "bg-red-500" : pct < 60 ? "bg-amber-400" : "bg-emerald-500"
+                                )} 
+                                style={{ width: `${pct}%` }} 
+                              />
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Price Unit */}
+                        <td className="py-4 px-4 text-right font-medium text-slate-500">
+                          {formatCurrency(item.priceUnit)}
+                        </td>
+
+                        {/* Price Total */}
+                        <td className="py-4 px-4 text-right font-bold text-slate-700">
+                          {formatCurrency(item.quantity * item.priceUnit)}
+                        </td>
+
+                        {/* Supplier Location */}
+                        <td className="py-4 px-4 hidden md:table-cell">
+                          <div className="text-[11px] text-slate-600 font-medium max-w-xs truncate">{item.supplier}</div>
+                          <div className="text-[9.5px] text-slate-400 italic truncate">{item.location}</div>
+                        </td>
+
+                        {/* Action buttons */}
+                        <td className="py-4 px-5">
+                          <div className="flex items-center justify-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                            
+                            {/* Inflow button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItemForMovement(item);
+                                setMovementType('in');
+                                setMovementQty('1');
+                                setMovementReason('Nova compra / Reposição de estoque');
+                                setShowMovementForm(true);
+                              }}
+                              className="p-1 px-1.5 text-xs font-bold text-emerald-600 hover:bg-emerald-50 border border-emerald-100 rounded-lg transition-colors shadow-sm bg-white"
+                              title="Adicionar entrada"
+                            >
+                              + Entrada
+                            </button>
+
+                            {/* Outflow button */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItemForMovement(item);
+                                setMovementType('out');
+                                setMovementQty('1');
+                                setMovementReason('Consumo rotina clínica');
+                                setShowMovementForm(true);
+                              }}
+                              className="p-1 px-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 border border-rose-100 rounded-lg transition-colors shadow-sm bg-white"
+                              title="Registrar consumo"
+                            >
+                              - Saída
+                            </button>
+
+                            <div className="w-[1px] h-6 bg-slate-100" />
+
+                            {/* Edit */}
+                            <button
+                              type="button"
+                              onClick={() => setEditingItem(item)}
+                              className="p-1.5 bg-slate-50 text-slate-500 hover:text-slate-800 border border-slate-200/50 rounded-lg transition-colors hover:bg-slate-100"
+                              title="Editar item cadastrado"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Delete */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(item.id)}
+                              className="p-1.5 bg-rose-50/50 text-rose-500 hover:text-rose-700 border border-rose-100/50 rounded-lg transition-colors hover:bg-rose-100"
+                              title="Remover produto permanentemente"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+
+                          </div>
+                        </td>
+
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      {/* MODAL: CADASTRO DE NOVO ITEM */}
+      <AnimatePresence>
+        {showAddForm && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <Package className="w-5 h-5 text-brand-cyan" />
+                  <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Cadastrar Suprimento do Estoque</h3>
+                </div>
+                <button onClick={() => setShowAddForm(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddItem} className="p-6 space-y-4">
+                
+                {/* Nome do Item */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome do Produto / Material *</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={newItem.name}
+                    onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: Alginato Kelldent 454g"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Categoria */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Categoria</label>
+                    <select
+                      value={newItem.category}
+                      onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    >
+                      <option value="Descartáveis">Descartáveis</option>
+                      <option value="Anestésicos">Anestésicos</option>
+                      <option value="Ortodontia">Ortodontia</option>
+                      <option value="Dentística">Dentística</option>
+                      <option value="Instrumentais">Instrumentais</option>
+                      <option value="Higienização">Higienização</option>
+                      <option value="Prevenção">Prevenção</option>
+                    </select>
+                  </div>
+
+                  {/* Unidade de Medida */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Unidade de Medida</label>
+                    <select
+                      value={newItem.unit}
+                      onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    >
+                      <option value="Unidades">Unidades</option>
+                      <option value="Caixas">Caixas</option>
+                      <option value="Seringas">Seringas</option>
+                      <option value="Envelopes">Envelopes</option>
+                      <option value="Pacotes">Pacotes</option>
+                      <option value="Frascos">Frascos</option>
+                      <option value="Kits">Kits</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Qtd Inicial */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Inicial *</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={newItem.quantity}
+                      onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 15"
+                    />
+                  </div>
+
+                  {/* Qtd Mínima */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra *</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={newItem.minQuantity}
+                      onChange={(e) => setNewItem({ ...newItem, minQuantity: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 5"
+                    />
+                  </div>
+
+                  {/* Preço Unitário */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Preço Unitário R$ *</label>
+                    <input 
+                      type="number" 
+                      required
+                      step="0.01"
+                      min="0.01"
+                      value={newItem.priceUnit}
+                      onChange={(e) => setNewItem({ ...newItem, priceUnit: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: 34.90"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Fornecedor */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
+                    <input 
+                      type="text" 
+                      value={newItem.supplier}
+                      onChange={(e) => setNewItem({ ...newItem, supplier: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: Dental Speed"
+                    />
+                  </div>
+
+                  {/* Localização */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Local de Armazenamento</label>
+                    <input 
+                      type="text" 
+                      value={newItem.location}
+                      onChange={(e) => setNewItem({ ...newItem, location: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                      placeholder="Ex: Armário Clínico 2B"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-xl shadow-slate-900/10 mt-2 active:scale-[0.99]"
+                >
+                  Confirmar Cadastro do Material
+                </button>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: MOVER ESTOQUE (ENTRADA / SAÍDA QUICK) */}
+      <AnimatePresence>
+        {showMovementForm && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-md overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between" style={{ backgroundColor: movementType === 'in' ? '#f0fdf4' : '#fff5f5' }}>
+                <div className="flex items-center gap-2">
+                  <Layers className={cn("w-5 h-5", movementType === 'in' ? "text-emerald-500 animate-pulse" : "text-rose-500")} />
+                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">
+                    {movementType === 'in' ? 'Registrar Nova Entrada (Compra/Lote)' : 'Registrar Consumo / Saída'}
+                  </h3>
+                </div>
+                <button onClick={() => { setShowMovementForm(false); setSelectedItemForMovement(null); }} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddMovement} className="p-6 space-y-4 text-left">
+                
+                {/* Item Select */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Produto *</label>
+                  <select
+                    required
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
+                    value={selectedItemForMovement?.id || ""}
+                    onChange={(e) => {
+                      const found = items.find(i => i.id === e.target.value);
+                      setSelectedItemForMovement(found || null);
+                    }}
+                  >
+                    <option value="">Selecione um produto cadastrado...</option>
+                    {items.map(i => (
+                      <option key={i.id} value={i.id}>{i.name} (Disponível: {i.quantity} {i.unit})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Quantidade */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Quantidade ({selectedItemForMovement?.unit || 'Unidades'}) *</label>
+                  <input 
+                    type="number" 
+                    required
+                    min="1"
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder="Ex: 5"
+                    value={movementQty}
+                    onChange={(e) => setMovementQty(e.target.value)}
+                  />
+                </div>
+
+                {/* Motivação/Motivo */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Motivo da Movimentação</label>
+                  <input 
+                    type="text" 
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
+                    placeholder={movementType === 'in' ? 'Ex: Fornecimento de rotina ou compra emergencial' : 'Ex: Tratamento do canal Dr. Carlos'}
+                    value={movementReason}
+                    onChange={(e) => setMovementReason(e.target.value)}
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    className={cn(
+                      "w-full py-4 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md active:scale-[0.99]",
+                      movementType === 'in' 
+                        ? "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10" 
+                        : "bg-rose-500 hover:bg-rose-600 shadow-rose-500/10"
+                    )}
+                  >
+                    {movementType === 'in' ? 'Confirmar Entrada de Materiais' : 'Confirmar Baixa do Estoque'}
+                  </button>
+                </div>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: EDITAR PRODUTO */}
+      <AnimatePresence>
+        {editingItem && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-100/50">
+                <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Editar Informações do Produto</h3>
+                <button onClick={() => setEditingItem(null)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditItem} className="p-6 space-y-4 text-left">
+                
+                {/* Nome do Item */}
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome Completo do Produto</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={editingItem.name}
+                    onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
+                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Fornecedor */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
+                    <input 
+                      type="text" 
+                      value={editingItem.supplier}
+                      onChange={(e) => setEditingItem({ ...editingItem, supplier: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+
+                  {/* Localização */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Localização interna</label>
+                    <input 
+                      type="text" 
+                      value={editingItem.location}
+                      onChange={(e) => setEditingItem({ ...editingItem, location: e.target.value })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Ponto de Compra */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra Mínimo</label>
+                    <input 
+                      type="number" 
+                      required
+                      min="0"
+                      value={editingItem.minQuantity}
+                      onChange={(e) => setEditingItem({ ...editingItem, minQuantity: Math.max(0, parseInt(e.target.value) || 0) })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+
+                  {/* Preco Unitario */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Preço Unitário R$</label>
+                    <input 
+                      type="number" 
+                      required
+                      step="0.01"
+                      min="0.01"
+                      value={editingItem.priceUnit}
+                      onChange={(e) => setEditingItem({ ...editingItem, priceUnit: Math.max(0.01, parseFloat(e.target.value) || 0) })}
+                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md mt-2 active:scale-[0.99]"
+                >
+                  Salvar Alterações
+                </button>
+
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: HISTÓRICO DE LOGS DE COMPRAS E CONSUMO */}
+      <AnimatePresence>
+        {showHistory && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <History className="w-5 h-5 text-brand-cyan" />
+                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Registro Cronológico de Movimentações</h3>
+                </div>
+                <button onClick={() => setShowHistory(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="overflow-y-auto p-6 space-y-4 flex-1">
+                {movements.length === 0 ? (
+                  <p className="text-center text-slate-400 py-12 text-xs font-medium">Nenhuma movimentação registrada.</p>
+                ) : (
+                  movements.map((m) => {
+                    const isIn = m.type === 'in';
+                    return (
+                      <div key={m.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 flex items-center justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                          <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5", isIn ? "bg-emerald-50 text-emerald-500" : "bg-rose-50 text-rose-500")}>
+                            {isIn ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-800 text-xs">
+                              {isIn ? 'Entrada / Adicionamento' : 'Baixa / Consumo'} de <span className="text-brand-cyan">{m.itemName}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Motivo: {m.reason}</p>
+                            <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[9px] text-slate-400">
+                              <span>Por: <strong>{m.operator}</strong></span>
+                              <span>•</span>
+                              <span>Data/Hora: {new Date(m.date).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className={cn("text-sm font-black shrink-0", isIn ? "text-emerald-500" : "text-rose-500")}>
+                          {isIn ? '+' : '-'}{m.quantity}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              
+              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
+                <button 
+                  type="button" 
+                  onClick={() => setShowHistory(false)}
+                  className="px-4 py-2 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider"
+                >
+                  Fechar Histórico
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: CONFIRMAR REMOVER ITEM */}
+      <AnimatePresence>
+        {deletingItem && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-sm overflow-hidden flex flex-col"
+            >
+              <div className="px-6 py-4 border-b border-rose-100 flex items-center justify-between bg-rose-50/55">
+                <div className="flex items-center gap-2">
+                  <span className="p-1 bg-rose-100 text-rose-600 rounded-lg">
+                    <Trash2 className="w-4 h-4" />
+                  </span>
+                  <h3 className="text-xs font-black uppercase text-rose-700 tracking-wider">Confirmar Exclusão</h3>
+                </div>
+                <button 
+                  onClick={() => setDeletingItem(null)} 
+                  className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-6 text-center space-y-4">
+                <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-2xl text-left">
+                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider leading-none mb-1">Material Selecionado</p>
+                  <p className="font-bold text-slate-800 text-sm">{deletingItem.name}</p>
+                  <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-100 text-[10.5px]">
+                    <span className="text-slate-400">Estoque Atual:</span>
+                    <span className="font-black text-slate-700">{deletingItem.quantity} {deletingItem.unit}</span>
+                  </div>
+                </div>
+
+                <p className="text-[11.5px] text-slate-500 font-medium">
+                  Tem certeza absoluta que deseja remover este item permanentemente do estoque? Esta ação não pode ser desfeita.
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
+                <button 
+                  type="button" 
+                  onClick={() => setDeletingItem(null)}
+                  className="flex-1 py-3 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="button" 
+                  onClick={confirmDelete}
+                  className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-wider transition-all shadow-md shadow-rose-500/10 active:scale-[0.98]"
+                >
+                  Sim, Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+    </div>
+  );
+}
+
+function PublicConfirmationView({
+  appointmentId,
+  onBack,
+  onOpenBooking,
+  setReschedulePreFill,
+  clinicName,
+  clinicLogo,
+  footerText,
+  data
+}: {
+  appointmentId: string;
+  onBack: () => void;
+  onOpenBooking: () => void;
+  setReschedulePreFill: (data: any) => void;
+  clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
+  data: any[];
+}) {
+  const [appt, setAppt] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [viewStatus, setViewStatus] = useState<'idle' | 'success_confirm' | 'success_cancel' | 'not_found' | 'error' | 'finished'>('idle');
+
+  const handleCloseWindow = () => {
+    try {
+      window.close();
+    } catch (e) {
+      console.warn("Bloqueado pelo navegador:", e);
+    }
+    setViewStatus('finished');
+  };
+
+  useEffect(() => {
+    const fetchAppt = async () => {
+      try {
+        setLoading(true);
+        // Procure localmente primeiro
+        const local = data.find(r => r.id === appointmentId);
+        if (local) {
+          setAppt(local);
+          setLoading(false);
+          return;
+        }
+
+        // Se nao achar localmente, busca no Firestore
+        const docRef = doc(db, 'records', appointmentId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setAppt({ id: docSnap.id, ...docSnap.data() });
+        } else {
+          setViewStatus('not_found');
+        }
+      } catch (err) {
+        console.error("Erro ao buscar agendamento:", err);
+        setViewStatus('error');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAppt();
+  }, [appointmentId, data]);
+
+  const handleConfirm = async () => {
+    if (!appt) return;
+    setActionLoading(true);
+    try {
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Agendado' });
+      setViewStatus('success_confirm');
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao confirmar sua consulta. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!appt) return;
+    if (!window.confirm("Deseja realmente cancelar o seu agendamento? Esta vaga será liberada imediatamente para outros pacientes.")) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Cancelado' });
+      setViewStatus('success_cancel');
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao cancelar. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReschedule = async () => {
+    if (!appt) return;
+    setActionLoading(true);
+    try {
+      // 1. Libera a vaga atual
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Cancelado' });
+      
+      // 2. Pre-preenche os dados para o novo agendamento
+      setReschedulePreFill({
+        dentista: appt.dentista || '',
+        paciente: appt.paciente || '',
+        telefone: appt.telefone || '',
+        procedimento: appt.procedimento || 'Consulta Inicial'
+      });
+
+      // 3. Abre a tela de agendamento publico
+      onOpenBooking();
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao iniciar o reagendamento. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-cyan mb-4"></div>
+        <p className="text-xs font-black uppercase tracking-widest text-slate-400">Carregando dados da consulta...</p>
+      </div>
+    );
+  }
+
+  if (viewStatus === 'not_found' || !appt) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
+        <XCircle className="w-16 h-16 text-rose-500 mb-4" />
+        <h1 className="text-xl font-black uppercase tracking-tight mb-2">Agendamento não localizado</h1>
+        <p className="text-slate-400 max-w-sm text-xs mb-6 leading-relaxed">
+          O link de confirmação parece estar inválido ou expirado. Entre em contato direto com a clínica para confirmar o seu horário.
+        </p>
+        <button onClick={handleCloseWindow} className="px-6 py-2.5 bg-brand-cyan text-slate-900 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-brand-cyan/90 transition-all cursor-pointer">
+          Fechar Página
+        </button>
+      </div>
+    );
+  }
+
+  const friendlyDate = appt.data && isValid(parseISO(appt.data)) 
+    ? format(parseISO(appt.data), "eeee, dd 'de' MMMM 'de' yyyy", { locale: ptBR }) 
+    : "--/--/----";
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-between p-4 sm:p-6 selection:bg-brand-cyan selection:text-slate-900">
+      <div className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full py-6 sm:py-12">
+        
+        {/* Logo/Header */}
+        <div className="flex flex-col items-center gap-2 mb-6 text-center">
+          {clinicLogo ? (
+            <img src={clinicLogo} alt={clinicName} className="h-10 w-auto object-contain mb-2" />
+          ) : (
+            <div className="w-12 h-12 bg-brand-cyan/10 border border-brand-cyan/20 rounded-2xl flex items-center justify-center mb-2">
+              <Activity className="w-6 h-6 text-brand-cyan" />
+            </div>
+          )}
+          <h2 className="text-[10px] font-black uppercase text-brand-cyan tracking-widest">{clinicName}</h2>
+          <h1 className="text-xl font-black text-white tracking-tight">Confirmação de Agendamento</h1>
+        </div>
+
+        {/* Visual Content Box */}
+        {viewStatus === 'success_confirm' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-emerald-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Presença Confirmada!</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Olá, <b>{appt.paciente}</b>! Registramos a sua confirmação com sucesso em nosso sistema acadêmico-clínico. Obrigado!
+              </p>
+            </div>
+            <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-700/30 text-left space-y-2 text-xs text-slate-300 font-medium">
+              <div className="flex gap-2.5 items-center">
+                <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>{friendlyDate}</span>
+              </div>
+              <div className="flex gap-2.5 items-center">
+                <Clock className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span className="font-bold text-brand-cyan bg-brand-cyan/5 px-2 py-0.5 rounded border border-brand-cyan/10">{appt.horario || 'N/D'}</span>
+              </div>
+              <div className="flex gap-2.5 items-center">
+                <User className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>Dentista: {appt.dentista}</span>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <button 
+                onClick={handleCloseWindow}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-emerald-500/15"
+              >
+                Concluir e Sair
+              </button>
+              <p className="text-[10px] text-slate-400 font-medium">
+                Você pode fechar esta aba do seu celular ou navegador com segurança.
+              </p>
+            </div>
+          </motion.div>
+        )}
+
+        {viewStatus === 'success_cancel' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-rose-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
+              <XCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Consulta Cancelada</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Seu agendamento foi cancelado com sucesso em nosso sistema e o horário correspondente está liberado para outros pacientes.
+              </p>
+            </div>
+            
+            <div className="pt-4 border-t border-slate-700/50 space-y-3">
+              <p className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Gostaria de sugerir outro horário?</p>
+              <button 
+                onClick={handleReschedule}
+                className="w-full py-3 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/15"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Agendar Novo Horário
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {viewStatus === 'finished' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-slate-700/50 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
+              <ShieldCheck className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Conexão Encerrada com Segurança</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Suas respostas foram salvas no sistema da clínica.
+              </p>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Para garantir a total privacidade dos seus dados, a sua sessão foi encerrada de forma segura. Você já pode fechar esta aba no seu celular ou navegador.
+              </p>
+            </div>
+          </motion.div>
+        )}
+
+        {viewStatus === 'idle' && (
+          <motion.div 
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full bg-slate-800 border border-slate-700/50 p-6 rounded-[36px] shadow-xl space-y-6"
+          >
+            <div className="text-center space-y-1">
+              <span className="text-[9px] uppercase font-black bg-brand-cyan/10 text-brand-cyan px-2.5 py-1 rounded-full">
+                {appt.status === 'Cancelado' ? 'Cancelado' : 'Aguardando Resposta'}
+              </span>
+              <h3 className="text-lg font-black text-white pt-2">Olá, {appt.paciente}!</h3>
+              <p className="text-xs text-slate-400 font-medium">Por favor, selecione uma das ações abaixo para gerenciar sua consulta.</p>
+            </div>
+
+            {/* Information Details Card */}
+            <div className="bg-slate-900/50 p-4 sm:p-5 rounded-2xl border border-slate-700/40 space-y-3">
+              <div className="flex gap-3 items-center">
+                <div className="w-9 h-9 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan font-black text-xs shrink-0">
+                  {appt.paciente ? appt.paciente.charAt(0) : 'P'}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-wider leading-none mb-1">Paciente</p>
+                  <p className="text-sm font-black text-white truncate leading-none">{appt.paciente}</p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800/80 pt-3 grid grid-cols-2 gap-3 text-xs leading-none">
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Procedimento</span>
+                  <span className="font-bold text-slate-300 block truncate">{appt.procedimento || 'Consulta Inicial'}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Dentista</span>
+                  <span className="font-bold text-slate-300 block truncate">{appt.dentista}</span>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800/80 pt-3 flex items-center gap-4 text-xs font-bold text-slate-300">
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
+                  <span>{format(parseISO(appt.data), 'dd/MM/yyyy')}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-brand-cyan font-black bg-brand-cyan/10 px-2 py-0.5 rounded border border-brand-cyan/15 xs:text-[11px]">
+                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                  <span>{appt.horario || 'N/D'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Interaction Row */}
+            {appt.status === 'Cancelado' ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-rose-500/10 border border-rose-500/25 rounded-2xl text-center text-xs text-rose-300 font-bold leading-relaxed">
+                  Esta consulta já consta como CANCELADA e o horário foi liberado de nossa agenda.
+                </div>
+                <button 
+                  onClick={handleReschedule}
+                  className="w-full py-3.5 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/20"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Agendar Novo Horário
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={handleConfirm}
+                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/15"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  {actionLoading ? 'Processando...' : 'Confirmar Consulta'}
+                </button>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleReschedule}
+                    className="py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Reagendar
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleCancel}
+                    className="py-3 bg-rose-500/10 hover:bg-rose-500/15 text-rose-400 border border-rose-500/20 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+      </div>
+
+      <div className="text-slate-600 text-[9px] flex items-center justify-center gap-1.5 text-center py-4">
+        <ShieldCheck className="w-4 h-4 text-emerald-500/40" />
+        <span>Atendimento exclusivo e criptografado da clínica {clinicName}. {footerText}</span>
+      </div>
+    </div>
   );
 }
 
