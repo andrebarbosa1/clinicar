@@ -410,7 +410,7 @@ const PROCEDURES_OPTIONS = [
 const INITIAL_USERS = [
   { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com' },
   { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com' },
-  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
+  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Dashboard, Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
 ];
 
 export default function App() {
@@ -422,13 +422,19 @@ export default function App() {
   const [users, setUsers] = useState<any[]>(INITIAL_USERS);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isPublicBooking, setIsPublicBooking] = useState(false);
+  const [confirmApptId, setConfirmApptId] = useState<string | null>(null);
+  const [reschedulePreFill, setReschedulePreFill] = useState<any | null>(null);
 
-  // Handle public booking URL
+  // Handle public booking and confirmation URLs
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('booking') === 'true') {
         setIsPublicBooking(true);
+      }
+      const apptId = params.get('confirmAppt');
+      if (apptId) {
+        setConfirmApptId(apptId);
       }
     }
   }, []);
@@ -496,13 +502,18 @@ export default function App() {
     // Admin always has all access
     if (currentUser.role === 'Admin') return true;
     
-    // Explicit module check
-    const userModules = (currentUser.modules || '').split(',').map((m: string) => m.trim().toLowerCase());
-    
     // Safety: Recepcionista cannot access Financeiro or Administração even if misconfigured
     if (currentUser.role === 'Recepcionista' && (moduleName.toLowerCase() === 'financeiro' || moduleName.toLowerCase() === 'administração')) {
       return false;
     }
+
+    // Recepcionista always gets Dashboard, Agenda, and Pacientes by default
+    if (currentUser.role === 'Recepcionista' && (moduleName.toLowerCase() === 'dashboard' || moduleName.toLowerCase() === 'agenda' || moduleName.toLowerCase() === 'pacientes')) {
+      return true;
+    }
+    
+    // Explicit module check
+    const userModules = (currentUser.modules || '').split(',').map((m: string) => m.trim().toLowerCase());
     
     return userModules.includes(moduleName.toLowerCase());
   }, [currentUser]);
@@ -776,6 +787,35 @@ export default function App() {
       return matchesProcedure && matchesStatus && matchesPayment && matchesDentista && matchesSearch && matchesDate;
     });
   }, [filteredRecords, filterProcedure, filterStatus, filterPayment, filterDentista, searchPatient, filterStartDate, filterEndDate]);
+
+  // General upcoming appointments that bypasses dashboard date filters but respects developer/role restrictions & searches
+  const upcomingAppointments = React.useMemo(() => {
+    const todayStart = startOfDay(new Date());
+    return filteredRecords
+      .filter(r => {
+        if (!r.data || !isValid(parseISO(r.data))) return false;
+        if (r.status !== 'Agendado' && r.status !== 'Pendente') return false;
+        
+        // Match dentist filter if set
+        if (filterDentista !== 'Todos' && r.dentista !== filterDentista) return false;
+        
+        // Match patient name search if set
+        if (searchPatient && !(r.paciente || "").toLowerCase().includes(searchPatient.toLowerCase())) return false;
+
+        const apptDate = startOfDay(parseISO(r.data));
+        return apptDate.getTime() >= todayStart.getTime();
+      })
+      .sort((a, b) => {
+        const dateA = parseISO(a.data);
+        const dateB = parseISO(b.data);
+        if (dateA.getTime() !== dateB.getTime()) {
+          return dateA.getTime() - dateB.getTime();
+        }
+        const timeA = a.horario || '';
+        const timeB = b.horario || '';
+        return timeA.localeCompare(timeB);
+      });
+  }, [filteredRecords, filterDentista, searchPatient]);
 
   // Seeding Logic (Optimized to avoid quota drain)
   React.useEffect(() => {
@@ -1268,7 +1308,7 @@ export default function App() {
       id,
       name: newUser.name,
       role: newUser.role,
-      modules: newUser.modules || (newUser.role === 'Admin' ? 'Todos' : (newUser.role === 'Dentista' ? 'Dashboard, Agenda, Pacientes' : 'Agenda, Pacientes, Financeiro')),
+      modules: newUser.modules || (newUser.role === 'Admin' ? 'Todos' : (newUser.role === 'Dentista' ? 'Dashboard, Agenda, Pacientes' : (newUser.role === 'Recepcionista' ? 'Dashboard, Agenda, Pacientes' : 'Agenda, Pacientes, Financeiro'))),
       username: newUser.username || (newUser.name || "user").toLowerCase().replace(' ', '.'),
       password: newUser.password || '123',
       email: newUser.email || '',
@@ -1461,8 +1501,14 @@ export default function App() {
     }
 
     const timeStr = record.horario ? ` às ${record.horario}` : '';
-    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM") : "N/D";
-    const message = `Olá ${record.paciente}, aqui é da Clínica Odontológica. Confirmando sua consulta de ${record.procedimento} para o dia ${dateFormatted}${timeStr} com ${record.dentista}. Podemos confirmar?`;
+    const dateFormatted = record.data && isValid(parseISO(record.data)) ? format(parseISO(record.data), "dd/MM/yyyy") : "N/D";
+    
+    // Gerar link de ação do paciente
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const confirmationLink = `${origin}${pathname}?confirmAppt=${record.id}`;
+
+    const message = `Olá, ${record.paciente}!\n\nConfirmando a sua consulta odontológica de *${record.procedimento}* para o dia *${dateFormatted}*${timeStr} com *${record.dentista}*.\n\nPor favor, responda ou gerencie sua consulta (Confirmar, Cancelar ou Reagendar) clicando no link abaixo:\n\n👉 ${confirmationLink}`;
     const encodedMessage = encodeURIComponent(message);
     
     // Remove caracteres não numéricos e garante o DDI 55 (Brasil) se não houver
@@ -1772,11 +1818,35 @@ export default function App() {
     );
   }
 
+  if (confirmApptId) {
+    return (
+      <>
+        <PublicConfirmationView 
+          appointmentId={confirmApptId} 
+          onBack={() => setConfirmApptId(null)} 
+          onOpenBooking={() => {
+            setConfirmApptId(null);
+            setIsPublicBooking(true);
+          }}
+          setReschedulePreFill={setReschedulePreFill}
+          clinicName={clinicName}
+          clinicLogo={clinicLogo}
+          footerText={footerText}
+          data={data}
+        />
+        {renderLegal()}
+      </>
+    );
+  }
+
   if (isPublicBooking) {
     return (
       <>
         <PublicBookingView 
-          onBack={() => setIsPublicBooking(false)} 
+          onBack={() => {
+            setIsPublicBooking(false);
+            setReschedulePreFill(null);
+          }} 
           users={users} 
           data={data} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
@@ -1784,6 +1854,7 @@ export default function App() {
           clinicName={clinicName}
           clinicLogo={clinicLogo}
           footerText={footerText}
+          initialFormData={reschedulePreFill}
         />
         {renderLegal()}
       </>
@@ -1966,6 +2037,7 @@ export default function App() {
             )}
             <DashboardView 
               filteredData={filteredData} 
+              upcomingAppointments={upcomingAppointments}
               onSendWhatsApp={handleWhatsAppReminder} 
               onSendReminder={handleSendManualReminder} 
               canSeeFinancials={canSeeFinancials}
@@ -2097,7 +2169,7 @@ export default function App() {
       case 'Estoque':
         return <StockView currentUser={currentUser} />;
       default:
-        return <DashboardView filteredData={filteredData} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
+        return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
     }
   };
 
@@ -3977,11 +4049,13 @@ function RibbonItem({ icon, label, active = false, onClick }: { icon: React.Reac
 
 function DashboardView({ 
   filteredData,
+  upcomingAppointments = [],
   onSendWhatsApp,
   onSendReminder,
   canSeeFinancials = true
 }: { 
   filteredData: DentalRecord[];
+  upcomingAppointments?: DentalRecord[];
   onSendWhatsApp: (record: DentalRecord) => void;
   onSendReminder: (record: DentalRecord) => void;
   canSeeFinancials?: boolean;
@@ -4033,6 +4107,21 @@ function DashboardView({
     return Object.entries(dentists).map(([name, value]) => ({ name, value }));
   }, [filteredData]);
 
+  const getFriendlyDate = (dateStr: string) => {
+    if (!dateStr || !isValid(parseISO(dateStr))) return '';
+    const parsed = parseISO(dateStr);
+    if (isToday(parsed)) {
+      return 'Hoje';
+    }
+    const tomorrow = addDays(new Date(), 1);
+    const parsedDateStr = format(parsed, 'yyyy-MM-dd');
+    const tomorrowDateStr = format(tomorrow, 'yyyy-MM-dd');
+    if (parsedDateStr === tomorrowDateStr) {
+      return 'Amanhã';
+    }
+    return format(parsed, 'dd/MM');
+  };
+
   // Chart Data: Procedure Distribution
   const procedureDistribution = useMemo(() => {
     const counts: { [key: string]: number } = {};
@@ -4041,17 +4130,6 @@ function DashboardView({
       counts[r.procedimento] = (counts[r.procedimento] || 0) + 1;
     });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [filteredData]);
-
-  // Upcoming appointments (simulated from filteredData based on status 'Agendado' and date)
-  const upcomingAppointments = useMemo(() => {
-    return filteredData
-      .filter(r => (r.status === 'Agendado' || r.status === 'Pendente') && r.data && isValid(parseISO(r.data)) && isToday(parseISO(r.data)))
-      .sort((a, b) => {
-        const dateA = parseISO(a.data);
-        const dateB = parseISO(b.data);
-        return dateA.getTime() - dateB.getTime();
-      });
   }, [filteredData]);
 
   const COLORS = ['#0ea5e9', '#6366f1', '#f59e0b', '#10b981', '#f43f5e', '#8b5cf6'];
@@ -4080,9 +4158,9 @@ function DashboardView({
         ) : (
           <>
             <MetricCard 
-              label="Agendamentos Hoje" 
+              label="Agendamentos Próximos" 
               value={upcomingAppointments.length.toString()} 
-              description="Pacientes marcados para hoje"
+              description="Pacientes com consulta marcada"
               trend={5.2}
               icon={<Calendar className="w-4 h-4" />}
             />
@@ -4122,49 +4200,52 @@ function DashboardView({
                 Agendamentos Próximos
               </h2>
             </div>
-            <span className="text-[10px] font-black bg-brand-cyan/10 text-brand-cyan px-2 py-0.5 rounded-full uppercase">Hoje</span>
+            <span className="text-[10px] font-black bg-brand-cyan/10 text-brand-cyan px-2 py-0.5 rounded-full uppercase">Próximos</span>
           </div>
           <div className="flex-1 overflow-y-auto">
             {upcomingAppointments.length > 0 ? (
               <div className="divide-y divide-slate-100">
-                {upcomingAppointments.map((record) => (
-                  <div key={record.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-2xl bg-brand-cyan/5 flex items-center justify-center text-brand-cyan font-black text-xs">
-                        {record.paciente.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-slate-900 leading-tight">{record.paciente}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] font-black text-brand-cyan uppercase font-mono tracking-wider">
-                          {record.horario || '--:--'}
-                        </span>
-                          <span className="text-slate-300">•</span>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate max-w-[120px]">{record.procedimento}</span>
+                {upcomingAppointments.map((record) => {
+                  const friendlyDate = getFriendlyDate(record.data);
+                  return (
+                    <div key={record.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-brand-cyan/5 flex items-center justify-center text-brand-cyan font-black text-xs shrink-0">
+                          {record.paciente.charAt(0)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-900 leading-tight truncate">{record.paciente}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[9px] font-black text-brand-cyan uppercase font-mono tracking-wider bg-brand-cyan/5 px-1.5 py-0.5 rounded">
+                              {friendlyDate} {record.horario || '--:--'}
+                            </span>
+                            <span className="text-slate-300 font-bold">•</span>
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight truncate max-w-[130px]" title={record.procedimento}>{record.procedimento}</span>
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-1 opacity-10 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => onSendWhatsApp(record)}
+                          className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors cursor-pointer"
+                          title="Enviar WhatsApp"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button 
-                        onClick={() => onSendWhatsApp(record)}
-                        className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-xl transition-colors"
-                        title="Enviar WhatsApp"
-                      >
-                        <MessageCircle className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full py-12 text-center opacity-40">
                 <Calendar className="w-12 h-12 mb-4 text-slate-300" />
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Sem agendamentos para hoje.</p>
+                <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Sem agendamentos próximos.</p>
               </div>
             )}
           </div>
           <div className="p-3 bg-slate-50 border-t border-slate-200">
-            <button className="w-full py-2 bg-white border border-slate-200 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest hover:border-brand-cyan hover:text-brand-cyan transition-all">
+            <button className="w-full py-2 bg-white border border-slate-200 rounded-2xl text-[10px] font-black text-slate-500 uppercase tracking-widest hover:border-brand-cyan hover:text-brand-cyan transition-all cursor-pointer">
               Ver Agenda Completa
             </button>
           </div>
@@ -9144,7 +9225,8 @@ function PublicBookingView({
   onTerms,
   clinicName,
   clinicLogo,
-  footerText
+  footerText,
+  initialFormData
 }: { 
   onBack: () => void; 
   users: any[]; 
@@ -9154,17 +9236,25 @@ function PublicBookingView({
   clinicName: string;
   clinicLogo: string | null;
   footerText: string;
+  initialFormData?: {
+    dentista?: string;
+    data?: string;
+    horario?: string;
+    paciente?: string;
+    telefone?: string;
+    procedimento?: string;
+  };
 }) {
   const minDate = getSystemInitialDate();
 
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState(() => initialFormData ? 2 : 1);
   const [bookingData, setBookingData] = useState({
-    dentista: '',
-    data: minDate,
-    horario: '',
-    paciente: '',
-    telefone: '',
-    procedimento: 'Consulta Inicial'
+    dentista: initialFormData?.dentista || '',
+    data: initialFormData?.data || minDate,
+    horario: initialFormData?.horario || '',
+    paciente: initialFormData?.paciente || '',
+    telefone: initialFormData?.telefone || '',
+    procedimento: initialFormData?.procedimento || 'Consulta Inicial'
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -11725,6 +11815,343 @@ function StockView({ currentUser }: { currentUser: any }) {
         )}
       </AnimatePresence>
 
+    </div>
+  );
+}
+
+function PublicConfirmationView({
+  appointmentId,
+  onBack,
+  onOpenBooking,
+  setReschedulePreFill,
+  clinicName,
+  clinicLogo,
+  footerText,
+  data
+}: {
+  appointmentId: string;
+  onBack: () => void;
+  onOpenBooking: () => void;
+  setReschedulePreFill: (data: any) => void;
+  clinicName: string;
+  clinicLogo: string | null;
+  footerText: string;
+  data: any[];
+}) {
+  const [appt, setAppt] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [viewStatus, setViewStatus] = useState<'idle' | 'success_confirm' | 'success_cancel' | 'not_found' | 'error'>('idle');
+
+  useEffect(() => {
+    const fetchAppt = async () => {
+      try {
+        setLoading(true);
+        // Procure localmente primeiro
+        const local = data.find(r => r.id === appointmentId);
+        if (local) {
+          setAppt(local);
+          setLoading(false);
+          return;
+        }
+
+        // Se nao achar localmente, busca no Firestore
+        const docRef = doc(db, 'records', appointmentId);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setAppt({ id: docSnap.id, ...docSnap.data() });
+        } else {
+          setViewStatus('not_found');
+        }
+      } catch (err) {
+        console.error("Erro ao buscar agendamento:", err);
+        setViewStatus('error');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchAppt();
+  }, [appointmentId, data]);
+
+  const handleConfirm = async () => {
+    if (!appt) return;
+    setActionLoading(true);
+    try {
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Agendado' });
+      setViewStatus('success_confirm');
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao confirmar sua consulta. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!appt) return;
+    if (!window.confirm("Deseja realmente cancelar o seu agendamento? Esta vaga será liberada imediatamente para outros pacientes.")) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Cancelado' });
+      setViewStatus('success_cancel');
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao cancelar. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReschedule = async () => {
+    if (!appt) return;
+    setActionLoading(true);
+    try {
+      // 1. Libera a vaga atual
+      const docRef = doc(db, 'records', appt.id);
+      await updateDoc(docRef, { status: 'Cancelado' });
+      
+      // 2. Pre-preenche os dados para o novo agendamento
+      setReschedulePreFill({
+        dentista: appt.dentista || '',
+        paciente: appt.paciente || '',
+        telefone: appt.telefone || '',
+        procedimento: appt.procedimento || 'Consulta Inicial'
+      });
+
+      // 3. Abre a tela de agendamento publico
+      onOpenBooking();
+    } catch (err) {
+      console.error(err);
+      alert("Houve um erro ao iniciar o reagendamento. Por favor, tente novamente.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-cyan mb-4"></div>
+        <p className="text-xs font-black uppercase tracking-widest text-slate-400">Carregando dados da consulta...</p>
+      </div>
+    );
+  }
+
+  if (viewStatus === 'not_found' || !appt) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
+        <XCircle className="w-16 h-16 text-rose-500 mb-4" />
+        <h1 className="text-xl font-black uppercase tracking-tight mb-2">Agendamento não localizado</h1>
+        <p className="text-slate-400 max-w-sm text-xs mb-6 leading-relaxed">
+          O link de confirmação parece estar inválido ou expirado. Entre em contato direto com a clínica para confirmar o seu horário.
+        </p>
+        <button onClick={onBack} className="px-6 py-2.5 bg-brand-cyan text-slate-900 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-brand-cyan/90 transition-all cursor-pointer">
+          Página Inicial
+        </button>
+      </div>
+    );
+  }
+
+  const friendlyDate = appt.data && isValid(parseISO(appt.data)) 
+    ? format(parseISO(appt.data), "eeee, dd 'de' MMMM 'de' yyyy", { locale: ptBR }) 
+    : "--/--/----";
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-between p-4 sm:p-6 selection:bg-brand-cyan selection:text-slate-900">
+      <div className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full py-6 sm:py-12">
+        
+        {/* Logo/Header */}
+        <div className="flex flex-col items-center gap-2 mb-6 text-center">
+          {clinicLogo ? (
+            <img src={clinicLogo} alt={clinicName} className="h-10 w-auto object-contain mb-2" />
+          ) : (
+            <div className="w-12 h-12 bg-brand-cyan/10 border border-brand-cyan/20 rounded-2xl flex items-center justify-center mb-2">
+              <Activity className="w-6 h-6 text-brand-cyan" />
+            </div>
+          )}
+          <h2 className="text-[10px] font-black uppercase text-brand-cyan tracking-widest">{clinicName}</h2>
+          <h1 className="text-xl font-black text-white tracking-tight">Confirmação de Agendamento</h1>
+        </div>
+
+        {/* Visual Content Box */}
+        {viewStatus === 'success_confirm' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-emerald-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Presença Confirmada!</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Olá, <b>{appt.paciente}</b>! Registramos a sua confirmação com sucesso em nosso sistema acadêmico-clínico. Obrigado!
+              </p>
+            </div>
+            <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-700/30 text-left space-y-2 text-xs text-slate-300 font-medium">
+              <div className="flex gap-2.5 items-center">
+                <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>{friendlyDate}</span>
+              </div>
+              <div className="flex gap-2.5 items-center">
+                <Clock className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span className="font-bold text-brand-cyan bg-brand-cyan/5 px-2 py-0.5 rounded border border-brand-cyan/10">{appt.horario || 'N/D'}</span>
+              </div>
+              <div className="flex gap-2.5 items-center">
+                <User className="w-4 h-4 text-brand-cyan shrink-0" />
+                <span>Dentista: {appt.dentista}</span>
+              </div>
+            </div>
+            <button 
+              onClick={onBack}
+              className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-emerald-500/15"
+            >
+              Fechar
+            </button>
+          </motion.div>
+        )}
+
+        {viewStatus === 'success_cancel' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-rose-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
+              <XCircle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Consulta Cancelada</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Seu agendamento foi cancelado com sucesso em nosso sistema e o horário correspondente está liberado para outros pacientes.
+              </p>
+            </div>
+            
+            <div className="pt-4 border-t border-slate-700/50 space-y-3">
+              <p className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Gostaria de sugerir outro horário?</p>
+              <button 
+                onClick={handleReschedule}
+                className="w-full py-3 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/15"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Agendar Novo Horário
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {viewStatus === 'idle' && (
+          <motion.div 
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full bg-slate-800 border border-slate-700/50 p-6 rounded-[36px] shadow-xl space-y-6"
+          >
+            <div className="text-center space-y-1">
+              <span className="text-[9px] uppercase font-black bg-brand-cyan/10 text-brand-cyan px-2.5 py-1 rounded-full">
+                {appt.status === 'Cancelado' ? 'Cancelado' : 'Aguardando Resposta'}
+              </span>
+              <h3 className="text-lg font-black text-white pt-2">Olá, {appt.paciente}!</h3>
+              <p className="text-xs text-slate-400 font-medium">Por favor, selecione uma das ações abaixo para gerenciar sua consulta.</p>
+            </div>
+
+            {/* Information Details Card */}
+            <div className="bg-slate-900/50 p-4 sm:p-5 rounded-2xl border border-slate-700/40 space-y-3">
+              <div className="flex gap-3 items-center">
+                <div className="w-9 h-9 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan font-black text-xs shrink-0">
+                  {appt.paciente ? appt.paciente.charAt(0) : 'P'}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-wider leading-none mb-1">Paciente</p>
+                  <p className="text-sm font-black text-white truncate leading-none">{appt.paciente}</p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800/80 pt-3 grid grid-cols-2 gap-3 text-xs leading-none">
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Procedimento</span>
+                  <span className="font-bold text-slate-300 block truncate">{appt.procedimento || 'Consulta Inicial'}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Dentista</span>
+                  <span className="font-bold text-slate-300 block truncate">{appt.dentista}</span>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-800/80 pt-3 flex items-center gap-4 text-xs font-bold text-slate-300">
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
+                  <span>{format(parseISO(appt.data), 'dd/MM/yyyy')}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-brand-cyan font-black bg-brand-cyan/10 px-2 py-0.5 rounded border border-brand-cyan/15 xs:text-[11px]">
+                  <Clock className="w-3.5 h-3.5 shrink-0" />
+                  <span>{appt.horario || 'N/D'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Interaction Row */}
+            {appt.status === 'Cancelado' ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-rose-500/10 border border-rose-500/25 rounded-2xl text-center text-xs text-rose-300 font-bold leading-relaxed">
+                  Esta consulta já consta como CANCELADA e o horário foi liberado de nossa agenda.
+                </div>
+                <button 
+                  onClick={handleReschedule}
+                  className="w-full py-3.5 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/20"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Agendar Novo Horário
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  disabled={actionLoading}
+                  onClick={handleConfirm}
+                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/15"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  {actionLoading ? 'Processando...' : 'Confirmar Consulta'}
+                </button>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleReschedule}
+                    className="py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Reagendar
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={handleCancel}
+                    className="py-3 bg-rose-500/10 hover:bg-rose-500/15 text-rose-400 border border-rose-500/20 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+      </div>
+
+      <div className="text-slate-600 text-[9px] flex items-center justify-center gap-1.5 text-center py-4">
+        <ShieldCheck className="w-4 h-4 text-emerald-500/40" />
+        <span>Atendimento exclusivo e criptografado da clínica {clinicName}. {footerText}</span>
+      </div>
     </div>
   );
 }
