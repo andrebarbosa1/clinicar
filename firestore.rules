@@ -70,5 +70,9 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read, write: if true;
     }
+
+    match /login_attempts/{username} {
+      allow read, write: if true;
+    }
   }
 }
