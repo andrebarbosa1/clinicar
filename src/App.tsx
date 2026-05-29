@@ -279,38 +279,114 @@ const SecurityUtils = {
   // Brute force state management
   BRUTE_FORCE_KEY: 'odonto_brute_lock',
   MAX_ATTEMPTS: 5,
-  LOCKOUT_TIME: 60 * 1000, // 1 minute
+
+  getLockoutDelay: (attempts: number) => {
+    if (attempts < SecurityUtils.MAX_ATTEMPTS) return 0;
+    if (attempts === 5) return 60 * 1000;       // 1 minute lockout
+    if (attempts === 6) return 300 * 1000;      // 5 minutes lockout
+    if (attempts === 7) return 900 * 1000;      // 15 minutes lockout
+    return 3600 * 1000;                         // 1 hour lockout for 8+ failures
+  },
 
   getLockoutStatus: () => {
-    const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
-    if (!lock) return { isLocked: false, remaining: 0 };
-    
-    const { timestamp, attempts } = JSON.parse(lock);
-    const now = Date.now();
-    const elapsed = now - timestamp;
+    try {
+      const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
+      if (!lock) return { isLocked: false, remaining: 0 };
+      
+      const { timestamp, attempts } = JSON.parse(lock);
+      const now = Date.now();
+      const elapsed = now - timestamp;
+      const lockoutTime = SecurityUtils.getLockoutDelay(attempts);
 
-    if (attempts >= SecurityUtils.MAX_ATTEMPTS && elapsed < SecurityUtils.LOCKOUT_TIME) {
-      return { isLocked: true, remaining: Math.ceil((SecurityUtils.LOCKOUT_TIME - elapsed) / 1000) };
-    }
+      // Safety check: Clock rewinding defense
+      if (elapsed < 0) {
+        return { isLocked: true, remaining: 3600 }; // Lock for 1 hour for tampering attempts
+      }
 
-    if (elapsed >= SecurityUtils.LOCKOUT_TIME) {
-      localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      if (attempts >= SecurityUtils.MAX_ATTEMPTS && elapsed < lockoutTime) {
+        return { isLocked: true, remaining: Math.ceil((lockoutTime - elapsed) / 1000) };
+      }
+
+      if (elapsed >= lockoutTime) {
+        localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        return { isLocked: false, remaining: 0 };
+      }
+
+      return { isLocked: false, remaining: 0, attempts };
+    } catch {
       return { isLocked: false, remaining: 0 };
     }
-
-    return { isLocked: false, remaining: 0, attempts };
   },
 
   recordAttempt: (success: boolean) => {
-    const status = SecurityUtils.getLockoutStatus();
-    if (success) {
-      localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
-    } else {
-      const attempts = (status.attempts || 0) + 1;
-      localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, JSON.stringify({
-        timestamp: Date.now(),
-        attempts
-      }));
+    try {
+      const status = SecurityUtils.getLockoutStatus();
+      if (success) {
+        localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      } else {
+        const attempts = (status.attempts || 0) + 1;
+        localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, JSON.stringify({
+          timestamp: Date.now(),
+          attempts
+        }));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  // Layer 2: Firestore lock synced per username to secure against distributed brute-force
+  checkFirestoreLockout: async (username: string): Promise<{ isLocked: boolean; remaining: number }> => {
+    if (!username) return { isLocked: false, remaining: 0 };
+    const cleanUsername = username.trim().toLowerCase();
+    
+    try {
+      const docRef = doc(db, 'login_attempts', cleanUsername);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const lockoutUntil = data?.lockoutUntil || 0;
+        const attempts = data?.attempts || 0;
+        const now = Date.now();
+        
+        if (attempts >= SecurityUtils.MAX_ATTEMPTS && lockoutUntil > now) {
+          return { isLocked: true, remaining: Math.ceil((lockoutUntil - now) / 1000) };
+        }
+      }
+    } catch (e) {
+      console.error("[Prevention] Database security state check was bypassed or unavailable:", e);
+    }
+    return { isLocked: false, remaining: 0 };
+  },
+
+  recordAttemptFirestore: async (username: string, success: boolean): Promise<void> => {
+    if (!username) return;
+    const cleanUsername = username.trim().toLowerCase();
+    
+    try {
+      const docRef = doc(db, 'login_attempts', cleanUsername);
+      if (success) {
+        await deleteDoc(docRef);
+      } else {
+        const docSnap = await getDoc(docRef);
+        let attempts = 1;
+        if (docSnap.exists()) {
+          attempts = (docSnap.data()?.attempts || 0) + 1;
+        }
+        
+        const lockoutDelay = SecurityUtils.getLockoutDelay(attempts);
+        const lockoutUntil = attempts >= SecurityUtils.MAX_ATTEMPTS ? Date.now() + lockoutDelay : 0;
+        
+        await setDoc(docRef, {
+          username: cleanUsername,
+          attempts,
+          lastAttempt: Date.now(),
+          lockoutUntil
+        });
+      }
+    } catch (e) {
+      console.error("[Prevention] Error logging security tracker:", e);
     }
   }
 };
@@ -9000,8 +9076,13 @@ function LoginView({
     e.preventDefault();
     setError(null);
     
+    // Sanitize credentials before checking
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    // Layer 1: Local Device Lockout
     if (lockout.isLocked) {
-      setError(`Muitas tentativas. Tente novamente em ${lockout.remaining}s.`);
+      setError(`Seu dispositivo está bloqueado devido a múltiplas tentativas malsucedidas de login. Tente de novo em ${lockout.remaining}s.`);
       return;
     }
 
@@ -9011,13 +9092,21 @@ function LoginView({
     }
 
     setIsLoading(true);
+
+    // Layer 2: Firestore Database Lockout (distributed protection per username)
+    try {
+      const dbLockout = await SecurityUtils.checkFirestoreLockout(cleanUsername);
+      if (dbLockout.isLocked) {
+        setError(`Esta conta ("${cleanUsername}") encontra-se bloqueada temporariamente para conter ataques de força bruta. Tente de novo em ${dbLockout.remaining}s.`);
+        setIsLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+    }
     
     // Simulate server delay/security check
     await new Promise(resolve => setTimeout(resolve, 1200));
-
-    // Sanitize credentials before checking
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = password.trim();
 
     // Try to find user in the reactive 'users' list
     let user = users.find(u => {
@@ -9048,6 +9137,7 @@ function LoginView({
 
     if (user) {
       SecurityUtils.recordAttempt(true);
+      await SecurityUtils.recordAttemptFirestore(cleanUsername, true);
       try {
         await onLogin(user);
       } catch (e: any) {
@@ -9056,8 +9146,20 @@ function LoginView({
       }
     } else {
       SecurityUtils.recordAttempt(false);
-      setLockout(SecurityUtils.getLockoutStatus());
-      setError('Credenciais inválidas.');
+      await SecurityUtils.recordAttemptFirestore(cleanUsername, false);
+      const updatedLocalLockout = SecurityUtils.getLockoutStatus();
+      setLockout(updatedLocalLockout);
+
+      // Verify if username just got locked in Firestore to show specific message
+      const dbLockoutAfter = await SecurityUtils.checkFirestoreLockout(cleanUsername);
+      
+      if (dbLockoutAfter.isLocked) {
+        setError(`Múltiplas falhas detectadas. A conta "${cleanUsername}" foi bloqueada temporariamente por ${dbLockoutAfter.remaining}s por motivos de segurança.`);
+      } else if (updatedLocalLockout.isLocked) {
+        setError(`Este dispositivo foi temporariamente bloqueado por ${updatedLocalLockout.remaining}s devido a sucessivas tentativas malsucedidas.`);
+      } else {
+        setError('Credenciais inválidas.');
+      }
       setIsLoading(false);
     }
   };
