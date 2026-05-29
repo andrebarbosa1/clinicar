@@ -39,6 +39,7 @@ import {
   Printer,
   FileCheck,
   HelpCircle,
+  Keyboard,
   MessageSquare,
   Cpu,
   Upload,
@@ -455,6 +456,7 @@ export default function App() {
   const [editingPatientEmail, setEditingPatientEmail] = useState<{patientName: string; appointmentId: string} | null>(null);
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showTermsOfUse, setShowTermsOfUse] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [cookieConsent, setCookieConsent] = useState(() => {
     if (typeof window === 'undefined') return true;
     return localStorage.getItem('odonto_cookie_consent') === 'true';
@@ -462,6 +464,8 @@ export default function App() {
   const [clinicName, setClinicName] = useState('OdontoDash');
   const [clinicLogo, setClinicLogo] = useState<string | null>(null);
   const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
+  const [providerPhone, setProviderPhone] = useState(() => localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999');
+  const [providerName, setProviderName] = useState(() => localStorage.getItem('odonto_cfg_providerName') || 'MB.SISTEMAS');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isFreeTrialView, setIsFreeTrialView] = useState(false);
 
@@ -502,6 +506,85 @@ export default function App() {
     
     return userModules.includes(moduleName.toLowerCase());
   }, [currentUser]);
+
+  // Global Keyboard Shortcuts Hook
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check if user is typing in common editable input objects to ignore hotkeys
+      const target = e.target as HTMLElement;
+      const isInput = target && (
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable
+      );
+
+      // Check if Control (Ctrl) or Command (Cmd on Mac) is pressed
+      const hasModifier = e.ctrlKey || e.metaKey;
+      if (!hasModifier) return;
+
+      const key = e.key.toLowerCase();
+
+      // Avoid blocking native selecting or copy/paste behaviors when typing inside inputs
+      if (isInput) {
+        // Only allow Ctrl+/ or Ctrl+K to open shortcuts even when in input
+        if (key !== 'k' && key !== '/' && key !== ';') {
+          return;
+        }
+      }
+
+      switch (key) {
+        case 'h': // Ctrl+H -> Home/Dashboard
+          e.preventDefault();
+          setActivePage('Dashboard');
+          setSubPage(null);
+          break;
+        case 'a': // Ctrl+A -> Agenda (Calendar)
+          e.preventDefault();
+          setActivePage('Agenda');
+          setSubPage(null);
+          break;
+        case 'p': // Ctrl+P -> Patients List
+          e.preventDefault();
+          setActivePage('Pacientes');
+          setSubPage(null);
+          break;
+        case 'n': // Ctrl+N -> New Patient (Cadastrar)
+          e.preventDefault();
+          setActivePage('Pacientes');
+          setSubPage('Cadastrar');
+          break;
+        case 'b': // Ctrl+B -> New Appointment Booking
+          e.preventDefault();
+          setActivePage('Agenda');
+          setSubPage('NovoAgendamento');
+          break;
+        case 'm': // Ctrl+M -> Messages & Whatsapp Simulation
+          e.preventDefault();
+          setActivePage('Mensagens');
+          setSubPage(null);
+          break;
+        case 'f': // Ctrl+F -> Billing / Financials
+          if (hasModule('Financeiro')) {
+            e.preventDefault();
+            setActivePage('Financeiro');
+            setSubPage(null);
+          }
+          break;
+        case 'k': // Ctrl+K or Ctrl+/ -> Trigger Keyboard Shortcuts overlay panel
+        case '/':
+          e.preventDefault();
+          setShowKeyboardShortcuts(prev => !prev);
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [hasModule]);
 
   React.useEffect(() => {
     if (!isAuthReady) return;
@@ -638,6 +721,14 @@ export default function App() {
         setClinicName(d.clinicName || 'OdontoDash');
         setClinicLogo(d.clinicLogo || null);
         setFooterText(d.footerText || `© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
+        if (d.providerPhone) {
+          setProviderPhone(d.providerPhone);
+          localStorage.setItem('odonto_cfg_providerPhone', d.providerPhone);
+        }
+        if (d.providerName) {
+          setProviderName(d.providerName);
+          localStorage.setItem('odonto_cfg_providerName', d.providerName);
+        }
       }
     }, (error) => {
       console.warn("Settings sync error (branding):", error);
@@ -1595,12 +1686,20 @@ export default function App() {
     }
   };
 
-  const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => {
+  const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => {
     try {
       await setDoc(doc(db, 'settings', 'clinic'), {
         ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
+      if (updates.providerPhone) {
+        setProviderPhone(updates.providerPhone);
+        localStorage.setItem('odonto_cfg_providerPhone', updates.providerPhone);
+      }
+      if (updates.providerName) {
+        setProviderName(updates.providerName);
+        localStorage.setItem('odonto_cfg_providerName', updates.providerName);
+      }
     } catch (e: any) {
       handleFirestoreError(e, OperationType.UPDATE, 'settings/clinic');
     }
@@ -1655,6 +1754,7 @@ export default function App() {
     <>
       <PrivacyPolicyModal isOpen={showPrivacyPolicy} onClose={() => setShowPrivacyPolicy(false)} />
       <TermsOfUseModal isOpen={showTermsOfUse} onClose={() => setShowTermsOfUse(false)} />
+      <KeyboardShortcutsModal isOpen={showKeyboardShortcuts} onClose={() => setShowKeyboardShortcuts(false)} />
       {!cookieConsent && <CookieBanner onAccept={() => {
         setCookieConsent(true);
         localStorage.setItem('odonto_cookie_consent', 'true');
@@ -1873,7 +1973,7 @@ export default function App() {
           </div>
         );
       case 'Retorno':
-        return <RecallView data={data} clinicName={clinicName} />;
+        return <RecallView data={data} clinicName={clinicName} patients={patients} />;
       case 'Mensagens':
         if (!hasModule('Mensagens')) {
           return (
@@ -1980,6 +2080,8 @@ export default function App() {
             clinicName={clinicName}
             clinicLogo={clinicLogo}
             footerText={footerText}
+            providerPhone={providerPhone}
+            providerName={providerName}
             onUpdateSettings={handleUpdateSettings}
             onResetDatabase={handleResetDatabase}
             deferredPrompt={deferredPrompt}
@@ -2124,6 +2226,16 @@ export default function App() {
               <span className="truncate">Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
             </div>
           )}
+
+          <button 
+            type="button"
+            onClick={() => setShowKeyboardShortcuts(true)}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-slate-800 text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-700/80 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+            title="Ver atalhos de teclado (Ctrl + K)"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-brand-cyan" />
+            <span>Atalhos de Teclado</span>
+          </button>
 
           <button 
             onClick={handleLogout}
@@ -2577,6 +2689,124 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
   // Simulated chat messages thread state by record ID
   const [chats, setChats] = useState<{[recordId: string]: any[]}>({});
   const [isTyping, setIsTyping] = useState<{[recordId: string]: boolean}>({});
+  const [typedMessage, setTypedMessage] = useState("");
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom of chat when messages change
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chats, isTyping, selectedRecordId]);
+
+  const simulatePatientResponse = (recordId: string, userMsg: string) => {
+    // 1. Set typing status with a slight delay
+    setTimeout(() => {
+      setIsTyping(prev => ({ ...prev, [recordId]: true }));
+    }, 1000);
+
+    // 2. Clear typing and add response after 2.5s
+    setTimeout(() => {
+      setIsTyping(prev => ({ ...prev, [recordId]: false }));
+
+      const text = userMsg.toLowerCase();
+      let reply = "";
+
+      if (text.includes("bom dia") || text.includes("boa tarde") || text.includes("olá") || text.includes("ola")) {
+        reply = "Olá! Como vai? Tudo bem por aí?";
+      } else if (text.includes("confirma") || text.includes("sim") || text.includes("certo") || text.includes("ok")) {
+        reply = "Sim, está tudo confirmado! Já guardei na minha agenda.";
+      } else if (text.includes("dor") || text.includes("doendo") || text.includes("sensivel") || text.includes("sinto")) {
+        reply = "Estou sentindo um pouco de sensibilidade sim, doutor(a). Obrigado por perguntar.";
+      } else if (text.includes("atraso") || text.includes("atrasado") || text.includes("atrasar")) {
+        reply = "Sem problemas, eu compreendo! Nos vemos em instantes.";
+      } else if (text.includes("documento") || text.includes("carteira") || text.includes("rg") || text.includes("convenio")) {
+        reply = "Certo, vou levar sim! Obrigado pelo lembrete.";
+      } else {
+        const responses = [
+          "Combinado! Nos vemos no horário marcado. 👍",
+          "Muito obrigado(a) pela mensagem e pelo lembrete!",
+          "Tudo bem, anotado por aqui! Até breve.",
+          "Obrigado pelo aviso da clínica. Tenha um ótimo dia!"
+        ];
+        reply = responses[Math.floor(Math.random() * responses.length)];
+      }
+
+      const patientMsg = {
+        ids: `patient-${Date.now()}`,
+        text: reply,
+        sender: 'patient',
+        timestamp: 'Agora mesmo'
+      };
+
+      setChats(prev => {
+        const currentList = prev[recordId] || [
+          {
+            id: 'initial',
+            text: formatTemplate(templates.confirmacao, selectedRecord),
+            sender: 'clinic',
+            timestamp: 'Enviado às 08:30',
+            status: 'delivered'
+          }
+        ];
+        return {
+          ...prev,
+          [recordId]: [...currentList, patientMsg]
+        };
+      });
+
+      // If IA is active, the assistant replies shortly after!
+      if (configs.iaCoPilot) {
+        setTimeout(() => {
+          const iaMsg = {
+            id: `ia-${Date.now()}`,
+            text: `Excelente! Resposta automática recebida e computada com sucesso. Qualquer dúvida estamos à disposição! 🎉`,
+            sender: 'clinic-ia',
+            timestamp: 'Agora mesmo (Auto-resposta)'
+          };
+          setChats(prev => ({
+            ...prev,
+            [recordId]: [...(prev[recordId] || []), iaMsg]
+          }));
+        }, 1200);
+      }
+
+    }, 2800);
+  };
+
+  const handleSendClinicMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!typedMessage.trim() || !selectedRecordId || !selectedRecord) return;
+
+    const userMsgText = typedMessage.trim();
+    setTypedMessage("");
+
+    const newMsg = {
+      id: `clinic-${Date.now()}`,
+      text: userMsgText,
+      sender: 'clinic',
+      timestamp: 'Agora mesmo',
+      status: 'delivered'
+    };
+
+    setChats(prev => {
+      const currentList = prev[selectedRecordId] || [
+        {
+          id: 'initial',
+          text: formatTemplate(templates.confirmacao, selectedRecord),
+          sender: 'clinic',
+          timestamp: 'Enviado às 08:30 (Automático)',
+          status: 'delivered'
+        }
+      ];
+      return {
+        ...prev,
+        [selectedRecordId]: [...currentList, newMsg]
+      };
+    });
+
+    simulatePatientResponse(selectedRecordId, userMsgText);
+  };
 
   // Message templates stored in state, hydrated from localStorage or defaults
   const [templates, setTemplates] = useState({
@@ -2611,12 +2841,19 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
     autoEmail: localStorage.getItem('odonto_cfg_autoEmail') !== 'false',
     birthdayPromo: localStorage.getItem('odonto_cfg_birthdayPromo') !== 'false',
     iaCoPilot: localStorage.getItem('odonto_cfg_iaCoPilot') !== 'false',
+    providerPhone: localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999',
+    providerName: localStorage.getItem('odonto_cfg_providerName') || 'MB.SISTEMAS',
   });
 
-  const handleToggleConfig = (key: keyof typeof configs) => {
+  const handleToggleConfig = (key: 'autoWhatsapp' | 'autoSms' | 'autoEmail' | 'birthdayPromo' | 'iaCoPilot') => {
     const newVal = !configs[key];
     setConfigs(prev => ({ ...prev, [key]: newVal }));
     localStorage.setItem(`odonto_cfg_${String(key)}`, String(newVal));
+  };
+
+  const handleUpdateConfigString = (key: 'providerPhone' | 'providerName', value: string) => {
+    setConfigs(prev => ({ ...prev, [key]: value }));
+    localStorage.setItem(`odonto_cfg_${key}`, value);
   };
 
   // Only consider active/future appointments or valid records
@@ -3011,16 +3248,16 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
                 </div>
 
                 {/* Smartphone Box container */}
-                <div className="border border-slate-300 rounded-3xl overflow-hidden shadow-lg bg-[#e5ddd5] flex flex-col h-[380px] relative">
+                <div className="border border-slate-300 rounded-3xl overflow-hidden shadow-lg bg-[#e5ddd5] flex flex-col h-[420px] relative">
                   {/* Whatsapp Client Header */}
-                  <div className="bg-[#075e54] text-white px-3 py-2 flex items-center justify-between shrink-0 select-none">
+                  <div className="bg-[#075e54] text-white px-3 py-2 flex items-center justify-between shrink-0 select-none border-b border-black/5">
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="w-7 h-7 rounded-full bg-slate-300 text-[10px] font-bold text-slate-700 uppercase flex items-center justify-center shrink-0 border border-white/20 font-sans">
                         {selectedRecord.paciente?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
                       </div>
                       <div className="flex flex-col min-w-0 text-left">
                         <span className="text-xs font-bold truncate leading-tight block">{selectedRecord.paciente}</span>
-                        <span className="text-[8px] text-emerald-200 leading-normal block">
+                        <span className="text-[8px] text-emerald-200 leading-normal block font-medium">
                           {isTyping[selectedRecordId!] ? "digitando..." : "online"}
                         </span>
                       </div>
@@ -3033,16 +3270,22 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
                   </div>
 
                   {/* Messages Area */}
-                  <div className="flex-1 overflow-y-auto p-3 space-y-2 flex flex-col justify-start">
-                    <div className="self-center bg-white/80 text-[8px] text-slate-500 font-bold px-2 py-0.5 rounded-md uppercase tracking-wider mb-2 select-none border border-black/5">
+                  <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-2 flex flex-col justify-start">
+                    <div className="self-center bg-white/80 text-[8px] text-slate-500 font-bold px-2 py-0.5 rounded-md uppercase tracking-wider mb-2 select-none border border-black/5 font-sans">
                       Hoje
+                    </div>
+
+                    {/* Provedor Homologado Info Box */}
+                    <div className="self-center bg-amber-50/95 text-[8px] text-amber-800 font-medium px-3 py-1.5 rounded-lg text-center leading-tight mb-2 max-w-[90%] border border-amber-200/40 shadow-xs font-sans select-none">
+                      🔒 Esta conversa ocorre através do seu provedor homologado
+                      <strong className="block mt-0.5 text-amber-950">{configs.providerName} ({configs.providerPhone})</strong>
                     </div>
 
                     {currentChatMessages.map((msg: any) => {
                       const isClinic = msg.sender === 'clinic' || msg.sender === 'clinic-ia';
                       return (
                         <div 
-                          key={msg.id}
+                          key={msg.id || msg.ids}
                           className={cn(
                             "max-w-[85%] rounded-xl px-2.5 py-1.5 text-[11px] leading-snug relative shadow-sm text-left font-sans animate-in fade-in slide-in-from-bottom-1 duration-150",
                             isClinic 
@@ -3050,6 +3293,11 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
                               : "self-start bg-white text-slate-800"
                           )}
                         >
+                          {isClinic && (
+                            <span className="text-[7px] text-[#075e54] font-extrabold block mb-1 select-none tracking-wide uppercase border-b border-[#075e54]/10 pb-0.5">
+                              {configs.providerName} ({configs.providerPhone})
+                            </span>
+                          )}
                           <p className="whitespace-pre-wrap">{msg.text}</p>
                           <div className="flex items-center justify-end gap-1 mt-1 select-none">
                             <span className="text-[8px] text-slate-400 font-medium block text-right leading-none">
@@ -3069,6 +3317,25 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
                       </div>
                     )}
                   </div>
+
+                  {/* Real interactive footer input */}
+                  <form onSubmit={handleSendClinicMessage} className="bg-[#f0f0f0] border-t border-slate-200 p-2 flex items-center gap-2 shrink-0">
+                    <div className="flex-1 bg-white rounded-full px-3 py-1.5 flex items-center gap-2 border border-slate-200 shadow-sm">
+                      <input 
+                        type="text"
+                        placeholder="Digite uma mensagem real..."
+                        value={typedMessage}
+                        onChange={(e) => setTypedMessage(e.target.value)}
+                        className="flex-1 bg-transparent text-xs text-slate-800 focus:outline-none placeholder-slate-400 font-sans"
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      className="w-8 h-8 rounded-full bg-[#128c7e] text-white flex items-center justify-center hover:bg-[#075e54] transition-all cursor-pointer shrink-0 shadow-sm hover:scale-105 active:scale-95"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </form>
                 </div>
 
                 {/* Simulated trigger actions */}
@@ -3351,6 +3618,48 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
                 <div className="w-4.5 h-4.5 bg-white rounded-full shadow-md" />
               </button>
             </div>
+
+            {/* Provedor Homologado Integrador Section */}
+            <div className="border-t border-slate-100 pt-5 mt-5 space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                  Conexão com Provedor de Mensagens (MB.SISTEMAS)
+                </h4>
+                <p className="text-[10px] text-slate-400 mt-1">Configure o seu número de contato oficial e nome da sua marca de tecnologia. Essas informações serão mostradas na tela de recebimento do seu cliente final no simulador.</p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 uppercase">Seu Número de WhatsApp Provedor</label>
+                  <input 
+                    type="text"
+                    value={configs.providerPhone}
+                    onChange={(e) => handleUpdateConfigString('providerPhone', e.target.value)}
+                    placeholder="Ex: +55 (47) 99347-1234"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-medium focus:border-brand-cyan focus:outline-none transition-all placeholder:text-slate-300 font-sans"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 uppercase">Nome / Marca do Provedor</label>
+                  <input 
+                    type="text"
+                    value={configs.providerName}
+                    onChange={(e) => handleUpdateConfigString('providerName', e.target.value)}
+                    placeholder="Ex: MB.SISTEMAS"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-medium focus:border-brand-cyan focus:outline-none transition-all placeholder:text-slate-300 font-sans"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-50/50 border border-emerald-100/50 rounded-2xl flex items-start gap-2.5">
+                <span className="text-[14px]">📱</span>
+                <p className="text-[9.5px] text-emerald-800 leading-relaxed font-medium">
+                  <strong>Simulação com Provedor Ativa:</strong> Toda mensagem enviada por esta central de disparo exibirá como remetente oficial a marca <strong className="text-emerald-900">{configs.providerName || 'MB.SISTEMAS'}</strong> de número <strong className="text-emerald-950">{configs.providerPhone || '+55 (47) 99999-9999'}</strong>, oferecendo total credibilidade visual e profissionalismo para demonstrações de venda reais!
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -3358,7 +3667,7 @@ function MessagesView({ data, patients, clinicName, db, currentUser }: { data: D
   );
 }
 
-function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: string }) {
+function RecallView({ data, clinicName, patients }: { data: DentalRecord[], clinicName: string, patients: any[] }) {
   const recallList = useMemo(() => {
     const lastVisits: { [key: string]: string } = {};
     data.forEach(r => {
@@ -3402,33 +3711,53 @@ function RecallView({ data, clinicName }: { data: DentalRecord[], clinicName: st
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {recallList.map((p) => (
-          <div key={p.name} className="bg-white border border-slate-200 p-5 rounded-2xl hover:shadow-md transition-all group">
-            <div className="flex justify-between items-start mb-4">
-              <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-500 transition-colors">
-                <User className="w-5 h-5" />
+        {recallList.map((p) => {
+          // Resolve patient's actual phone number
+          const patObj = patients?.find(pat => pat.name && pat.name.trim().toLowerCase() === p.name.trim().toLowerCase());
+          const rawPhone = patObj?.phone || patObj?.telefone || patObj?.celular || patObj?.mobile || '';
+          
+          return (
+            <div key={p.name} className="bg-white border border-slate-200 p-5 rounded-2xl hover:shadow-md transition-all group text-left">
+              <div className="flex justify-between items-start mb-4">
+                <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-500 transition-colors">
+                  <User className="w-5 h-5" />
+                </div>
+                <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-2 py-1 rounded-full">
+                  {p.monthsAway} meses ausente
+                </span>
               </div>
-              <span className="text-[10px] font-bold bg-rose-50 text-rose-600 px-2 py-1 rounded-full">
-                {p.monthsAway} meses ausente
-              </span>
+              <h3 className="font-bold text-slate-800 mb-1">{p.name}</h3>
+              <p className="text-[10px] text-slate-400 uppercase font-mono mb-4">
+                Última consulta: {p.lastDate && isValid(parseISO(p.lastDate)) ? format(parseISO(p.lastDate), 'dd/MM/yyyy') : 'N/D'}
+              </p>
+              {rawPhone && (
+                <p className="text-[10px] text-slate-500 font-mono mb-4 flex items-center gap-1">
+                  📞 {rawPhone}
+                </p>
+              )}
+              
+              <button 
+                onClick={() => {
+                  const cleanPhone = rawPhone.replace(/\D/g, '');
+                  let finalPhone = cleanPhone;
+                  if (cleanPhone.length === 10 || cleanPhone.length === 11) {
+                    finalPhone = '55' + cleanPhone;
+                  }
+                  if (!finalPhone) {
+                    alert(`O paciente "${p.name}" não possui um número de telefone registrado no cadastro geral.`);
+                    return;
+                  }
+                  const msg = encodeURIComponent(`Olá ${p.name}, aqui é da ${clinicName}! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
+                  window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
+                }}
+                className="w-full py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-600 transition-colors cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                Chamar no WhatsApp
+              </button>
             </div>
-            <h3 className="font-bold text-slate-800 mb-1">{p.name}</h3>
-            <p className="text-[10px] text-slate-400 uppercase font-mono mb-4">
-              Última consulta: {p.lastDate && isValid(parseISO(p.lastDate)) ? format(parseISO(p.lastDate), 'dd/MM/yyyy') : 'N/D'}
-            </p>
-            
-            <button 
-              onClick={() => {
-                const msg = encodeURIComponent(`Olá ${p.name}, aqui é da ${clinicName}! Notamos que faz ${p.monthsAway} meses desde sua última limpeza. Vamos agendar seu retorno?`);
-                window.open(`https://wa.me/5511999999999?text=${msg}`, '_blank');
-              }}
-              className="w-full py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-xl flex items-center justify-center gap-2 hover:bg-emerald-600 transition-colors"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-              Chamar no WhatsApp
-            </button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -5058,6 +5387,8 @@ function SettingsView({
   clinicName, 
   clinicLogo,
   footerText,
+  providerPhone,
+  providerName,
   onUpdateSettings, 
   onResetDatabase,
   isAdmin,
@@ -5067,7 +5398,9 @@ function SettingsView({
   clinicName: string; 
   clinicLogo: string | null;
   footerText: string;
-  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => Promise<void>;
+  providerPhone: string;
+  providerName: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   isAdmin?: boolean;
   deferredPrompt: any;
@@ -5076,6 +5409,8 @@ function SettingsView({
   const [localClinicName, setLocalClinicName] = useState(clinicName);
   const [localFooterText, setLocalFooterText] = useState(footerText);
   const [localLogo, setLocalLogo] = useState<string | null>(clinicLogo);
+  const [localProviderPhone, setLocalProviderPhone] = useState(providerPhone);
+  const [localProviderName, setLocalProviderName] = useState(providerName);
   const [isSaving, setIsSaving] = useState(false);
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [confirmText, setConfirmText] = useState('');
@@ -5084,7 +5419,9 @@ function SettingsView({
     setLocalClinicName(clinicName);
     setLocalFooterText(footerText);
     setLocalLogo(clinicLogo);
-  }, [clinicName, footerText, clinicLogo]);
+    setLocalProviderPhone(providerPhone);
+    setLocalProviderName(providerName);
+  }, [clinicName, footerText, clinicLogo, providerPhone, providerName]);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -5107,7 +5444,9 @@ function SettingsView({
       await onUpdateSettings({
         clinicName: localClinicName,
         clinicLogo: localLogo,
-        footerText: localFooterText
+        footerText: localFooterText,
+        providerPhone: localProviderPhone,
+        providerName: localProviderName
       });
       alert('Configurações salvas com sucesso!');
     } catch (e) {
@@ -5180,6 +5519,38 @@ function SettingsView({
               className="w-full text-xs p-3 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan min-h-[80px] resize-none"
             />
             <p className="text-[9px] text-slate-400 italic">Essas informações aparecerão no rodapé da plataforma e em documentos gerados.</p>
+          </div>
+        </section>
+
+        <section className="space-y-4 border-t border-slate-100 pt-6">
+          <div>
+            <h3 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Canal de Disparo & Meu WhatsApp
+            </h3>
+            <p className="text-[10px] text-slate-400 mt-0.5">Configure o número oficial da clínica e a assinatura da sua marca integradora de mensagens.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-1">
+              <label className="text-[9px] uppercase font-bold text-slate-400">Meu Número de WhatsApp Emissor</label>
+              <input 
+                type="text" 
+                value={localProviderPhone} 
+                onChange={(e) => setLocalProviderPhone(e.target.value)}
+                placeholder="Ex: +55 (47) 99999-9999"
+                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-mono" 
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[9px] uppercase font-bold text-slate-400">Nome / Marca do Provedor</label>
+              <input 
+                type="text" 
+                value={localProviderName} 
+                onChange={(e) => setLocalProviderName(e.target.value)}
+                placeholder="Ex: MB.SISTEMAS"
+                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-sans" 
+              />
+            </div>
           </div>
         </section>
 
@@ -7906,6 +8277,8 @@ function AdminView({
   clinicName,
   clinicLogo,
   footerText,
+  providerPhone,
+  providerName,
   onUpdateSettings,
   onResetDatabase,
   deferredPrompt,
@@ -7923,7 +8296,9 @@ function AdminView({
   clinicName: string;
   clinicLogo: string | null;
   footerText: string;
-  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string }) => Promise<void>;
+  providerPhone: string;
+  providerName: string;
+  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => Promise<void>;
   onResetDatabase?: () => Promise<void>;
   deferredPrompt: any;
   onInstallPWA: () => void;
@@ -8015,6 +8390,8 @@ function AdminView({
             clinicName={clinicName} 
             clinicLogo={clinicLogo}
             footerText={footerText}
+            providerPhone={providerPhone}
+            providerName={providerName}
             onUpdateSettings={onUpdateSettings} 
             onResetDatabase={onResetDatabase}
             isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
@@ -8610,6 +8987,18 @@ function LoginView({
       <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
         <div className="absolute top-[-10%] right-[-5%] w-[600px] h-[600px] rounded-full bg-brand-cyan/20 blur-[120px]" />
         <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-blue-400/10 blur-[100px]" />
+      </div>
+
+      {/* MB.SISTEMAS Background Watermark */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0 overflow-hidden">
+        <span className="text-[10vw] font-black tracking-[0.2em] text-slate-950/[0.025] uppercase pointer-events-none -rotate-12 whitespace-nowrap select-none">
+          MB.SISTEMAS
+        </span>
+      </div>
+
+      {/* Discrete Corner Support Watermark */}
+      <div className="absolute bottom-5 right-5 pointer-events-none select-none text-[8px] font-black tracking-[0.3em] text-slate-950/[0.15] uppercase z-10">
+        MB.SISTEMAS
       </div>
 
       <div className="w-full max-w-[400px] px-6 relative z-10">
@@ -9477,6 +9866,92 @@ function PrivacyPolicyModal({ isOpen, onClose }: { isOpen: boolean, onClose: () 
           </button>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+function KeyboardShortcutsModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  if (!isOpen) return null;
+
+  const shortcuts = [
+    { keys: ['Ctrl', 'H'], label: 'Início / Dashboard', desc: 'Acessa a visão geral dos indicadores e metas da clínica.' },
+    { keys: ['Ctrl', 'A'], label: 'Agenda / Calendário', desc: 'Abre a visualização do calendário de consultas.' },
+    { keys: ['Ctrl', 'P'], label: 'Base de Pacientes', desc: 'Acessa a listagem geral com pesquisa dos pacientes cadastrados.' },
+    { keys: ['Ctrl', 'N'], label: 'Novo Paciente', desc: 'Abre diretamente o formulário de cadastro de paciente.' },
+    { keys: ['Ctrl', 'B'], label: 'Nova Consulta (Booking)', desc: 'Abre diretamente a tela de novo agendamento de consulta.' },
+    { keys: ['Ctrl', 'M'], label: 'Central de Mensagens', desc: 'Gerencie e simule envios de WhatsApp.' },
+    { keys: ['Ctrl', 'F'], label: 'Módulo Financeiro', desc: 'Acessa faturamentos, receitas e fluxo de caixa.' },
+    { keys: ['Ctrl', 'K'], label: 'Guia de Atalhos', desc: 'Abra ou feche este guia de atalhos a qualquer momento.' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-xs z-[99999] flex items-center justify-center p-4 shadow-2xl animate-in fade-in duration-200" id="shortcut-modal">
+      <div className="bg-white rounded-[24px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-slate-900 to-slate-850 text-white p-5 flex items-center justify-between border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <div className="bg-brand-cyan/25 p-2 rounded-xl text-brand-cyan">
+              <Keyboard className="w-5 h-5 animate-pulse" />
+            </div>
+            <div className="text-left">
+              <h3 className="font-bold text-sm tracking-wide">Atalhos de Teclado</h3>
+              <p className="text-[10px] text-slate-300">Navegue com velocidade e agilidade no OdontoDash</p>
+            </div>
+          </div>
+          <button 
+            type="button" 
+            onClick={onClose} 
+            className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer select-none"
+            aria-label="Fechar"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Shortcuts List */}
+        <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
+          <p className="text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-3 leading-relaxed text-left">
+            💡 <strong>DICA DO PRO:</strong> Os modificadores funcionam tanto com a tecla <strong>Control (Ctrl)</strong> quanto no macOS com a tecla <strong>Command (⌘)</strong>. Atalhos são bloqueados dinamicamente quando você está escrevendo em campos de digitação para garantir sua escrita!
+          </p>
+
+          <div className="divide-y divide-slate-100 text-left">
+            {shortcuts.map((shortcut, idx) => (
+              <div key={idx} className="py-2.5 flex items-center justify-between gap-4">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-slate-800 leading-normal flex items-center gap-1.5">
+                    {shortcut.label}
+                  </span>
+                  <span className="text-[10px] text-slate-400 leading-normal truncate">
+                    {shortcut.desc}
+                  </span>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  {shortcut.keys.map((k, kIdx) => (
+                    <kbd 
+                      key={kIdx} 
+                      className="px-2 py-1 bg-slate-100 text-[#0f172a] text-[10px] font-black tracking-wide rounded-md border border-slate-300 shadow-xs font-mono uppercase"
+                    >
+                      {k === 'Ctrl' ? 'Ctrl / ⌘' : k}
+                    </kbd>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="bg-slate-50 px-5 py-4 border-t border-slate-100 flex items-center justify-between">
+          <span className="text-[10px] text-slate-400 font-medium">Use <strong className="font-black text-slate-600">Ctrl + K</strong> em qualquer lugar do sistema</span>
+          <button 
+            type="button" 
+            onClick={onClose} 
+            className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[11px] font-bold hover:bg-slate-800 transition-all cursor-pointer active:scale-95 shadow-sm"
+          >
+            Entendido
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
