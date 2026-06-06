@@ -537,6 +537,26 @@ export default function App() {
   const [confirmApptId, setConfirmApptId] = useState<string | null>(null);
   const [reschedulePreFill, setReschedulePreFill] = useState<any | null>(null);
 
+  // Anti-abuse tracking: If a trial expires, immediately flag this device/browser locally
+  useEffect(() => {
+    if (isTrialActive && trialDaysRemaining <= 0 && currentUser?.email) {
+      try {
+        localStorage.setItem('_sys_clinic_engine_state_', JSON.stringify({
+          lastSession: 'trial-expired',
+          hasCompletedTrial: true,
+          trialEmail: currentUser.email,
+          timestamp: new Date().toISOString()
+        }));
+        
+        const d = new Date();
+        d.setTime(d.getTime() + (10 * 365 * 24 * 60 * 60 * 1000)); // 10 years
+        document.cookie = `_odontodash_trial_block=true; expires=${d.toUTCString()}; path=/; SameSite=Strict`;
+      } catch (e) {
+        console.error("Erro ao marcar dispositivo pós-respiração de trial:", e);
+      }
+    }
+  }, [isTrialActive, trialDaysRemaining, currentUser?.email]);
+
   // Handle public booking and confirmation URLs
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -2076,6 +2096,56 @@ export default function App() {
           <FreeTrialView 
             onBack={() => setIsFreeTrialView(false)}
             onStartTrial={async (details) => {
+              const emailNormalized = details.email.trim().toLowerCase();
+              const phoneTrimmed = details.phone.trim();
+              const phoneDigits = phoneTrimmed.replace(/\D/g, '');
+              const usernameTrimmed = details.username.trim().toLowerCase();
+
+              // Database Anti-Abuse validation checks
+              const usersRef = collection(db, 'users');
+
+              // 1. Check duplicate username to prevent authentication collision
+              const qUser = query(usersRef, where('username', '==', usernameTrimmed), limit(1));
+              const userSnap = await getDocs(qUser);
+              if (!userSnap.empty) {
+                throw new Error("Este nome de usuário já está sendo utilizado por outra conta.");
+              }
+
+              // 2. Check duplicate Email to prevent multiple trials
+              const qEmail = query(usersRef, where('email', '==', emailNormalized));
+              const emailSnap = await getDocs(qEmail);
+              if (!emailSnap.empty) {
+                const existingUser = emailSnap.docs[0].data();
+                if (existingUser.isTrial === true) {
+                  throw new Error("O e-mail informado já foi utilizado para cadastrar uma conta de teste (Trial). Não é permitido criar múltiplos testes grátis com o mesmo e-mail.");
+                } else {
+                  throw new Error("Este e-mail já pertence a uma conta ativa no sistema.");
+                }
+              }
+
+              // 3. Check duplicate WhatsApp/Phone (raw phone matching or normalized phone digits matching)
+              const qPhoneRaw = query(usersRef, where('phone', '==', phoneTrimmed));
+              const phoneRawSnap = await getDocs(qPhoneRaw);
+              if (!phoneRawSnap.empty) {
+                const existingUser = phoneRawSnap.docs[0].data();
+                if (existingUser.isTrial === true) {
+                  throw new Error("Este número de WhatsApp já foi utilizado para cadastrar uma conta de teste (Trial). Cada profissional/clínica tem direito a apenas um período de teste de 14 dias.");
+                } else {
+                  throw new Error("Este número de WhatsApp já está cadastrado em outra conta ativa.");
+                }
+              }
+
+              const qPhoneNorm = query(usersRef, where('normalizedPhone', '==', phoneDigits));
+              const phoneNormSnap = await getDocs(qPhoneNorm);
+              if (!phoneNormSnap.empty) {
+                const existingUser = phoneNormSnap.docs[0].data();
+                if (existingUser.isTrial === true) {
+                  throw new Error("Este número de WhatsApp já foi utilizado para cadastrar uma conta de teste (Trial) anteriormente.");
+                } else {
+                  throw new Error("Este número de WhatsApp correspondente já está cadastrado em outra conta ativa.");
+                }
+              }
+
               setClinicName(details.clinicName);
               const trialIdGenerated = `trial-${Date.now()}`;
               try {
@@ -2093,10 +2163,11 @@ export default function App() {
                 name: details.fullName,
                 role: 'Admin',
                 modules: 'Todos',
-                username: details.username.trim().toLowerCase(),
+                username: usernameTrimmed,
                 password: details.password.trim(),
-                email: details.email,
-                phone: details.phone,
+                email: emailNormalized,
+                phone: phoneTrimmed,
+                normalizedPhone: phoneDigits,   // Field stored for future digit-normalized lookup checks
                 isTrial: true,
                 trialPlan: details.plan,
                 trialSpecialty: details.specialty,
@@ -2106,7 +2177,24 @@ export default function App() {
               try {
                 await setDoc(doc(db, 'users', trialUserProfile.id), trialUserProfile);
               } catch (e) {
-                console.error("Erro ao persistir perfil de trial no Firestore:", e);
+                console.error("Erro ao persistir profil de trial no Firestore:", e);
+                throw e; // Bubble up to let the View display the error
+              }
+
+              // Save block markers on local client storage on database register success
+              try {
+                localStorage.setItem('_sys_clinic_engine_state_', JSON.stringify({
+                  lastSession: 'trial-active',
+                  hasCompletedTrial: true,
+                  trialEmail: emailNormalized,
+                  timestamp: new Date().toISOString()
+                }));
+                
+                const d = new Date();
+                d.setTime(d.getTime() + (10 * 365 * 24 * 60 * 60 * 1000)); // 10 years duration cookie
+                document.cookie = `_odontodash_trial_block=true; expires=${d.toUTCString()}; path=/; SameSite=Strict`;
+              } catch (err) {
+                console.error("Erro escrevendo marcadores offline:", err);
               }
               
               await handleLogin(trialUserProfile);
@@ -10747,6 +10835,35 @@ function FreeTrialView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [isBlockedByFingerprint, setIsBlockedByFingerprint] = useState(false);
+
+  useEffect(() => {
+    // Client-side anti-abuse tracking: verify persistent LocalStorage and cookies
+    const getCookie = (name: string) => {
+      const value = `; ${document.cookie}`;
+      const parts = value.split(`; ${name}=`);
+      if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
+      return null;
+    };
+
+    let hasLocalBlock = false;
+    try {
+      const storedStatus = localStorage.getItem('_sys_clinic_engine_state_');
+      if (storedStatus) {
+        const parsed = JSON.parse(storedStatus);
+        if (parsed && parsed.hasCompletedTrial === true) {
+          hasLocalBlock = true;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    if (hasLocalBlock || getCookie('_odontodash_trial_block') === 'true') {
+      setIsBlockedByFingerprint(true);
+      setError('Aviso de Segurança: Este dispositivo já utilizou um período de teste grátis (Trial) do OdontoDash.');
+    }
+  }, []);
 
   const steps = [
     "Validando dados cadastrais...",
@@ -10891,7 +11008,53 @@ function FreeTrialView({
           {/* Right Column: Loading Setup Wizard OR Setup Form */}
           <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/60 shadow-xl shadow-slate-200/40 p-8 relative overflow-hidden">
             <AnimatePresence mode="wait">
-              {isSubmitting ? (
+              {isBlockedByFingerprint ? (
+                // Blocked View
+                <motion.div 
+                  key="blocked-trial"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="py-12 flex flex-col items-center justify-center text-center space-y-6"
+                >
+                  <div className="w-16 h-16 rounded-full bg-rose-50 flex items-center justify-center border border-rose-100 shadow-sm animate-pulse">
+                    <Shield className="w-8 h-8 text-rose-500" />
+                  </div>
+
+                  <div className="space-y-2 max-w-sm border-b border-slate-100 pb-4">
+                    <h3 className="text-lg font-extrabold text-slate-800 tracking-tight">Acesso de Testes Esgotado</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed font-semibold">
+                      Identificamos que seu dispositivo ou rede local já utilizou um ambiente de teste gratuito (Trial) no OdontoDash. 
+                    </p>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Para manter a estabilidade do sistema e assegurar conformidade médica, limitamos a criação de múltiplos ambientes teste por usuário.
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/50 text-left space-y-1 w-full max-w-md">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Deseja continuar utilizando?</span>
+                    <p className="text-[10px] text-slate-650 leading-normal font-medium">
+                      Para estender seu período de experimentação ou contratar um de nossos planos comerciais de clínica, por favor clique no botão abaixo para contactar diretamente nosso time de suporte e regularização.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3 w-full max-w-sm pt-2">
+                    <button
+                      type="button"
+                      onClick={onBack}
+                      className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 active:scale-[0.98] transition-all cursor-pointer shadow-sm"
+                    >
+                      Voltar ao Login
+                    </button>
+                    <a
+                      href="mailto:suporte@odontodash.com.br?subject=Reativar%20Acesso%20OdontoDash"
+                      className="flex-1 py-3 bg-brand-cyan text-white text-xs font-bold rounded-xl text-center hover:bg-brand-cyan/95 active:scale-[0.98] transition-all cursor-pointer shadow-md shadow-brand-cyan/15"
+                    >
+                      Falar c/ Vendas
+                    </a>
+                  </div>
+                </motion.div>
+              ) : isSubmitting ? (
                 // Setup loader animation wizard
                 <motion.div 
                   key="loader-wizard"
