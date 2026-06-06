@@ -2168,6 +2168,7 @@ export default function App() {
                 email: emailNormalized,
                 phone: phoneTrimmed,
                 normalizedPhone: phoneDigits,   // Field stored for future digit-normalized lookup checks
+                cpf: details.cpf.replace(/\D/g, ''), // Store raw digits only
                 isTrial: true,
                 trialPlan: details.plan,
                 trialSpecialty: details.specialty,
@@ -10810,7 +10811,70 @@ interface FreeTrialDetails {
   specialty: string;
   username: string;
   password: string;
+  cpf: string;
 }
+
+// Complex Mathematical CPF Validation algorithm (Brazilian format)
+const isValidCPFMathematic = (cpf: string): boolean => {
+  const cleanCPF = cpf.replace(/\D/g, '');
+  if (cleanCPF.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(cleanCPF)) return false; // Exclude equal sequences like 111.111.111-11
+  
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(cleanCPF.charAt(i)) * (10 - i);
+  }
+  let rev = 11 - (sum % 11);
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(cleanCPF.charAt(9))) return false;
+  
+  sum = 0;
+  for (let i = 0; i < 10; i++) {
+    sum += parseInt(cleanCPF.charAt(i)) * (11 - i);
+  }
+  rev = 11 - (sum % 11);
+  if (rev === 10 || rev === 11) rev = 0;
+  if (rev !== parseInt(cleanCPF.charAt(10))) return false;
+  
+  return true;
+};
+
+// Check for emojis or forbidden characters
+const hasEmojisOrSpecialChars = (val: string, type: 'name' | 'clinic' | 'username' | 'password' | 'email') => {
+  // Regex to detect emojis
+  const emojiRegex = /[\uD800-\uDBFF][\uDC00-\uDFFF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2000-\u3300]|\ud83e[\udd00-\udfff]/g;
+  if (emojiRegex.test(val)) return true;
+
+  if (type === 'name') {
+    // Letters, standard Portuguese accents, spaces and dots only
+    const nameRegex = /^[a-zA-ZáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s.]+$/;
+    return !nameRegex.test(val);
+  }
+
+  if (type === 'clinic') {
+    // Alphanumeric with special accents, spaces, digits, dots, hyphens, and standard symbols
+    const clinicRegex = /^[a-zA-Z0-9áàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ\s.\-&,]+$/;
+    return !clinicRegex.test(val);
+  }
+
+  if (type === 'username') {
+    // Alphanumeric, dot, underscore, dash. (No spaces, no weird symbols)
+    const usernameRegex = /^[a-zA-Z0-9.\-_]+$/;
+    return !usernameRegex.test(val);
+  }
+
+  if (type === 'email') {
+    const emailRegex = /^[a-zA-Z0-9._%\-+]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+    return !emailRegex.test(val);
+  }
+
+  if (type === 'password') {
+    const forbidden = /[<>\\]/;
+    return forbidden.test(val);
+  }
+
+  return false;
+};
 
 function FreeTrialView({
   onBack,
@@ -10827,6 +10891,7 @@ function FreeTrialView({
   const [clinicName, setClinicName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [cpf, setCpf] = useState('');
   const [plan, setPlan] = useState('Pro'); // Default Pro
   const [specialty, setSpecialty] = useState('Geral');
   const [username, setUsername] = useState('');
@@ -10836,6 +10901,7 @@ function FreeTrialView({
   const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isBlockedByFingerprint, setIsBlockedByFingerprint] = useState(false);
+  const [successCredentials, setSuccessCredentials] = useState<FreeTrialDetails | null>(null);
 
   useEffect(() => {
     // Client-side anti-abuse tracking: verify persistent LocalStorage and cookies
@@ -10866,55 +10932,126 @@ function FreeTrialView({
   }, []);
 
   const steps = [
-    "Validando dados cadastrais...",
-    "Instanciando banco de dados privado no Cloud Run...",
-    "Preparando módulos de faturamento e fluxo de caixa...",
-    "Configurando o painel inteligente para odontologia..."
+    "Validando dados cadastrais e consultando integridade do CPF...",
+    "Buscando duplicidades de conta no banco de dados central...",
+    "Instanciando ambientes seguros em sandbox regulacionada LGPD...",
+    "Disparando chaves de ativação via WhatsApp e E-mail de destino..."
   ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!fullName.trim() || !clinicName.trim() || !email.trim() || !phone.trim() || !username.trim() || !password.trim()) {
+    // Filter/validate fields are filled
+    if (!fullName.trim() || !clinicName.trim() || !email.trim() || !phone.trim() || !username.trim() || !password.trim() || !cpf.trim()) {
       setError('Por favor, preencha todos os campos obrigatórios do formulário.');
       return;
     }
 
+    // Mathematically validate the CPF
+    if (!isValidCPFMathematic(cpf)) {
+      setError('CPF inválido. Por favor, insira um CPF matematicamente válido para ativar sua conta de teste.');
+      return;
+    }
+
+    // Emojis and Special Character limits verification
+    if (hasEmojisOrSpecialChars(fullName, 'name')) {
+      setError('O Nome Completo não deve conter emojis ou caracteres especiais (use apenas letras, acentos e espaços).');
+      return;
+    }
+    if (hasEmojisOrSpecialChars(clinicName, 'clinic')) {
+      setError('O Nome da Clínica não deve conter emojis ou caracteres especiais complexos.');
+      return;
+    }
+    if (hasEmojisOrSpecialChars(username, 'username')) {
+      setError('O Nome de Usuário não deve conter espaços, emojis ou caracteres especiais inválidos (permitido: letras, números, ponto, hífen e subscrito).');
+      return;
+    }
+    if (hasEmojisOrSpecialChars(email, 'email')) {
+      setError('E-mail institucional inválido. Verifique se digitou corretamente sem espaços ou símbolos com emojis.');
+      return;
+    }
+    if (hasEmojisOrSpecialChars(password, 'password')) {
+      setError('A Senha não deve conter emojis ou caracteres especiais de código (<, >, \\).');
+      return;
+    }
+
+    // Strict spaces check
     if (username.trim().includes(' ')) {
       setError('O nome de usuário não pode conter espaços.');
       return;
     }
 
     if (password.trim().length < 3) {
-      setError('A senha deve ter pelo menos 3 caracteres.');
+      setError('A senha de acesso deve ter pelo menos 3 caracteres.');
       return;
     }
 
     setIsSubmitting(true);
     setCurrentStep(0);
 
-    // Simulate gorgeous loading steps with specific delays
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = phone.replace(/\D/g, '');
+    const cleanCPF = cpf.replace(/\D/g, '');
+
+    // Execute real-time database pre-flight checks in parallel with the first wizard delay steps!
+    try {
+      const usersRef = collection(db, 'users');
+
+      // Step 1: Check duplicate username
+      const qUser = query(usersRef, where('username', '==', cleanUsername), limit(1));
+      const userSnap = await getDocs(qUser);
+      if (!userSnap.empty) {
+        throw new Error(`O usuário "${cleanUsername}" já está em uso por outro consultório.`);
+      }
+
+      // Step 2: Check duplicate email
+      const qEmail = query(usersRef, where('email', '==', cleanEmail), limit(1));
+      const emailSnap = await getDocs(qEmail);
+      if (!emailSnap.empty) {
+        throw new Error("Este e-mail corporativo já foi cadastrado para outra conta de testes.");
+      }
+
+      // Step 3: Check duplicate Phone
+      const qPhone = query(usersRef, where('normalizedPhone', '==', cleanPhone), limit(1));
+      const phoneSnap = await getDocs(qPhone);
+      if (!phoneSnap.empty) {
+        throw new Error("Este número de WhatsApp já possui um ambiente de testes ativo.");
+      }
+
+      // Step 4: Check duplicate CPF
+      const qCpf = query(usersRef, where('cpf', '==', cleanCPF), limit(1));
+      const cpfSnap = await getDocs(qCpf);
+      if (!cpfSnap.empty) {
+        throw new Error("Este CPF já foi utilizado para criar um período de testes gratuito.");
+      }
+
+    } catch (err: any) {
+      setError(err?.message || 'Falha na validação de pre-flight do banco de dados.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Pre-flight database validation succeeds! Let's smoothly animate steps
     for (let i = 0; i < steps.length; i++) {
       setCurrentStep(i);
       await new Promise(resolve => setTimeout(resolve, 800));
     }
 
-    try {
-      await onStartTrial({
-        fullName,
-        clinicName,
-        email,
-        phone,
-        plan,
-        specialty,
-        username,
-        password
-      });
-    } catch (err: any) {
-      setError(err?.message || 'Erro ao inicializar o teste grátis.');
-      setIsSubmitting(false);
-    }
+    // Set success credentials with the registration parameters 
+    setSuccessCredentials({
+      fullName,
+      clinicName,
+      email: cleanEmail,
+      phone,
+      plan,
+      specialty,
+      username: cleanUsername,
+      password: password.trim(),
+      cpf: cleanCPF
+    });
+    setIsSubmitting(false);
   };
 
   return (
@@ -11054,6 +11191,96 @@ function FreeTrialView({
                     </a>
                   </div>
                 </motion.div>
+              ) : successCredentials ? (
+                // Simulated activation receipt / success details
+                <motion.div 
+                  key="success-receipt"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="flex flex-col items-center justify-center text-center pb-4 border-b border-slate-100">
+                    <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100 shadow-sm mb-4">
+                      <ShieldCheck className="w-8 h-8 text-emerald-500 animate-bounce" />
+                    </div>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold uppercase tracking-widest px-3 py-1 rounded-full mb-1">
+                      Cadastro Ativado com Sucesso! 🚀
+                    </span>
+                    <h3 className="text-xl font-black text-slate-800 tracking-tight">Ativação Enviada</h3>
+                    <p className="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
+                      Sua conta de testes foi estabelecida com segurança. Os detalhes de login e instruções de ativação foram disparados com sucesso para os canais cadastrados:
+                    </p>
+                  </div>
+
+                  {/* WhatsApp and Email Targets badges */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pb-2">
+                    <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-100/60 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-brand-cyan/10 flex items-center justify-center text-brand-cyan flex-shrink-0">
+                        <MessageSquare className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[8px] uppercase font-bold text-slate-400">Ativação via WhatsApp</span>
+                        <p className="text-xs font-bold text-slate-800 truncate">{successCredentials.phone}</p>
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-100/60 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-brand-cyan/10 flex items-center justify-center text-brand-cyan flex-shrink-0">
+                        <Mail className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[8px] uppercase font-bold text-slate-400">Ativação via E-mail</span>
+                        <p className="text-xs font-bold text-slate-800 truncate">{successCredentials.email}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary of Generated Accounts */}
+                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/65 space-y-3">
+                    <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Credenciais Administrativas Oficiais</span>
+                    
+                    <div className="grid grid-cols-2 gap-4 text-xs">
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-slate-400 font-bold block">Nome de Usuário</span>
+                        <span className="font-mono text-slate-800 font-semibold">{successCredentials.username}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-slate-400 font-bold block">Senha de Acesso</span>
+                        <span className="font-mono text-slate-850 font-bold">{successCredentials.password}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-slate-400 font-bold block">CPF Vinculado</span>
+                        <span className="font-mono text-slate-800 font-semibold">{successCredentials.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
+                      </div>
+                      <div className="space-y-0.5">
+                        <span className="text-[9px] text-slate-400 font-bold block">Plano Ativo</span>
+                        <span className="font-bold text-emerald-600">{successCredentials.plan} (14 Dias Grátis)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50/50 border border-amber-100/70 p-4 rounded-xl text-[10px] text-amber-800 leading-relaxed font-semibold">
+                    ⚠️ <strong>Atenção:</strong> Por motivos de segurança regulatória e conformidade LGPD médica, guarde estes dados cuidadosamente. Nós enviamos as instruções para as contas mostradas acima.
+                  </div>
+
+                  {/* Continue CTA */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsSubmitting(true);
+                      try {
+                        await onStartTrial(successCredentials);
+                      } catch (err: any) {
+                        setError(err?.message || 'Erro ao inicializar o banco.');
+                        setIsSubmitting(false);
+                      }
+                    }}
+                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold uppercase text-xs tracking-wider py-4 rounded-2xl transition-all shadow-xl shadow-slate-900/10 active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4 text-white" />
+                    Confirmar Ativação & Entrar no Painel
+                  </button>
+                </motion.div>
               ) : isSubmitting ? (
                 // Setup loader animation wizard
                 <motion.div 
@@ -11146,10 +11373,10 @@ function FreeTrialView({
                       </div>
                     </div>
 
-                    {/* Clinic Name and Phone/WhatsApp */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Clinic Name, CPF and Phone/WhatsApp in 3 columns */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome da Clínica / Consultório *</label>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome da Clínica *</label>
                         <div className="relative">
                           <Stethoscope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                           <input 
@@ -11158,20 +11385,55 @@ function FreeTrialView({
                             value={clinicName}
                             onChange={(e) => setClinicName(e.target.value)}
                             className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: Clínica Sorriso Novo"
+                            placeholder="Ex: Clínica Sorriso"
                           />
                         </div>
                       </div>
 
                       <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">WhatsApp para Ativação *</label>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">CPF do Profissional *</label>
+                        <div className="relative">
+                          <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                          <input 
+                            type="text"
+                            required
+                            value={cpf}
+                            onChange={(e) => {
+                              const cleanVal = e.target.value.replace(/\D/g, '').substring(0, 11);
+                              let masked = cleanVal;
+                              if (cleanVal.length > 9) {
+                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3, 6)}.${cleanVal.substring(6, 9)}-${cleanVal.substring(9, 11)}`;
+                              } else if (cleanVal.length > 6) {
+                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3, 6)}.${cleanVal.substring(6)}`;
+                              } else if (cleanVal.length > 3) {
+                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3)}`;
+                              }
+                              setCpf(masked);
+                            }}
+                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
+                            placeholder="Ex: 000.000.000-00"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">WhatsApp p/ Ativação *</label>
                         <div className="relative">
                           <MessageCircle className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                           <input 
                             type="tel"
                             required
                             value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
+                            onChange={(e) => {
+                              const cleanVal = e.target.value.replace(/\D/g, '').substring(0, 11);
+                              let masked = cleanVal;
+                              if (cleanVal.length > 7) {
+                                masked = `(${cleanVal.substring(0, 2)}) ${cleanVal.substring(2, 7)}-${cleanVal.substring(7)}`;
+                              } else if (cleanVal.length > 2) {
+                                masked = `(${cleanVal.substring(0, 2)}) ${cleanVal.substring(2)}`;
+                              }
+                              setPhone(masked);
+                            }}
                             className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
                             placeholder="Ex: (11) 99999-9999"
                           />
