@@ -24,6 +24,7 @@ import {
   LayoutDashboard,
   ArrowLeft,
   Lock,
+  Unlock,
   Plus,
   Minus,
   LogOut,
@@ -129,6 +130,9 @@ import {
   deleteDoc,
   updateDoc
 } from 'firebase/firestore';
+
+import SaaSAssinaturaView from './components/SaaSAssinaturaView';
+import SaaSLockedFeatureView from './components/SaaSLockedFeatureView';
 
 const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
@@ -492,6 +496,38 @@ const INITIAL_USERS = [
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Identificador de isolamento para sessões de teste grátis (trial)
+  const trialId = currentUser?.isTrial ? currentUser.id : currentUser?.parentTrialId;
+
+  // SaaS tenant plan helper computations
+  const currentPlanId = currentUser?.trialPlan || 'Pro';
+  const isTrialActive = currentUser?.isTrial === true;
+  const isPremiumActive = currentUser?.isPremium === true;
+
+  const getTrialDaysRemaining = () => {
+    if (!currentUser?.trialStartedAt) return 14;
+    const start = new Date(currentUser.trialStartedAt);
+    const end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const diff = end.getTime() - new Date().getTime();
+    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    return days > 0 ? days : 0;
+  };
+
+  const trialDaysRemaining = getTrialDaysRemaining();
+
+  const isModuleLockedBySaaS = (moduleName: string) => {
+    if (currentPlanId === 'Lite') {
+      const allowed = ['dashboard', 'agenda', 'pacientes', 'assinatura'];
+      return !allowed.includes(moduleName.toLowerCase());
+    }
+    if (currentPlanId === 'Pro') {
+      const blocked = ['estoque'];
+      return blocked.includes(moduleName.toLowerCase());
+    }
+    return false;
+  };
+
   const [data, setData] = useState<DentalRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [quotaExceeded, setQuotaExceeded] = useState(false);
@@ -676,30 +712,40 @@ export default function App() {
   React.useEffect(() => {
     if (!isAuthReady) return;
 
-    console.log("[DataSync] Iniciando monitoramento de dados...", { isAuthenticated, role: currentUser?.role, name: currentUser?.name });
+    console.log("[DataSync] Iniciando monitoramento de dados...", { isAuthenticated, role: currentUser?.role, name: currentUser?.name, trialId });
 
     // 2.1 Users sync (Always active if authenticated or about to be)
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       const dbUsers = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
       console.log(`[UsersSync] ${dbUsers.length} usuários em Firestore. Sincronizando...`);
       
-      // Use INITIAL_USERS as base, override with Firestore data, and add any new ones
-      const merged = INITIAL_USERS.map(iu => {
-        const found = dbUsers.find(du => du.id === iu.id);
-        if (found) {
-          if (iu.id === '1') {
-            console.log(`[UsersSync] Sincronizando Admin (ID:1). Login: ${found.username}, PWD matches default? ${found.password === iu.password}`);
+      let merged;
+      if (trialId) {
+        // Se for trial, NÃO mostra os usuários padrão (INITIAL_USERS) nem outros usuários de outros trials
+        // Mostra somente si mesmo e quaisquer sub-usuários criados no seu trial
+        merged = dbUsers.filter(du => du.id === currentUser?.id || du.parentTrialId === trialId);
+        if (currentUser && !merged.find(m => m.id === currentUser.id)) {
+          merged.push(currentUser);
+        }
+      } else {
+        // Use INITIAL_USERS as base, override with Firestore data, and add any new ones
+        merged = INITIAL_USERS.map(iu => {
+          const found = dbUsers.find(du => du.id === iu.id);
+          if (found) {
+            if (iu.id === '1') {
+              console.log(`[UsersSync] Sincronizando Admin (ID:1). Login: ${found.username}, PWD matches default? ${found.password === iu.password}`);
+            }
+            return { ...iu, ...found };
           }
-          return { ...iu, ...found };
-        }
-        return iu;
-      });
+          return iu;
+        });
 
-      dbUsers.forEach(du => {
-        if (!merged.find(m => m.id === du.id)) {
-          merged.push(du);
-        }
-      });
+        dbUsers.forEach(du => {
+          if (!merged.find(m => m.id === du.id)) {
+            merged.push(du);
+          }
+        });
+      }
 
       setUsers(merged);
 
@@ -709,8 +755,15 @@ export default function App() {
         if (selfId) {
           const updatedSelf = merged.find(user => user.id === selfId);
           if (updatedSelf) {
-            if (updatedSelf.modules !== currentUser?.modules || updatedSelf.role !== currentUser?.role || updatedSelf.name !== currentUser?.name) {
-              console.log("[DataSync] Perfil do usuário atualizado, sincronizando estado local...");
+            if (
+              updatedSelf.modules !== currentUser?.modules || 
+              updatedSelf.role !== currentUser?.role || 
+              updatedSelf.name !== currentUser?.name ||
+              updatedSelf.isTrial !== currentUser?.isTrial ||
+              updatedSelf.isPremium !== currentUser?.isPremium ||
+              updatedSelf.trialPlan !== currentUser?.trialPlan
+            ) {
+              console.log("[DataSync] Perfil do usuário atualizado com dados SaaS, sincronizando estado local...");
               setCurrentUser((prev: any) => ({ ...prev, ...updatedSelf }));
               localStorage.setItem('odonto_session', JSON.stringify({ ...(currentUser || sessionUser), ...updatedSelf }));
             }
@@ -734,7 +787,10 @@ export default function App() {
         rQuery = collection(db, 'records');
       } else {
         const role = (currentUser?.role || '').toLowerCase();
-        if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
+        if (trialId) {
+          // Se for ambiente trial, filtra pelos dados criados pelo mesmo trial
+          rQuery = query(collection(db, 'records'), where('trialOwnerId', '==', trialId));
+        } else if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
           rQuery = collection(db, 'records');
         } else if (role === 'dentista') {
           rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
@@ -748,7 +804,7 @@ export default function App() {
           console.log(`[RecordsSync] ${records.length} registros carregados. (Auth: ${isAuthenticated})`);
           setData(records);
           setIsLoadingData(false);
-        }, (err) => {
+         }, (err) => {
           console.error("Records sync error:", err);
           setIsLoadingData(false);
         });
@@ -760,7 +816,10 @@ export default function App() {
       
       // 2.2 Patients Query
       let pQuery;
-      if (role === 'dentista') {
+      if (trialId) {
+        // Se for ambiente trial, filtra pelos dados criados pelo mesmo trial
+        pQuery = query(collection(db, 'patients'), where('trialOwnerId', '==', trialId));
+      } else if (role === 'dentista') {
         pQuery = query(collection(db, 'patients'), where('dentistaResponsavel', '==', currentUser.name));
       } else if (role === 'admin' || role === 'recepcionista' || hasModule('Pacientes')) {
         pQuery = collection(db, 'patients');
@@ -776,7 +835,10 @@ export default function App() {
 
       // 2.4 Documents Query
       let dQuery;
-      if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda')) {
+      if (trialId) {
+        // Se for ambiente trial, filtra pelos dados criados pelo mesmo trial
+        dQuery = query(collection(db, 'documents'), where('trialOwnerId', '==', trialId));
+      } else if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda')) {
         dQuery = collection(db, 'documents');
       } else if (role === 'dentista') {
         dQuery = query(collection(db, 'documents'), where('dentista', '==', currentUser.name));
@@ -799,13 +861,14 @@ export default function App() {
       unsubRecords();
       unsubDocs();
     };
-  }, [isAuthReady, isAuthenticated, isPublicBooking, currentUser?.id, currentUser?.role, currentUser?.name]);
+  }, [isAuthReady, isAuthenticated, isPublicBooking, currentUser?.id, currentUser?.role, currentUser?.name, trialId]);
 
   React.useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'settings', 'clinic'), (docSnap) => {
+    const docId = trialId ? `clinic-${trialId}` : 'clinic';
+    const unsub = onSnapshot(doc(db, 'settings', docId), (docSnap) => {
       if (docSnap.exists()) {
         const d = docSnap.data();
-        setClinicName(d.clinicName || 'OdontoDash');
+        setClinicName(d.clinicName || 'Dental Analytics');
         setClinicLogo(d.clinicLogo || null);
         setFooterText(d.footerText || `© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
         if (d.providerPhone) {
@@ -816,12 +879,22 @@ export default function App() {
           setProviderName(d.providerName);
           localStorage.setItem('odonto_cfg_providerName', d.providerName);
         }
+      } else if (trialId) {
+        // Valores padrão limpos para novos ambientes de teste grátis
+        setClinicName('Dental Analytics');
+        setClinicLogo(null);
+        setFooterText(`© ${new Date().getFullYear()} Dental Analytics | Teste Grátis`);
+      } else {
+        // Default do sistema geral
+        setClinicName('OdontoDash');
+        setClinicLogo(null);
+        setFooterText(`© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
       }
     }, (error) => {
       console.warn("Settings sync error (branding):", error);
     });
     return unsub;
-  }, []);
+  }, [trialId]);
 
   const procedures = useMemo(() => ['Todos', ...Array.from(new Set(data.map(r => r.procedimento)))], [data]);
   const statuses = ['Todos', 'Realizado', 'Agendado', 'Pendente', 'Cancelado'];
@@ -1114,6 +1187,26 @@ export default function App() {
       return false;
     }
 
+    // SaaS expiration check
+    if (isTrialActive && trialDaysRemaining <= 0) {
+      alert("Seu período de teste grátis (Trial) expirou. Por favor, regularize sua assinatura na aba 'Plano & Assinatura' para registrar novos pacientes.");
+      setActivePage('Assinatura');
+      setSubPage(null);
+      return false;
+    }
+
+    // SaaS allocation/limits verification
+    const isNew = !existingId || existingId.trim() === '';
+    if (isNew) {
+      const maxPatientsAllowed = currentPlanId === 'Lite' ? 100 : currentPlanId === 'Pro' ? 1000 : 999990;
+      if (patients.length >= maxPatientsAllowed) {
+        alert(`Limite de pacientes atingido! Seu plano atual (${currentPlanId}) suporta no máximo ${maxPatientsAllowed} pacientes ativos.\n\nAcesse a aba 'Plano & Assinatura' para migrar seu plano de forma segura integrada.`);
+        setActivePage('Assinatura');
+        setSubPage(null);
+        return false;
+      }
+    }
+
     try {
       const patientId = (existingId && existingId.trim() !== '') ? existingId : `pat-${Date.now()}`;
       console.log(existingId ? `[handleCreatePatient] Atualizando paciente ${existingId}...` : `[handleCreatePatient] Criando novo paciente ${patientId}...`);
@@ -1140,6 +1233,10 @@ export default function App() {
         dentistaResponsavel: currentUser?.role === 'Dentista' ? (currentUser.name || '') : (newPatient.dentistaResponsavel || ''),
         updatedAt: new Date().toISOString()
       };
+      
+      if (trialId) {
+        patientData.trialOwnerId = trialId;
+      }
       
       if (!existingId || existingId.trim() === '') {
         patientData.createdAt = new Date().toISOString();
@@ -1190,6 +1287,10 @@ export default function App() {
       statusPagamento: 'Pendente',
       valor: Number(newAppt.valor) || 0,
     };
+
+    if (trialId) {
+      (record as any).trialOwnerId = trialId;
+    }
 
     const isTaken = data.some(r => 
       r.dentista === record.dentista && 
@@ -1251,6 +1352,10 @@ export default function App() {
       observacao: newRecord.observacao || '',
     };
 
+    if (trialId) {
+      (record as any).trialOwnerId = trialId;
+    }
+
     try {
       await setDoc(doc(db, 'records', record.id), record);
       return true;
@@ -1268,12 +1373,16 @@ export default function App() {
     }
 
     const id = `doc-${Date.now()}`;
-    const docData = {
+    const docData: any = {
       id,
       ...newDoc,
       dentista: currentUser?.name || newDoc.dentista || newDoc.dentistName || 'Administrador',
       createdAt: new Date().toISOString()
     };
+
+    if (trialId) {
+      docData.trialOwnerId = trialId;
+    }
 
     try {
       await setDoc(doc(db, 'documents', id), docData);
@@ -1379,8 +1488,25 @@ export default function App() {
   };
 
   const handleCreateUser = async (newUser: any): Promise<boolean> => {
+    // SaaS trial check
+    if (isTrialActive && trialDaysRemaining <= 0) {
+      alert("Seu período de teste grátis (Trial) expirou. Por favor, regularize sua assinatura na aba 'Plano & Assinatura' para gerenciar sua equipe.");
+      setActivePage('Assinatura');
+      return false;
+    }
+
+    // SaaS dentist/staff limit check
+    const maxDentists = currentPlanId === 'Lite' ? 1 : currentPlanId === 'Pro' ? 5 : 99999;
+    const currentDentistCount = users.filter((u: any) => u?.role === 'Dentista').length;
+    
+    if (newUser.role === 'Dentista' && currentDentistCount >= maxDentists) {
+      alert(`Limite de profissionais atingido! Seu plano atual (${currentPlanId}) suporta no máximo ${maxDentists} profissional(is) do tipo Dentista.\n\nAcesse a aba 'Plano & Assinatura' para fazer upgrade do seu plano.`);
+      setActivePage('Assinatura');
+      return false;
+    }
+
     const id = `user-${Date.now()}`;
-    const user = {
+    const user: any = {
       id,
       name: newUser.name,
       role: newUser.role,
@@ -1391,6 +1517,10 @@ export default function App() {
       phone: newUser.phone || '',
       createdAt: new Date().toISOString()
     };
+
+    if (trialId) {
+      user.parentTrialId = trialId;
+    }
     
     try {
       console.log("Iniciando criação de usuário no Firestore:", user);
@@ -1810,7 +1940,8 @@ export default function App() {
 
   const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => {
     try {
-      await setDoc(doc(db, 'settings', 'clinic'), {
+      const docId = trialId ? `clinic-${trialId}` : 'clinic';
+      await setDoc(doc(db, 'settings', docId), {
         ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -1823,7 +1954,8 @@ export default function App() {
         localStorage.setItem('odonto_cfg_providerName', updates.providerName);
       }
     } catch (e: any) {
-      handleFirestoreError(e, OperationType.UPDATE, 'settings/clinic');
+      const docId = trialId ? `clinic-${trialId}` : 'clinic';
+      handleFirestoreError(e, OperationType.UPDATE, `settings/${docId}`);
     }
   };
 
@@ -1945,14 +2077,19 @@ export default function App() {
             onBack={() => setIsFreeTrialView(false)}
             onStartTrial={async (details) => {
               setClinicName(details.clinicName);
+              const trialIdGenerated = `trial-${Date.now()}`;
               try {
-                await handleUpdateSettings({ clinicName: details.clinicName });
+                // Salva as configurações diretamente no documento isolado do trial gerado
+                await setDoc(doc(db, 'settings', `clinic-${trialIdGenerated}`), {
+                  clinicName: details.clinicName,
+                  updatedAt: new Date().toISOString()
+                }, { merge: true });
               } catch (e) {
                 console.error("Erro ao atualizar configurações no Firestore:", e);
               }
               
               const trialUserProfile = {
-                id: `trial-${Date.now()}`,
+                id: trialIdGenerated,
                 name: details.fullName,
                 role: 'Admin',
                 modules: 'Todos',
@@ -2121,8 +2258,28 @@ export default function App() {
           </div>
         );
       case 'Retorno':
+        if (currentPlanId === 'Lite') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Módulo de Retorno de Pacientes"
+              requiredPlan="Pro"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         return <RecallView data={data} clinicName={clinicName} patients={patients} />;
       case 'Mensagens':
+        if (currentPlanId === 'Lite') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Módulo de Mensagens Automáticas"
+              requiredPlan="Pro"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         if (!hasModule('Mensagens')) {
           return (
             <div className="p-8 text-center bg-white rounded-2xl border border-slate-100 shadow-sm max-w-md mx-auto my-12">
@@ -2144,6 +2301,16 @@ export default function App() {
           />
         );
       case 'Documentos':
+        if (currentPlanId === 'Lite') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Gerador Digital de Receitas, Atestados e Prontuários"
+              requiredPlan="Pro"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         return <DocumentsView 
           data={data} 
           users={users} 
@@ -2205,8 +2372,28 @@ export default function App() {
           onEditEmail={(record) => setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id })}
         />;
       case 'Financeiro':
+        if (currentPlanId === 'Lite') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Módulo de Análise Financeira, DRE e Contas"
+              requiredPlan="Pro"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         return canAccessFinance ? <FinanceView data={filteredData} patients={patients} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Equipe':
+        if (currentPlanId === 'Lite') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Gestão Multiprofissional e Segurança"
+              requiredPlan="Pro"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         return <TeamView 
           data={filteredData} 
           users={users} 
@@ -2243,7 +2430,30 @@ export default function App() {
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
         );
       case 'Estoque':
+        if (currentPlanId === 'Lite' || currentPlanId === 'Pro') {
+          return (
+            <SaaSLockedFeatureView
+              featureName="Controle de Estoque de Alinhadores e Insumos"
+              requiredPlan="Platinum"
+              currentPlan={currentPlanId}
+              onUpgradeClick={() => setActivePage('Assinatura')}
+            />
+          );
+        }
         return <StockView currentUser={currentUser} />;
+      case 'Assinatura':
+        return (
+          <SaaSAssinaturaView 
+            currentUser={currentUser} 
+            onUpdateCurrentUser={(updatedFields) => {
+              setCurrentUser(updatedFields);
+              localStorage.setItem('odonto_session', JSON.stringify(updatedFields));
+            }}
+            db={db}
+            patientsCount={patients.length}
+            dentistCount={users.filter((u: any) => u?.role === 'Dentista').length}
+          />
+        );
       default:
         return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
     }
@@ -2299,6 +2509,7 @@ export default function App() {
               icon={<RotateCcw className="w-4 h-4" />} 
               label="Retorno" 
               active={activePage === 'Retorno'} 
+              isLocked={isModuleLockedBySaaS('Retorno')}
               onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
             />
           )}
@@ -2307,6 +2518,7 @@ export default function App() {
               icon={<MessageSquare className="w-4 h-4" />} 
               label="Mensagens" 
               active={activePage === 'Mensagens'} 
+              isLocked={isModuleLockedBySaaS('Mensagens')}
               onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
             />
           )}
@@ -2315,6 +2527,7 @@ export default function App() {
               icon={<FileText className="w-4 h-4" />} 
               label="Documentos" 
               active={activePage === 'Documentos'} 
+              isLocked={isModuleLockedBySaaS('Documentos')}
               onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
             />
           )}
@@ -2323,6 +2536,7 @@ export default function App() {
               icon={<DollarSign className="w-4 h-4" />} 
               label="Financeiro" 
               active={activePage === 'Financeiro'} 
+              isLocked={isModuleLockedBySaaS('Financeiro')}
               onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
             />
           )}
@@ -2331,6 +2545,7 @@ export default function App() {
               icon={<Stethoscope className="w-4 h-4" />} 
               label="Equipe / Dentistas" 
               active={activePage === 'Equipe'} 
+              isLocked={isModuleLockedBySaaS('Equipe')}
               onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
             />
           )}
@@ -2339,6 +2554,7 @@ export default function App() {
               icon={<Package className="w-4 h-4" />} 
               label="Estoque & Suprimentos" 
               active={activePage === 'Estoque'} 
+              isLocked={isModuleLockedBySaaS('Estoque')}
               onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
             />
           )}
@@ -2348,6 +2564,14 @@ export default function App() {
               label="Administração" 
               active={activePage === 'Administração'} 
               onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+            />
+          )}
+          {currentUser?.role === 'Admin' && (
+            <SidebarNavItem 
+              icon={<Sparkles className="w-4 h-4 text-brand-cyan animate-pulse" />} 
+              label="Plano & Assinatura" 
+              active={activePage === 'Assinatura'} 
+              onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
             />
           )}
         </div>
@@ -2534,6 +2758,7 @@ export default function App() {
                 icon={<RotateCcw className="w-3.5 h-3.5" />} 
                 label="Retorno" 
                 active={activePage === 'Retorno'} 
+                isLocked={isModuleLockedBySaaS('Retorno')}
                 onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
               />
             )}
@@ -2542,6 +2767,7 @@ export default function App() {
                 icon={<MessageSquare className="w-3.5 h-3.5" />} 
                 label="Mensagens" 
                 active={activePage === 'Mensagens'} 
+                isLocked={isModuleLockedBySaaS('Mensagens')}
                 onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
               />
             )}
@@ -2550,6 +2776,7 @@ export default function App() {
                 icon={<FileText className="w-3.5 h-3.5" />} 
                 label="Documentos" 
                 active={activePage === 'Documentos'} 
+                isLocked={isModuleLockedBySaaS('Documentos')}
                 onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
               />
             )}
@@ -2558,6 +2785,7 @@ export default function App() {
                 icon={<DollarSign className="w-3.5 h-3.5" />} 
                 label="Financeiro" 
                 active={activePage === 'Financeiro'} 
+                isLocked={isModuleLockedBySaaS('Financeiro')}
                 onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
               />
             )}
@@ -2566,14 +2794,16 @@ export default function App() {
                 icon={<Stethoscope className="w-3.5 h-3.5" />} 
                 label="Equipe" 
                 active={activePage === 'Equipe'} 
+                isLocked={isModuleLockedBySaaS('Equipe')}
                 onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
               />
             )}
             {hasModule('Estoque') && (
               <RibbonItem 
                 icon={<Package className="w-3.5 h-3.5" />} 
-                label="Estoque" 
+                 label="Estoque" 
                 active={activePage === 'Estoque'} 
+                isLocked={isModuleLockedBySaaS('Estoque')}
                 onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
               />
             )}
@@ -2583,6 +2813,14 @@ export default function App() {
                 label="Adm" 
                 active={activePage === 'Administração'} 
                 onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+              />
+            )}
+            {currentUser?.role === 'Admin' && (
+              <RibbonItem 
+                icon={<Sparkles className="w-3.5 h-3.5" />} 
+                label="Assinatura" 
+                active={activePage === 'Assinatura'} 
+                onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
               />
             )}
           </nav>
@@ -2657,6 +2895,9 @@ export default function App() {
                 {hasModule('Administração') && (
                   <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
                 )}
+                {currentUser?.role === 'Admin' && (
+                  <MobileNavItem icon={<Sparkles className="w-5 h-5 text-brand-cyan" />} label="Plano & Assinatura" active={activePage === 'Assinatura'} onClick={() => { setActivePage('Assinatura'); setIsMenuOpen(false); }} />
+                )}
               </div>
               
               <div className="p-4 border-t border-slate-100">
@@ -2674,134 +2915,136 @@ export default function App() {
       </AnimatePresence>
 
       {/* Filters Bar */}
-      <nav className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 sticky top-[53px] md:top-[61px] lg:top-0 z-40 shrink-0">
-        <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
-          <div className="flex items-center gap-2">
-            <div className="relative group flex-1 md:flex-none">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-              <input 
-                type="text" 
-                placeholder="Buscar paciente..."
-                className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
-                value={searchPatient}
-                onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
-              />
+      {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && (
+        <nav className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 sticky top-[53px] md:top-[61px] lg:top-0 z-40 shrink-0">
+          <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
+            <div className="flex items-center gap-2">
+              <div className="relative group flex-1 md:flex-none">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+                <input 
+                  type="text" 
+                  placeholder="Buscar paciente..."
+                  className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
+                  value={searchPatient}
+                  onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
+                />
+              </div>
             </div>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3 md:gap-4">
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                value={filterDateRange}
-                onChange={(e) => {
-                  const val = e.target.value as any;
-                  setFilterDateRange(val);
-                  if (val === 'today') {
-                    setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
-                    setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
-                  } else if (val === 'month') {
-                    setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-                    setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
-                  } else if (val === 'last_month') {
-                    const lastMonth = subMonths(new Date(), 1);
-                    setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
-                    setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
-                  }
-                }}
-              >
-                <option value="month">Este Mês</option>
-                <option value="last_month">Mês Passado</option>
-                <option value="today">Hoje</option>
-                <option value="custom">Customizado</option>
-              </select>
+            <div className="flex flex-wrap items-center gap-3 md:gap-4">
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
+                  value={filterDateRange}
+                  onChange={(e) => {
+                    const val = e.target.value as any;
+                    setFilterDateRange(val);
+                    if (val === 'today') {
+                      setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
+                      setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
+                    } else if (val === 'month') {
+                      setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+                      setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+                    } else if (val === 'last_month') {
+                      const lastMonth = subMonths(new Date(), 1);
+                      setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+                      setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+                    }
+                  }}
+                >
+                  <option value="month">Este Mês</option>
+                  <option value="last_month">Mês Passado</option>
+                  <option value="today">Hoje</option>
+                  <option value="custom">Customizado</option>
+                </select>
 
-              {filterDateRange === 'custom' && (
-                <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
-                  <input 
-                    type="date"
-                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                    value={filterStartDate}
-                    onChange={(e) => setFilterStartDate(e.target.value)}
-                  />
-                  <span className="text-[10px] text-slate-400">até</span>
-                  <input 
-                    type="date"
-                    className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                    value={filterEndDate}
-                    onChange={(e) => setFilterEndDate(e.target.value)}
-                  />
+                {filterDateRange === 'custom' && (
+                  <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
+                    <input 
+                      type="date"
+                      className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                      value={filterStartDate}
+                      onChange={(e) => setFilterStartDate(e.target.value)}
+                    />
+                    <span className="text-[10px] text-slate-400">até</span>
+                    <input 
+                      type="date"
+                      className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                      value={filterEndDate}
+                      onChange={(e) => setFilterEndDate(e.target.value)}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                  value={filterProcedure}
+                  onChange={(e) => setFilterProcedure(e.target.value)}
+                >
+                  {procedures.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                >
+                  {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 flex-1 md:flex-none">
+                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
+                <select 
+                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                  value={filterPayment}
+                  onChange={(e) => setFilterPayment(e.target.value)}
+                >
+                  {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
+                <div className="flex items-center gap-2 flex-1 md:flex-none">
+                  <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
+                  <select 
+                    className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                    value={filterDentista}
+                    onChange={(e) => setFilterDentista(e.target.value)}
+                  >
+                    {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
                 </div>
               )}
             </div>
-
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                value={filterProcedure}
-                onChange={(e) => setFilterProcedure(e.target.value)}
-              >
-                {procedures.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-              >
-                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2 flex-1 md:flex-none">
-              <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
-              <select 
-                className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                value={filterPayment}
-                onChange={(e) => setFilterPayment(e.target.value)}
-              >
-                {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-
-            {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-              <div className="flex items-center gap-2 flex-1 md:flex-none">
-                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
-                <select 
-                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                  value={filterDentista}
-                  onChange={(e) => setFilterDentista(e.target.value)}
-                >
-                  {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
-            )}
           </div>
-        </div>
 
-        {/* Relógio e Ícone (ao lado contrário do menu de busca no topo) */}
-        <div className="hidden lg:flex items-center gap-3 shrink-0 self-end lg:self-auto pl-4 border-l border-slate-200/60 ml-2">
-          <RealTimeClock />
-          
-          <button 
-            onClick={() => {
-              const url = window.location.origin + window.location.pathname + '?booking=true';
-              navigator.clipboard.writeText(url);
-              alert('Link de agendamento online copiado!');
-              setIsPublicBooking(true);
-            }}
-            className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
-            title="Copiar Link de Agendamento"
-          >
-            <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
-          </button>
-        </div>
-      </nav>
+          {/* Relógio e Ícone (ao lado contrário do menu de busca no topo) */}
+          <div className="hidden lg:flex items-center gap-3 shrink-0 self-end lg:self-auto pl-4 border-l border-slate-200/60 ml-2">
+            <RealTimeClock />
+            
+            <button 
+              onClick={() => {
+                const url = window.location.origin + window.location.pathname + '?booking=true';
+                navigator.clipboard.writeText(url);
+                alert('Link de agendamento online copiado!');
+                setIsPublicBooking(true);
+              }}
+              className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
+              title="Copiar Link de Agendamento"
+            >
+              <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+            </button>
+          </div>
+        </nav>
+      )}
 
       <main className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
@@ -4079,34 +4322,41 @@ function MobileNavItem({ icon, label, active = false, onClick }: { icon: React.R
   );
 }
 
-function SidebarNavItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+function SidebarNavItem({ icon, label, active = false, onClick, isLocked = false }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void; isLocked?: boolean }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all text-xs font-bold border cursor-pointer select-none text-left",
+        "w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all text-xs font-bold border cursor-pointer select-none text-left",
         active 
           ? "bg-brand-cyan/20 border-brand-cyan/35 text-white font-bold shadow-sm" 
           : "border-transparent text-slate-400 hover:text-slate-100 hover:bg-white/5"
       )}
     >
-      <div className={cn(
-        "transition-transform duration-200 shrink-0",
-        active ? "scale-105 text-brand-cyan" : "hover:scale-105 text-slate-400"
-      )}>
-        {icon}
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={cn(
+          "transition-transform duration-200 shrink-0",
+          active ? "scale-105 text-brand-cyan" : "hover:scale-105 text-slate-400"
+        )}>
+          {icon}
+        </div>
+        <span className="truncate tracking-wide">{label}</span>
       </div>
-      <span className="truncate tracking-wide">{label}</span>
+      {isLocked && (
+        <span className="p-0.5 rounded bg-slate-700/50 text-slate-400 shrink-0 border border-slate-600/30">
+          <Lock className="w-2.5 h-2.5 shrink-0" />
+        </span>
+      )}
     </button>
   );
 }
 
-function RibbonItem({ icon, label, active = false, onClick }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }) {
+function RibbonItem({ icon, label, active = false, onClick, isLocked = false }: { icon: React.ReactNode; label: string; active?: boolean; onClick: () => void; isLocked?: boolean }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "flex flex-col items-center justify-center px-1.5 py-1 gap-0.5 border-b-2 transition-all group min-w-[62px] md:min-w-[70px] cursor-pointer",
+        "flex flex-col items-center justify-center px-1.5 py-1 gap-0.5 border-b-2 transition-all group min-w-[62px] md:min-w-[70px] cursor-pointer relative",
         active 
           ? "border-brand-cyan bg-cyan-50/30 text-brand-cyan" 
           : "border-transparent text-slate-400 hover:text-slate-600 hover:bg-slate-50"
@@ -4119,6 +4369,11 @@ function RibbonItem({ icon, label, active = false, onClick }: { icon: React.Reac
         {icon}
       </div>
       <span className="text-[8.5px] md:text-[9px] uppercase font-bold tracking-wider leading-none">{label}</span>
+      {isLocked && (
+        <div className="absolute top-0.5 right-1.5 bg-slate-200 text-slate-500 rounded p-0.5 scale-90 border border-slate-300">
+          <Lock className="w-2 h-2" />
+        </div>
+      )}
     </button>
   );
 }
@@ -8467,6 +8722,7 @@ function AdminView({
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [userToDelete, setUserToDelete] = useState<any>(null);
+  const [userToUnlock, setUserToUnlock] = useState<any>(null);
   
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState('Dentista');
@@ -8869,14 +9125,35 @@ function AdminView({
                       {users.map(u => (
                         <tr key={u.id} className="hover:bg-slate-50/50 transition-colors group">
                           <td className="px-6 py-4">
-                            <div className="font-sans font-bold text-slate-800">{u.name}</div>
+                            <div className="font-sans font-bold text-slate-800 flex items-center gap-2 flex-wrap">
+                              {u.name}
+                              {u.isNonExistent && (
+                                <span className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 text-slate-400 text-[7px] font-bold rounded uppercase tracking-wider">
+                                  Inexistente
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[9px] text-slate-400 font-mono">@{u.username}</div>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="mb-1">
-                              <span className="px-2 py-0.5 bg-white border border-slate-100 text-slate-600 text-[8px] font-black uppercase rounded shadow-sm">
+                            <div className="mb-1.5 flex flex-wrap gap-1.5 items-center">
+                              <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-600 text-[8px] font-black uppercase rounded shadow-sm">
                                 {u.role}
                               </span>
+                              {u.blocked ? (
+                                <span className="px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-600 text-[8px] font-black uppercase rounded shadow-sm flex items-center gap-1 animate-pulse">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                                  Bloqueado ({u.isNonExistent ? "3/3" : "5/5"})
+                                </span>
+                              ) : u.loginAttempts && u.loginAttempts > 0 ? (
+                                <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-600 text-[8px] font-black uppercase rounded shadow-sm">
+                                  Erros: {u.loginAttempts}/{u.isNonExistent ? 3 : 5}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-600 text-[8px] font-black uppercase rounded shadow-sm">
+                                  {u.isNonExistent ? "Inexistente Limpo" : "Ativo"}
+                                </span>
+                              )}
                             </div>
                             <div className="text-[9px] text-slate-400 font-sans">
                               {u.email && <div>{u.email}</div>}
@@ -8886,13 +9163,27 @@ function AdminView({
                           <td className="px-6 py-4 text-[9px] text-slate-400 font-sans">{u.modules}</td>
                           <td className="px-6 py-4 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              <button 
-                                onClick={() => setEditingUser(u)}
-                                className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-brand-cyan/5 rounded-lg transition-all"
-                                title="Editar Usuário"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </button>
+                              {(u.blocked || (u.loginAttempts && u.loginAttempts > 0)) && (
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setUserToUnlock(u);
+                                  }}
+                                  className="p-2 text-rose-500 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
+                                  title="Desbloquear Usuário"
+                                >
+                                  <Unlock className="w-4 h-4" />
+                                </button>
+                              )}
+                              {!u.isNonExistent && (
+                                <button 
+                                  onClick={() => setEditingUser(u)}
+                                  className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-brand-cyan/5 rounded-lg transition-all"
+                                  title="Editar Usuário"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                              )}
                               <button 
                                 type="button"
                                 onClick={(e) => {
@@ -8953,7 +9244,71 @@ function AdminView({
             }}
           />
         )}
+        {userToUnlock && (
+          <ConfirmUserUnlockModal 
+            user={userToUnlock}
+            onCancel={() => setUserToUnlock(null)}
+            onConfirm={async () => {
+              const u = userToUnlock;
+              setUserToUnlock(null);
+              const updatedUser = { ...u, blocked: false, loginAttempts: 0 };
+              const success = await onUpdateUser(u.id, updatedUser);
+              if (success) {
+                try {
+                  // Clear the distributed database temporary lockout key
+                  await deleteDoc(doc(db, 'login_attempts', u.username.trim().toLowerCase()));
+                } catch (err) {
+                  console.warn("Failed reset of login attempts collection doc:", err);
+                }
+              }
+            }}
+          />
+        )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function ConfirmUserUnlockModal({ user, onConfirm, onCancel }: { user: any, onConfirm: () => void, onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 text-slate-900">
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onCancel}
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm shadow-none"
+      />
+      <motion.div 
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden relative z-[210] border border-emerald-100 p-6"
+      >
+        <div className="flex flex-col items-center text-center">
+          <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4">
+            <Unlock className="w-8 h-8 text-emerald-500 animate-bounce" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900 mb-2">Desbloquear Usuário?</h3>
+          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+            Deseja restaurar o acesso e zerar as tentativas incorretas de login de <span className="font-bold text-slate-800">{user?.isNonExistent ? `@${user?.username}` : user?.name}</span>?
+          </p>
+          <div className="flex gap-3 w-full">
+            <button 
+              onClick={onCancel}
+              className="flex-1 py-3 text-slate-500 font-bold bg-slate-50 rounded-xl hover:bg-slate-100 transition-all text-xs uppercase tracking-widest cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button 
+              onClick={onConfirm}
+              className="flex-1 py-3 bg-emerald-500 text-white font-bold rounded-xl hover:bg-emerald-600 transition-all text-xs uppercase tracking-widest shadow-lg shadow-emerald-200 cursor-pointer"
+            >
+              Desbloquear
+            </button>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -9093,7 +9448,23 @@ function LoginView({
 
     setIsLoading(true);
 
-    // Layer 2: Firestore Database Lockout (distributed protection per username)
+    // Layer 2: Find the matching user in the system to verify definitive blocks immediately
+    const matchedUser = users.find(u => {
+      const dbUsername = (u.username || "").toString().trim().toLowerCase();
+      return dbUsername === cleanUsername;
+    });
+
+    if (matchedUser && matchedUser.blocked === true) {
+      if (matchedUser.isNonExistent) {
+        setError(`Acesso bloqueado definitivamente. A conta inexistente de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas. Entre em contato com o administrador para liberar o seu acesso.`);
+      } else {
+        setError(`Acesso bloqueado definitivamente. A conta de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas. Entre em contato com o administrador para liberar o seu acesso.`);
+      }
+      setIsLoading(false);
+      return;
+    }
+
+    // Layer 3: Firestore Database Lockout (distributed protection per username)
     try {
       const dbLockout = await SecurityUtils.checkFirestoreLockout(cleanUsername);
       if (dbLockout.isLocked) {
@@ -9108,36 +9479,43 @@ function LoginView({
     // Simulate server delay/security check
     await new Promise(resolve => setTimeout(resolve, 1200));
 
-    // Try to find user in the reactive 'users' list
-    let user = users.find(u => {
-      const dbUsername = (u.username || "").toString().trim().toLowerCase();
-      const dbPassword = (u.password || "").toString().trim();
-      
-      const userMatch = dbUsername === cleanUsername;
-      const pwdMatch = dbPassword === cleanPassword;
-      
-      if (userMatch) {
-         console.log(`[LoginCheck] Usuário ${cleanUsername} encontrado. Senha coincide? ${pwdMatch}`);
-         if (!pwdMatch) {
-            console.warn(`[LoginCheck] Senha para ${cleanUsername} em memória: "${dbPassword}" (len: ${dbPassword.length}). Digitada: "${cleanPassword}" (len: ${cleanPassword.length})`);
-         }
-      }
-      
-      return userMatch && pwdMatch;
-    });
+    // Verify authentication credentials
+    let user = null;
+    let isCorrectPassword = false;
 
-    // ABSOLUTE FALLBACK ONLY if not found in ANY reactive list and using original default
-    if (!user && cleanUsername === 'ana.admin' && cleanPassword === '123') {
-       const initialAna = INITIAL_USERS.find(u => u.username === 'ana.admin');
-       // Only fallback if INITIAL_USERS ana still has '123'
-       if (initialAna && initialAna.password === '123') {
-         user = initialAna;
-       }
+    if (matchedUser && !matchedUser.isNonExistent) {
+      const dbPassword = (matchedUser.password || "").toString().trim();
+      if (dbPassword === cleanPassword) {
+        isCorrectPassword = true;
+        user = matchedUser;
+      }
+    } else {
+      // ABSOLUTE FALLBACK ONLY if not found in ANY reactive list and using original default (for admin)
+      if (cleanUsername === 'ana.admin' && cleanPassword === '123') {
+        const initialAna = INITIAL_USERS.find(u => u.username === 'ana.admin');
+        if (initialAna && initialAna.password === '123') {
+          user = initialAna;
+          isCorrectPassword = true;
+        }
+      }
     }
 
-    if (user) {
+    if (user && isCorrectPassword) {
       SecurityUtils.recordAttempt(true);
       await SecurityUtils.recordAttemptFirestore(cleanUsername, true);
+
+      // Clean consecutive failed login attempts on success
+      try {
+        const userRef = doc(db, 'users', user.id);
+        await setDoc(userRef, {
+          loginAttempts: 0,
+          blocked: false,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (err) {
+        console.warn("Failed reset of login attempts inside users collection:", err);
+      }
+
       try {
         await onLogin(user);
       } catch (e: any) {
@@ -9150,15 +9528,75 @@ function LoginView({
       const updatedLocalLockout = SecurityUtils.getLockoutStatus();
       setLockout(updatedLocalLockout);
 
-      // Verify if username just got locked in Firestore to show specific message
-      const dbLockoutAfter = await SecurityUtils.checkFirestoreLockout(cleanUsername);
-      
-      if (dbLockoutAfter.isLocked) {
-        setError(`Múltiplas falhas detectadas. A conta "${cleanUsername}" foi bloqueada temporariamente por ${dbLockoutAfter.remaining}s por motivos de segurança.`);
-      } else if (updatedLocalLockout.isLocked) {
-        setError(`Este dispositivo foi temporariamente bloqueado por ${updatedLocalLockout.remaining}s devido a sucessivas tentativas malsucedidas.`);
+      if (matchedUser) {
+        if (matchedUser.isNonExistent) {
+          try {
+            const userRef = doc(db, 'users', matchedUser.id);
+            const currentAttempts = (matchedUser.loginAttempts || 0) + 1;
+            const isBlockedDefinitively = currentAttempts >= 3;
+
+            await setDoc(userRef, {
+              loginAttempts: currentAttempts,
+              blocked: isBlockedDefinitively,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+
+            if (isBlockedDefinitively) {
+              setError(`Acesso bloqueado definitivamente. A conta inexistente de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas. Entre em contato com o administrador para liberar o seu acesso.`);
+            } else {
+              const remaining = 3 - currentAttempts;
+              setError(`A conta de usuário "@${cleanUsername}" não existe no sistema. Restam ${remaining} de 3 tentativas antes do bloqueio definitivo de acesso.`);
+            }
+          } catch (err) {
+            console.error("Critical error setting non-existent lock flag inside database:", err);
+            setError('Credenciais inválidas.');
+          }
+        } else {
+          try {
+            const userRef = doc(db, 'users', matchedUser.id);
+            const currentAttempts = (matchedUser.loginAttempts || 0) + 1;
+            const isBlockedDefinitively = currentAttempts >= 5;
+
+            await setDoc(userRef, {
+              loginAttempts: currentAttempts,
+              blocked: isBlockedDefinitively,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+
+            if (isBlockedDefinitively) {
+              setError(`Acesso bloqueado definitivamente. A conta de "@${cleanUsername}" errou a senha 5 vezes consecutivas e foi bloqueada. Apenas um administrador poderá desbloquear o seu acesso pelo painel.`);
+            } else {
+              const remaining = 5 - currentAttempts;
+              setError(`Senha incorreta para "@${cleanUsername}". Restam ${remaining} de 5 tentativas antes do bloqueio definitivo della conta.`);
+            }
+          } catch (err) {
+            console.error("Critical error setting lock flag inside database:", err);
+            setError('Credenciais inválidas.');
+          }
+        }
       } else {
-        setError('Credenciais inválidas.');
+        // No match found in user base
+        try {
+          const mockUserId = `nonexistent_${cleanUsername}`;
+          const currentAttempts = 1;
+
+          await setDoc(doc(db, 'users', mockUserId), {
+            id: mockUserId,
+            name: `Conta Inexistente`,
+            username: cleanUsername,
+            role: 'Inexistente',
+            modules: 'Nenhum',
+            isNonExistent: true,
+            loginAttempts: currentAttempts,
+            blocked: false,
+            updatedAt: new Date().toISOString()
+          });
+
+          setError(`A conta de usuário "@${cleanUsername}" não existe no sistema. Restam 2 de 3 tentativas antes do bloqueio definitivo de acesso.`);
+        } catch (err) {
+          console.error("Critical error registering mock user for non-existent block tracking:", err);
+          setError('Credenciais inválidas.');
+        }
       }
       setIsLoading(false);
     }
@@ -11943,7 +12381,16 @@ function PublicConfirmationView({
   const [appt, setAppt] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [viewStatus, setViewStatus] = useState<'idle' | 'success_confirm' | 'success_cancel' | 'not_found' | 'error'>('idle');
+  const [viewStatus, setViewStatus] = useState<'idle' | 'success_confirm' | 'success_cancel' | 'not_found' | 'error' | 'finished'>('idle');
+
+  const handleCloseWindow = () => {
+    try {
+      window.close();
+    } catch (e) {
+      console.warn("Bloqueado pelo navegador:", e);
+    }
+    setViewStatus('finished');
+  };
 
   useEffect(() => {
     const fetchAppt = async () => {
@@ -12051,8 +12498,8 @@ function PublicConfirmationView({
         <p className="text-slate-400 max-w-sm text-xs mb-6 leading-relaxed">
           O link de confirmação parece estar inválido ou expirado. Entre em contato direto com a clínica para confirmar o seu horário.
         </p>
-        <button onClick={onBack} className="px-6 py-2.5 bg-brand-cyan text-slate-900 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-brand-cyan/90 transition-all cursor-pointer">
-          Página Inicial
+        <button onClick={handleCloseWindow} className="px-6 py-2.5 bg-brand-cyan text-slate-900 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-brand-cyan/90 transition-all cursor-pointer">
+          Fechar Página
         </button>
       </div>
     );
@@ -12109,12 +12556,17 @@ function PublicConfirmationView({
                 <span>Dentista: {appt.dentista}</span>
               </div>
             </div>
-            <button 
-              onClick={onBack}
-              className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-emerald-500/15"
-            >
-              Fechar
-            </button>
+            <div className="space-y-3">
+              <button 
+                onClick={handleCloseWindow}
+                className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-emerald-500/15"
+              >
+                Concluir e Sair
+              </button>
+              <p className="text-[10px] text-slate-400 font-medium">
+                Você pode fechar esta aba do seu celular ou navegador com segurança.
+              </p>
+            </div>
           </motion.div>
         )}
 
@@ -12143,6 +12595,27 @@ function PublicConfirmationView({
                 <RefreshCw className="w-4 h-4" />
                 Agendar Novo Horário
               </button>
+            </div>
+          </motion.div>
+        )}
+
+        {viewStatus === 'finished' && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="w-full bg-slate-800 border border-slate-700/50 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
+          >
+            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
+              <ShieldCheck className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-lg font-black text-white">Conexão Encerrada com Segurança</h3>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Suas respostas foram salvas no sistema da clínica.
+              </p>
+              <p className="text-xs text-slate-400 font-medium leading-relaxed">
+                Para garantir a total privacidade dos seus dados, a sua sessão foi encerrada de forma segura. Você já pode fechar esta aba no seu celular ou navegador.
+              </p>
             </div>
           </motion.div>
         )}
