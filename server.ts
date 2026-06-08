@@ -1,5 +1,4 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
@@ -33,9 +32,31 @@ try {
   console.error("Error reading firebase-applet-config.json:", err);
 }
 
-// Initialize Firebase
-const appFirebase = initializeApp(firebaseConfig);
-const db = getFirestore(appFirebase, firebaseConfig.firestoreDatabaseId);
+// Initialize Firebase safely
+let appFirebase: any = null;
+let db: any = null;
+
+try {
+  const finalFirebaseConfig = {
+    projectId: process.env.FIREBASE_PROJECT_ID || firebaseConfig?.projectId,
+    appId: process.env.FIREBASE_APP_ID || firebaseConfig?.appId,
+    apiKey: process.env.FIREBASE_API_KEY || firebaseConfig?.apiKey,
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || firebaseConfig?.authDomain,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || firebaseConfig?.storageBucket,
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || firebaseConfig?.messagingSenderId,
+    firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || firebaseConfig?.firestoreDatabaseId,
+  };
+
+  if (finalFirebaseConfig.apiKey) {
+    appFirebase = initializeApp(finalFirebaseConfig);
+    db = getFirestore(appFirebase, finalFirebaseConfig.firestoreDatabaseId || undefined);
+    console.log("Firebase initialized successfully on server.");
+  } else {
+    console.warn("WARNING: Firebase API key is missing. Firebase is not initialized. Background jobs and notifications requiring database will be offline, but server is running!");
+  }
+} catch (firebaseErr: any) {
+  console.error("Critical error configuring Firebase on startup:", firebaseErr);
+}
 
 async function startServer() {
   const app = express();
@@ -65,15 +86,15 @@ async function startServer() {
 
   // Security Headers Middleware
   app.use((req, res, next) => {
-    // Content Security Policy
+    // Content Security Policy (Optimized for Render production deployments)
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'self'; " +
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.firebaseapp.com https://apis.google.com https://www.gstatic.com; " +
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-      "img-src 'self' data: https://*.googleusercontent.com https://*.gstatic.com https://*.firebaseusercontent.com; " +
-      "font-src 'self' https://fonts.gstatic.com; " +
-      "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.cloudfunctions.net wss://*.firebaseio.com; " +
+      "img-src 'self' data: https: http:; " +
+      "font-src 'self' data: https://fonts.gstatic.com; " +
+      "connect-src 'self' https: wss:; " +
       "frame-src 'self' https://*.firebaseapp.com https://*.firebase.com; " +
       "upgrade-insecure-requests;"
     );
@@ -120,6 +141,10 @@ async function startServer() {
 
   // API Route for sending manual reminders (e.g. from UI)
   app.post('/api/send-reminder', async (req, res) => {
+    if (!db) {
+      return res.status(503).json({ error: "O banco de dados do Firebase não está configurado ou disponível no servidor." });
+    }
+
     const { recordId } = req.body;
 
     if (!recordId) {
@@ -207,6 +232,10 @@ async function startServer() {
   // Background Task: Check for upcoming appointments (reminders)
   // This runs every 10 minutes in this example
   setInterval(async () => {
+    if (!db) {
+      console.warn("Skipping background appointments check because Firebase is not initialized.");
+      return;
+    }
     console.log("Checking for upcoming appointments to send reminders...");
     const mailTransporter = getTransporter();
     if (!mailTransporter) return;
@@ -288,6 +317,7 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',

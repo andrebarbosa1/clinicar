@@ -397,18 +397,40 @@ const SecurityUtils = {
   }
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Safe Firebase Initialization
+let app: any = null;
+let db: any = null;
+let auth: any = null;
 
-// Use initializeFirestore with experimentalAutoDetectLongPolling to support both local execution (WebSockets) and container environments (Long Polling)
-export const db = initializeFirestore(app, {
-  experimentalAutoDetectLongPolling: true,
-}, firebaseConfig.firestoreDatabaseId);
+const isFirebaseConfigured = !!(firebaseConfig && firebaseConfig.apiKey);
 
-export const auth = getAuth(app);
+if (isFirebaseConfigured) {
+  try {
+    app = initializeApp(firebaseConfig);
+    db = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,
+    }, firebaseConfig.firestoreDatabaseId);
+    auth = getAuth(app);
+
+    // Configure Persistence
+    setPersistence(auth, browserLocalPersistence).catch(err => {
+      console.error("Auth persistence error:", err);
+    });
+  } catch (err) {
+    console.error("Error setting up Firebase app:", err);
+  }
+} else {
+  console.warn("WARNING: Firebase API key is missing. Running in fallback offline/simulated mode.");
+}
+
+export { app, db, auth };
 
 // Connection test as required by integration guidelines
 async function testConnection() {
+  if (!db) {
+    console.warn("Firestore connection test skipped because Firebase is not initialized.");
+    return;
+  }
   try {
     // Only attempt the connection test if we're in a browser environment
     if (typeof window !== 'undefined') {
@@ -424,11 +446,6 @@ async function testConnection() {
   }
 }
 testConnection();
-
-// Configure Persistence
-setPersistence(auth, browserLocalPersistence).catch(err => {
-  console.error("Auth persistence error:", err);
-});
 
 enum OperationType {
   CREATE = 'create',
@@ -771,7 +788,7 @@ export default function App() {
   }, [db]);
 
   React.useEffect(() => {
-    if (!isAuthReady) return;
+    if (!isAuthReady || !db) return;
 
     console.log("[DataSync] Iniciando monitoramento de dados...", { isAuthenticated, role: currentUser?.role, name: currentUser?.name, trialId });
 
@@ -1029,6 +1046,7 @@ export default function App() {
 
   // Seeding Logic (Optimized to avoid quota drain)
   React.useEffect(() => {
+    if (!db) return;
     const seed = async () => {
       if (isAuthReady) {
         // Only seed if not already exceeding quota
@@ -1101,6 +1119,11 @@ export default function App() {
       } catch (e) {
         console.warn("Invalid saved session found");
       }
+    }
+
+    if (!auth) {
+      setIsAuthReady(true);
+      return;
     }
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
@@ -1220,7 +1243,7 @@ export default function App() {
 
   // Notifications Listener
   React.useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !db) return;
     console.log("Iniciando monitoramento de notificações...");
     const userId = currentUser.id || currentUser.uid || currentUser.firebaseUid;
     const q = query(collection(db, 'notifications'), where('userId', '==', userId));
