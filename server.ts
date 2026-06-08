@@ -99,11 +99,11 @@ async function startServer() {
       "upgrade-insecure-requests;"
     );
 
-    // X-Frame-Options
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    // X-Frame-Options is commented out to allow the application to load inside the AI Studio sandbox iframe
+    // res.setHeader('X-Frame-Options', 'SAMEORIGIN');
 
-    // Permissions-Policy
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), interest-cohort=()');
+    // Permissions-Policy (relayed to allow browser capabilities if requested)
+    res.setHeader('Permissions-Policy', 'camera=*, microphone=*, geolocation=*, interest-cohort=()');
 
     // Referrer-Policy
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');

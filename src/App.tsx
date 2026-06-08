@@ -871,7 +871,11 @@ export default function App() {
         } else if (role === 'admin' || role === 'recepcionista' || hasModule('Agenda') || hasModule('Financeiro')) {
           rQuery = collection(db, 'records');
         } else if (role === 'dentista') {
-          rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
+          if (currentUser?.name) {
+            rQuery = query(collection(db, 'records'), where('dentista', '==', currentUser.name));
+          } else {
+            console.warn("Skipping records sync for dentista: name is undefined on currentUser");
+          }
         }
       }
 
@@ -1246,6 +1250,10 @@ export default function App() {
     if (!currentUser || !db) return;
     console.log("Iniciando monitoramento de notificações...");
     const userId = currentUser.id || currentUser.uid || currentUser.firebaseUid;
+    if (!userId) {
+      console.warn("Skipping notifications listener: userId is undefined on currentUser", currentUser);
+      return;
+    }
     const q = query(collection(db, 'notifications'), where('userId', '==', userId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
