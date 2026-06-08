@@ -102,6 +102,44 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "clinicName"]
+    },
+    "SystemAnnouncement": {
+      "title": "SystemAnnouncement",
+      "description": "A global announcement banner",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "warning", "maintenance", "amber"] },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "message", "type", "active", "createdAt"]
+    },
+    "SaasCoupon": {
+      "title": "SaasCoupon",
+      "description": "A promotional trial coupon",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "extraDays": { "type": "number" },
+        "maxUses": { "type": "number" },
+        "usesCount": { "type": "number" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["code", "extraDays", "maxUses", "usesCount", "active"]
+    },
+    "LoginAttempt": {
+      "title": "LoginAttempt",
+      "description": "A record of a failed login attempt for lockouts",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "attempts": { "type": "number" },
+        "lastAttempt": { "type": "string", "format": "date-time" },
+        "blocked": { "type": "boolean" }
+      },
+      "required": ["username", "attempts", "lastAttempt", "blocked"]
     }
   },
   "firestore": {
@@ -132,6 +170,18 @@
     "/settings/{settingId}": {
       "schema": "ClinicSetting",
       "description": "Application settings"
+    },
+    "/system_announcements/{announcementId}": {
+      "schema": "SystemAnnouncement",
+      "description": "Collection of global announcements"
+    },
+    "/saas_coupons/{couponId}": {
+      "schema": "SaasCoupon",
+      "description": "Collection of trial extension coupons"
+    },
+    "/login_attempts/{username}": {
+      "schema": "LoginAttempt",
+      "description": "Track failed attempts"
     }
   }
 }

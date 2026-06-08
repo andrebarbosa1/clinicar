@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, getDocs, updateDoc, doc, getDoc } from 'firebase/firestore';
 import fs from 'fs';
 import dotenv from 'dotenv';
 
@@ -120,52 +120,85 @@ async function startServer() {
 
   // API Route for sending manual reminders (e.g. from UI)
   app.post('/api/send-reminder', async (req, res) => {
-    const { recordId, patientEmail, patientName, date, time } = req.body;
-    
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: patientEmail,
-      subject: `Lembrete de Consulta - Sorriso & Saúde`,
-      text: `Olá ${patientName}, este é um lembrete da sua consulta agendada para o dia ${date} às ${time}. Estamos ansiosos para ver você!`,
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-          <h2 style="color: #0ea5e9;">Lembrete de Consulta</h2>
-          <p>Olá <strong>${patientName}</strong>,</p>
-          <p>Este é um lembrete da sua consulta odontológica agendada:</p>
-          <div style="background-color: #f0f9ff; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="margin: 5px 0;"><strong>Data:</strong> ${date}</p>
-            <p style="margin: 5px 0;"><strong>Hora:</strong> ${time}</p>
-            <p style="margin: 5px 0;"><strong>Local:</strong> Sorriso & Saúde Odontologia</p>
-          </div>
-          <p>Se precisar reagendar, por favor entre em contato com pelo menos 24h de antecedência.</p>
-          <p>Atenciosamente,<br>Equipe Sorriso & Saúde</p>
-        </div>
-      `
-    };
+    const { recordId } = req.body;
+
+    if (!recordId) {
+      return res.status(400).json({ error: "O identificador da consulta (recordId) é obrigatório." });
+    }
 
     const mailTransporter = getTransporter();
     if (!mailTransporter) {
-      return res.status(500).json({ error: "E-mail service not configured" });
+      return res.status(500).json({ error: "O serviço de e-mail não está configurado no servidor." });
     }
 
     try {
-      await mailTransporter.sendMail(mailOptions);
-      
-      // Update record if it exists
-      if (recordId) {
-        const recordRef = doc(db, 'records', recordId);
-        await updateDoc(recordRef, {
-          reminderSent: true,
-          reminderSentAt: new Date().toISOString()
-        });
+      // 1. Fetch real record from firestore securely to prevent spoofing
+      const recordRef = doc(db, 'records', recordId);
+      const recordSnap = await getDoc(recordRef);
+
+      if (!recordSnap.exists()) {
+        return res.status(404).json({ error: "A consulta informada não foi encontrada no banco de dados." });
       }
 
-      res.json({ success: true, message: "Email sent successfully" });
+      const record = recordSnap.data();
+      const patientName = record.paciente;
+      const date = record.data;
+      const time = record.horario || "conforme agendado";
+
+      if (!patientName) {
+        return res.status(400).json({ error: "Os dados da consulta estão incompletos no banco de dados." });
+      }
+
+      // 2. Fetch patient profile to get the actual registered email from database securely
+      const patientQ = query(collection(db, 'patients'), where('name', '==', patientName));
+      const patientSnapshot = await getDocs(patientQ);
+
+      if (patientSnapshot.empty) {
+        return res.status(400).json({ error: `Nenhum cadastro de paciente foi encontrado com o nome "${patientName}".` });
+      }
+
+      const patientData = patientSnapshot.docs[0].data();
+      const patientEmail = patientData.email;
+
+      if (!patientEmail) {
+        return res.status(400).json({ error: `O paciente "${patientName}" não possui endereço de e-mail cadastrado.` });
+      }
+
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: patientEmail,
+        subject: `Lembrete de Consulta - Sorriso & Saúde`,
+        text: `Olá ${patientName}, este é um lembrete da sua consulta agendada para o dia ${date} às ${time}. Estamos ansiosos para ver você!`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+            <h2 style="color: #0ea5e9;">Lembrete de Consulta</h2>
+            <p>Olá <strong>${patientName}</strong>,</p>
+            <p>Este é um lembrete da sua consulta odontológica agendada:</p>
+            <div style="background-color: #f0f9ff; padding: 15px; border-radius: 5px; margin: 20px 0;">
+              <p style="margin: 5px 0;"><strong>Data:</strong> ${date}</p>
+              <p style="margin: 5px 0;"><strong>Hora:</strong> ${time}</p>
+              <p style="margin: 5px 0;"><strong>Local:</strong> Sorriso & Saúde Odontologia</p>
+            </div>
+            <p>Se precisar reagendar, por favor entre em contato com pelo menos 24h de antecedência.</p>
+            <p>Atenciosamente,<br>Equipe Sorriso & Saúde</p>
+          </div>
+        `
+      };
+
+      await mailTransporter.sendMail(mailOptions);
+      
+      // Update record to indicate reminder sent successfully
+      await updateDoc(recordRef, {
+        reminderSent: true,
+        reminderSentAt: new Date().toISOString()
+      });
+
+      res.json({ success: true, message: "E-mail de lembrete enviado com sucesso!" });
     } catch (error: any) {
       console.error("Error sending email:", error);
-      let errorMsg = "Failed to send email";
+      let errorMsg = "Falha ao enviar e-mail de lembrete.";
       if (error.code === 'EAUTH' || error.responseCode === 535) {
-        errorMsg = "Erro de Autenticação: Verifique se suas credenciais (EMAIL_USER e EMAIL_PASS) estão corretas. Se usar Gmail, você DEVE usar uma 'Senha de Aplicativo'.";
+        errorMsg = "Erro de Autenticação: Verifique se as credenciais (EMAIL_USER e EMAIL_PASS) estão corretas. Se usar Gmail, você DEVE usar uma 'Senha de Aplicativo'.";
       }
       res.status(500).json({ error: errorMsg, details: error.message });
     }

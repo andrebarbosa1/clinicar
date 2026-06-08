@@ -1,78 +1,217 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny
+    // 1. Global safety net (Default Deny)
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
+    // --- Helper Functions ---
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isStaff() {
-      // In this version, we allow staff operations even without Google Login 
-      // primarily for the simulated environment. 
-      // Security is minimal without Firebase Auth.
-      return true; 
+    function incoming() {
+      return request.resource.data;
     }
 
-    function isAdmin() {
-      // For full security, re-enable Google Login and use:
-      // return isSignedIn() && (request.auth.token.email == 'andreb202121@gmail.com');
-      return true; 
+    function existing() {
+      return resource.data;
     }
 
-    function getUserName() {
-      return "Sistema"; // Fallback when not using Google Login
+    // Prevent ID injection / poisoning attack
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
+
+    // --- Enterprise Entities Validation Helpers ---
+    
+    function isValidClinicalRecord(rec) {
+      return rec.id is string && rec.id.size() <= 128
+        && rec.data is string && rec.data.size() <= 50
+        && rec.paciente is string && rec.paciente.size() <= 150
+        && rec.procedimento is string && rec.procedimento.size() <= 200
+        && rec.dentista is string && rec.dentista.size() <= 150
+        && (rec.status == 'Realizado' || rec.status == 'Agendado' || rec.status == 'Cancelado' || rec.status == 'Pendente')
+        && (rec.statusPagamento == 'Pago' || rec.statusPagamento == 'Pendente' || rec.statusPagamento == 'Atrasado')
+        && (rec.valor is number || rec.valor is int)
+        && (rec.reminderSent == null || rec.reminderSent is bool || !('reminderSent' in rec))
+        && (rec.reminderSentAt == null || rec.reminderSentAt is string || !('reminderSentAt' in rec));
+    }
+
+    function isValidAppUser(u) {
+      return u.id is string && u.id.size() <= 128
+        && u.name is string && u.name.size() <= 150
+        && u.role is string && u.role.size() <= 50
+        && u.modules is string && u.modules.size() <= 1000
+        && u.username is string && u.username.size() <= 100
+        && u.password is string && u.password.size() <= 256;
+    }
+
+    function isValidPatient(p) {
+      return p.id is string && p.id.size() <= 128
+        && p.name is string && p.name.size() <= 150
+        && (p.email == null || p.email is string && p.email.size() <= 150 || !('email' in p))
+        && (p.phone == null || p.phone is string && p.phone.size() <= 50 || !('phone' in p))
+        && (p.cpf == null || p.cpf is string && p.cpf.size() <= 30 || !('cpf' in p))
+        && (p.createdAt == null || p.createdAt is string || !('createdAt' in p));
+    }
+
+    function isValidDocument(docObj) {
+      return docObj.id is string && docObj.id.size() <= 128
+        && (docObj.type == 'Atestado' || docObj.type == 'Receita' || docObj.type == 'Exame' || docObj.type == 'Outro')
+        && docObj.patientName is string && docObj.patientName.size() <= 150
+        && docObj.content is string && docObj.content.size() <= 10000
+        && docObj.createdAt is string && docObj.createdAt.size() <= 50;
+    }
+
+    function isValidNotification(n) {
+      return n.id is string && n.id.size() <= 128
+        && n.message is string && n.message.size() <= 1000
+        && (n.type == 'info' || n.type == 'warning' || n.type == 'error' || n.type == 'success')
+        && n.read is bool
+        && n.createdAt is string && n.createdAt.size() <= 50;
+    }
+
+    function isValidSupportTicket(t) {
+      return t.id is string && t.id.size() <= 128
+        && t.userId is string && t.userId.size() <= 128
+        && t.description is string && t.description.size() <= 5000
+        && (t.status == 'Pendente' || t.status == 'Em Analise' || t.status == 'Resolvido')
+        && t.createdAt is string && t.createdAt.size() <= 50;
+    }
+
+    function isValidClinicSetting(s) {
+      return s.id is string && s.id.size() <= 128
+        && s.clinicName is string && s.clinicName.size() <= 200;
+    }
+
+    function isValidSystemAnnouncement(ann) {
+      return ann.id is string && ann.id.size() <= 128
+        && ann.message is string && ann.message.size() <= 2000
+        && (ann.type == 'info' || ann.type == 'warning' || ann.type == 'maintenance' || ann.type == 'amber')
+        && ann.active is bool
+        && ann.createdAt is string && ann.createdAt.size() <= 50;
+    }
+
+    function isValidSaasCoupon(c) {
+      return c.code is string && c.code.size() <= 50
+        && (c.extraDays is number || c.extraDays is int)
+        && (c.maxUses is number || c.maxUses is int)
+        && (c.usesCount is number || c.usesCount is int)
+        && c.active is bool;
+    }
+
+    function isValidLoginAttempt(la) {
+      return la.username is string && la.username.size() <= 100
+        && (la.attempts is number || la.attempts is int)
+        && la.lastAttempt is string && la.lastAttempt.size() <= 50
+        && la.blocked is bool;
+    }
+
+    function isValidOdontogram(odo) {
+      return odo.patientName is string && odo.patientName.size() <= 150
+        && odo.teethData is map
+        && odo.lastUpdatedBy is string && odo.lastUpdatedBy.size() <= 150
+        && odo.updatedAt is string && odo.updatedAt.size() <= 50;
+    }
+
+    function isValidUserByUid(u) {
+      return u.userDocId is string && u.userDocId.size() <= 128
+        && u.name is string && u.name.size() <= 150
+        && u.role is string && u.role.size() <= 50
+        && u.updatedAt is string && u.updatedAt.size() <= 50;
+    }
+
+    // --- Path Rules Match Statements ---
 
     // Connection Test
     match /test/connection {
       allow read: if true;
     }
 
-    // Records Rules
+    // Records
     match /records/{recordId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(recordId) && isValidClinicalRecord(incoming());
+      allow delete: if isValidId(recordId);
     }
 
-    // User Rules
+    // Users
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(userId) && isValidAppUser(incoming());
+      allow delete: if isValidId(userId);
     }
 
+    // Users UID Mapping
     match /users_by_uid/{uid} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(uid) && isValidUserByUid(incoming());
+      allow delete: if isValidId(uid);
     }
 
+    // Notifications
     match /notifications/{notificationId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
+      allow delete: if isValidId(notificationId);
     }
 
+    // Support Tickets
     match /support_tickets/{ticketId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(ticketId) && isValidSupportTicket(incoming());
+      allow delete: if isValidId(ticketId);
     }
 
+    // Patients
     match /patients/{patientId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(patientId) && isValidPatient(incoming());
+      allow delete: if isValidId(patientId);
     }
 
+    // Documents
     match /documents/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(docId) && isValidDocument(incoming());
+      allow delete: if isValidId(docId);
     }
 
+    // Odontograms
     match /odontograms/{odoId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(odoId) && isValidOdontogram(incoming());
+      allow delete: if isValidId(odoId);
     }
 
+    // Clinic Settings
     match /settings/{settingId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidId(settingId) && isValidClinicSetting(incoming());
+      allow delete: if isValidId(settingId);
     }
 
+    // Login Attempts (Lockouts)
     match /login_attempts/{username} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update: if isValidLoginAttempt(incoming());
+      allow delete: if true;
+    }
+
+    // System Announcements
+    match /system_announcements/{announcementId} {
+      allow read: if true;
+      allow create, update: if isValidId(announcementId) && isValidSystemAnnouncement(incoming());
+      allow delete: if isValidId(announcementId);
+    }
+
+    // SaaS promotion coupons
+    match /saas_coupons/{couponId} {
+      allow read: if true;
+      allow create, update: if isValidId(couponId) && isValidSaasCoupon(incoming());
+      allow delete: if isValidId(couponId);
     }
   }
 }

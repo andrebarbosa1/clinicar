@@ -13,6 +13,8 @@ import {
   Search, 
   Filter,
   Calendar,
+  Building,
+  Palette,
   Stethoscope,
   Edit,
   ChevronLeft,
@@ -101,7 +103,6 @@ import {
 } from 'recharts';
 import { format, parseISO, isToday, startOfMonth, endOfMonth, startOfDay, endOfDay, subMonths, isWithinInterval, differenceInYears, isValid, addDays, getDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { MOCK_DATA } from './mockData';
 import { DentalRecord } from './types';
 import { cn, formatCurrency, formatPercent } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -133,6 +134,7 @@ import {
 
 import SaaSAssinaturaView from './components/SaaSAssinaturaView';
 import SaaSLockedFeatureView from './components/SaaSLockedFeatureView';
+import SuperAdminView from './components/SuperAdminView';
 
 const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
@@ -491,11 +493,14 @@ const INITIAL_USERS = [
   { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com' },
   { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com' },
   { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Dashboard, Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
+  { id: 'super-admin-01', name: 'Suporte OdontoDash', role: 'SuperAdmin', modules: 'Todos', username: 'administrador', password: '123', email: 'suporte@odontodash.com.br' },
 ];
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [globalBanner, setGlobalBanner] = useState<any>(null);
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
 
   // Identificador de isolamento para sessões de teste grátis (trial)
   const trialId = currentUser?.isTrial ? currentUser.id : currentUser?.parentTrialId;
@@ -508,7 +513,8 @@ export default function App() {
   const getTrialDaysRemaining = () => {
     if (!currentUser?.trialStartedAt) return 14;
     const start = new Date(currentUser.trialStartedAt);
-    const end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const bonusDays = Number(currentUser?.trialExtensionDays) || 0;
+    const end = new Date(start.getTime() + (14 + bonusDays) * 24 * 60 * 60 * 1000);
     const diff = end.getTime() - new Date().getTime();
     const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
     return days > 0 ? days : 0;
@@ -571,6 +577,12 @@ export default function App() {
     }
   }, []);
   const [activePage, setActivePage] = useState('Dashboard');
+  
+  React.useEffect(() => {
+    if (currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador')) {
+      setActivePage('SuperAdmin');
+    }
+  }, [currentUser]);
   const [subPage, setSubPage] = useState<string | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedPatientDetail, setSelectedPatientDetail] = useState<any | null>(null);
@@ -728,6 +740,35 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [hasModule]);
+
+  // Real-time system notifications / announcement banners sync
+  React.useEffect(() => {
+    if (!db) return;
+    const unsubNotice = onSnapshot(doc(db, 'system_announcements', 'global_banner'), (snapshot) => {
+      if (snapshot.exists()) {
+        const d = snapshot.data();
+        setGlobalBanner({
+          id: d.id || 'global_banner',
+          message: d.message || '',
+          type: d.type || 'info',
+          active: d.active || false,
+          createdAt: d.createdAt || ''
+        });
+        
+        // If a new banner is published with a different ID, reset the dismissed status!
+        const dismissedId = localStorage.getItem('dismissed_banner_id');
+        if (dismissedId !== d.id) {
+          setBannerDismissed(false);
+        } else {
+          setBannerDismissed(true);
+        }
+      } else {
+        setGlobalBanner(null);
+      }
+    }, (err) => console.warn("Failed subscribing to announcements:", err));
+
+    return () => unsubNotice();
+  }, [db]);
 
   React.useEffect(() => {
     if (!isAuthReady) return;
@@ -1903,6 +1944,11 @@ export default function App() {
     setCurrentUser(userProfile);
     setIsAuthenticated(true);
     localStorage.setItem('odonto_session', JSON.stringify(userProfile));
+    if (userProfile.role === 'SuperAdmin' || userProfile.username === 'administrador') {
+      setActivePage('SuperAdmin');
+    } else {
+      setActivePage('Dashboard');
+    }
   };
 
   const handleLogout = () => {
@@ -2543,6 +2589,14 @@ export default function App() {
             dentistCount={users.filter((u: any) => u?.role === 'Dentista').length}
           />
         );
+      case 'SuperAdmin':
+        return (
+          <SuperAdminView 
+            users={users} 
+            onUpdateUser={handleUpdateUser} 
+            db={db} 
+          />
+        );
       default:
         return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
     }
@@ -2661,6 +2715,14 @@ export default function App() {
               label="Plano & Assinatura" 
               active={activePage === 'Assinatura'} 
               onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
+            />
+          )}
+          {(currentUser?.role === 'SuperAdmin' || currentUser?.username === 'administrador') && (
+            <SidebarNavItem 
+              icon={<Shield className="w-4 h-4 text-brand-cyan animate-pulse" />} 
+              label="Painel Central (SaaS)" 
+              active={activePage === 'SuperAdmin'} 
+              onClick={() => { setActivePage('SuperAdmin'); setSubPage(null); }}
             />
           )}
         </div>
@@ -2987,6 +3049,9 @@ export default function App() {
                 {currentUser?.role === 'Admin' && (
                   <MobileNavItem icon={<Sparkles className="w-5 h-5 text-brand-cyan" />} label="Plano & Assinatura" active={activePage === 'Assinatura'} onClick={() => { setActivePage('Assinatura'); setIsMenuOpen(false); }} />
                 )}
+                {(currentUser?.role === 'SuperAdmin' || currentUser?.username === 'administrador') && (
+                  <MobileNavItem icon={<Shield className="w-5 h-5 text-brand-cyan" />} label="Painel Central (SaaS)" active={activePage === 'SuperAdmin'} onClick={() => { setActivePage('SuperAdmin'); setIsMenuOpen(false); }} />
+                )}
               </div>
               
               <div className="p-4 border-t border-slate-100">
@@ -3145,6 +3210,88 @@ export default function App() {
             transition={{ duration: 0.15 }}
             className="p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl) mx-auto w-full"
           >
+            {globalBanner && globalBanner.active && !bannerDismissed && (
+              <div id="saas-system-banner" className={`p-4 rounded-2xl border flex items-start sm:items-center justify-between gap-4 font-sans shadow-md animate-in slide-in-from-top-4 duration-300 relative overflow-hidden text-left shrink-0 select-none ${
+                globalBanner.type === 'warning' 
+                  ? 'bg-amber-50 border-amber-200 text-amber-900' 
+                  : globalBanner.type === 'maintenance' 
+                  ? 'bg-slate-900 text-slate-100 border-slate-950' 
+                  : globalBanner.type === 'amber'
+                  ? 'bg-orange-50 border-orange-200 text-orange-900'
+                  : 'bg-indigo-50 border-indigo-200 text-indigo-900'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-xl shrink-0 ${
+                    globalBanner.type === 'warning' 
+                      ? 'bg-amber-500/10 text-amber-600' 
+                      : globalBanner.type === 'maintenance' 
+                      ? 'bg-brand-cyan/20 text-brand-cyan' 
+                      : globalBanner.type === 'amber'
+                      ? 'bg-orange-500/10 text-orange-600'
+                      : 'bg-indigo-500/10 text-indigo-600'
+                  }`}>
+                    <Bell className="w-4 h-4 animate-bounce" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-black/5">
+                        {globalBanner.type === 'maintenance' ? 'Manutenção / Atualização' : 'Aviso do Sistema'}
+                      </span>
+                      {globalBanner.createdAt && (
+                        <span className="text-[10px] text-slate-450 font-mono">
+                          {new Date(globalBanner.createdAt).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs font-bold leading-relaxed mt-0.5">{globalBanner.message}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    setBannerDismissed(true);
+                    if (globalBanner.id) {
+                      localStorage.setItem('dismissed_banner_id', globalBanner.id);
+                    }
+                  }}
+                  className="p-1 hover:bg-black/5 rounded-lg text-slate-400 hover:text-indigo-650 cursor-pointer transition-all"
+                >
+                  <X className="w-4 h-4 font-black" />
+                </button>
+              </div>
+            )}
+
+            {/* Global Account Status Banner - visible on all pages ONLY for trial accounts, otherwise empty */}
+            {isTrialActive && (
+              <div 
+                id="global-trial-status-banner" 
+                className="bg-amber-550/10 border border-amber-500/20 p-3.5 px-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 text-slate-800 shadow-sm animate-fade-in text-xs shrink-0 select-none text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-amber-500/15 text-amber-600 rounded-xl shrink-0">
+                    <Sparkles className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-xs text-amber-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
+                      Status da Conta
+                      <span className="text-[10px] bg-amber-500/20 text-amber-700 px-2 py-0.5 rounded-md border border-amber-500/30 font-black normal-case font-mono tracking-normal">
+                        Modo de Experiência: {currentPlanId}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-600 font-medium mt-1 leading-normal">
+                      Seu período de teste grátis (Trial) expira em <strong className="text-amber-800 font-black text-[13px] font-mono leading-none">{trialDaysRemaining}</strong> dias. Regularize sua assinatura na aba <strong className="text-amber-805 font-bold">Plano & Assinatura</strong> para manter o cadastro ativo.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
+                  className="bg-amber-600 hover:bg-amber-700 border border-amber-700 text-white font-extrabold px-4 py-2 rounded-xl text-xs transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm shadow-amber-650/10"
+                >
+                  Regularizar Assinatura
+                </button>
+              </div>
+            )}
+
             {renderContent()}
           </motion.div>
         </AnimatePresence>
@@ -5913,8 +6060,8 @@ function SettingsView({
   const [localProviderPhone, setLocalProviderPhone] = useState(providerPhone);
   const [localProviderName, setLocalProviderName] = useState(providerName);
   const [isSaving, setIsSaving] = useState(false);
-  const [showConfirmReset, setShowConfirmReset] = useState(false);
-  const [confirmText, setConfirmText] = useState('');
+  const [activeSubTab, setActiveSubTab] = useState<'clinic' | 'branding' | 'integrations' | 'pwa' | 'finance'>('clinic');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   useEffect(() => {
     setLocalClinicName(clinicName);
@@ -5923,6 +6070,17 @@ function SettingsView({
     setLocalProviderPhone(providerPhone);
     setLocalProviderName(providerName);
   }, [clinicName, footerText, clinicLogo, providerPhone, providerName]);
+
+  // Check for unsaved changes
+  useEffect(() => {
+    const isChanged = 
+      localClinicName !== clinicName ||
+      localFooterText !== footerText ||
+      localLogo !== clinicLogo ||
+      localProviderPhone !== providerPhone ||
+      localProviderName !== providerName;
+    setHasUnsavedChanges(isChanged);
+  }, [localClinicName, localFooterText, localLogo, localProviderPhone, localProviderName, clinicName, footerText, clinicLogo, providerPhone, providerName]);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -5958,168 +6116,391 @@ function SettingsView({
     }
   };
 
+  const handleRestoreDefaults = () => {
+    if (confirm("Deseja realmente restaurar os valores padrão locais?")) {
+      setLocalClinicName(clinicName);
+      setLocalFooterText(footerText);
+      setLocalLogo(clinicLogo);
+      setLocalProviderPhone(providerPhone);
+      setLocalProviderName(providerName);
+    }
+  };
+
   return (
-    <div className="bg-white border border-slate-200 p-8 max-w-2xl mx-auto space-y-8 shadow-sm overflow-y-auto max-h-[calc(100vh-200px)]">
-      <div className="flex justify-between items-center border-b border-slate-100 pb-4">
-        <h2 className="text-xl font-bold text-slate-800">Configurações do Sistema</h2>
-        <span className="text-[9px] font-mono text-slate-400 uppercase tracking-widest">v2.4.0-build</span>
+    <div className="bg-white border border-slate-200/80 rounded-3xl max-w-5xl mx-auto shadow-sm overflow-hidden flex flex-col min-h-[580px]">
+      {/* Header com indicador de alterações salvas */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 p-6 md:p-8 gap-4 bg-slate-50/50">
+        <div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">Configurações do Sistema</h2>
+            <span className="text-[9px] font-mono bg-slate-200/60 text-slate-600 px-2 py-0.5 rounded font-bold uppercase tracking-wider">v2.4.0-build</span>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1 font-medium">Configure as preferências da clínica, branding visual, integradores de mensagens e aplicativo.</p>
+        </div>
+
+        {hasUnsavedChanges && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 text-[10px] font-extrabold uppercase tracking-wide animate-pulse">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+            Alterações Pendentes
+          </span>
+        )}
       </div>
-      
-      <div className="space-y-8">
-        <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Identidade Visual</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-            <div className="space-y-3">
-              <label className="text-[9px] uppercase font-bold text-slate-400">Logotipo da Clínica</label>
-              <div className="flex items-center gap-4">
-                <div className="w-20 h-20 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center overflow-hidden">
-                  {localLogo ? (
-                    <img src={localLogo} alt="Logo Preview" className="w-full h-full object-contain" />
-                  ) : (
-                    <ImagePlus className="w-6 h-6 text-slate-300" />
-                  )}
-                </div>
-                <div className="flex flex-col gap-2">
-                  <label className="bg-white border border-slate-200 px-4 py-1.5 text-[10px] font-bold uppercase rounded cursor-pointer hover:bg-slate-50 transition-colors">
-                    Fazer Upload
-                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
-                  </label>
-                  {localLogo && (
-                    <button 
-                      onClick={() => setLocalLogo(null)}
-                      className="text-rose-500 text-[10px] font-bold uppercase text-left hover:underline"
-                    >
-                      Remover Logo
-                    </button>
-                  )}
-                </div>
-              </div>
-              <p className="text-[9px] text-slate-400">Formato recomendado: PNG transparente ou SVG. Máx 500KB.</p>
-            </div>
 
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400">Nome da Clínica</label>
-              <input 
-                type="text" 
-                value={localClinicName} 
-                onChange={(e) => setLocalClinicName(e.target.value)}
-                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all" 
-              />
-            </div>
+      <div className="flex flex-col md:flex-row flex-1">
+        {/* Sidebar Abas de Configuração */}
+        <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-slate-100 bg-slate-50/30 p-4 shrink-0">
+          <nav className="flex md:flex-col gap-1.5 overflow-x-auto no-scrollbar pb-2 md:pb-0">
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('clinic')}
+              className={cn(
+                "flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-all w-full text-left shrink-0",
+                activeSubTab === 'clinic' 
+                  ? "bg-slate-900 text-white shadow-sm" 
+                  : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+              )}
+            >
+              <Building className="w-4 h-4 shrink-0" />
+              <span>Clínica & Unidade</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('branding')}
+              className={cn(
+                "flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-all w-full text-left shrink-0",
+                activeSubTab === 'branding' 
+                  ? "bg-slate-900 text-white shadow-sm" 
+                  : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+              )}
+            >
+              <Palette className="w-4 h-4 shrink-0" />
+              <span>Identidade Visual</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('integrations')}
+              className={cn(
+                "flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-all w-full text-left shrink-0",
+                activeSubTab === 'integrations' 
+                  ? "bg-slate-900 text-white shadow-sm" 
+                  : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+              )}
+            >
+              <Share2 className="w-4 h-4 shrink-0" />
+              <span>Mensageria & Zap</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('finance')}
+              className={cn(
+                "flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-all w-full text-left shrink-0",
+                activeSubTab === 'finance' 
+                  ? "bg-slate-900 text-white shadow-sm" 
+                  : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+              )}
+            >
+              <CreditCard className="w-4 h-4 shrink-0" />
+              <span>Faturamento</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('pwa')}
+              className={cn(
+                "flex items-center gap-2.5 px-3.5 py-2.5 text-[11px] font-bold uppercase tracking-wider rounded-xl transition-all w-full text-left shrink-0",
+                activeSubTab === 'pwa' 
+                  ? "bg-slate-900 text-white shadow-sm" 
+                  : "text-slate-600 hover:bg-slate-100/80 hover:text-slate-900"
+              )}
+            >
+              <Monitor className="w-4 h-4 shrink-0" />
+              <span>Aplicativo (PWA)</span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Painel do Conteúdo Ativo */}
+        <div className="flex-1 p-6 md:p-8 flex flex-col justify-between min-h-[420px]">
+          <div className="space-y-6">
+            <AnimatePresence mode="wait">
+              {activeSubTab === 'clinic' && (
+                <motion.div
+                  key="clinic"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="text-xs font-black uppercase text-brand-cyan tracking-wider">Preferências da Clínica</h3>
+                    <p className="text-[10px] text-slate-400 mt-1">Configure o nome institucional e informações de rodapé de relatórios e documentos.</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Nome da Clínica</label>
+                      <input 
+                        type="text" 
+                        value={localClinicName} 
+                        onChange={(e) => setLocalClinicName(e.target.value)}
+                        className="w-full text-xs p-3 border border-slate-200 rounded-xl bg-slate-50/50 outline-none focus:border-brand-cyan transition-all text-slate-800 font-semibold shadow-inner" 
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Informações Institucionais / Rodapé</label>
+                      <textarea 
+                        value={localFooterText}
+                        onChange={(e) => setLocalFooterText(e.target.value)}
+                        placeholder="Ex: Av. Paulista, 1000 - São Paulo, SP | Tel: (11) 9999-9999 | CRO-SP 123456"
+                        className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-slate-50/50 outline-none focus:border-brand-cyan min-h-[100px] resize-none text-slate-800 shadow-inner leading-relaxed"
+                      />
+                      <p className="text-[9px] text-slate-400 italic">Essas informações aparecerão no rodapé da plataforma e em todos os documentos gerados pelo sistema.</p>
+                    </div>
+
+                    <div className="space-y-1 pt-2">
+                      <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Endereço Principal</label>
+                      <input 
+                        type="text" 
+                        defaultValue="Av. Paulista, 1000 - São Paulo, SP" 
+                        className="w-full text-xs p-3 border border-slate-200 rounded-xl bg-slate-50/30 outline-none text-slate-500" 
+                        readOnly
+                      />
+                      <p className="text-[9px] text-slate-400">Entre em contato com suporte se precisar alterar o endereço cadastrado da matriz.</p>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeSubTab === 'branding' && (
+                <motion.div
+                  key="branding"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="text-xs font-black uppercase text-brand-cyan tracking-wider">Identidade Visual & Marca</h3>
+                    <p className="text-[10px] text-slate-400 mt-1">Carregue a marca oficial e mude a assinatura corporativa que aparece nos cabeçalhos.</p>
+                  </div>
+
+                  <div className="bg-slate-50/50 border border-slate-200/50 rounded-2xl p-6 space-y-4">
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider block font-semibold">Logotipo da Clínica</label>
+                      
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
+                        <div className="w-24 h-24 bg-white border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+                          {localLogo ? (
+                            <img src={localLogo} alt="Logo Preview" className="w-full h-full object-contain p-2" />
+                          ) : (
+                            <ImagePlus className="w-8 h-8 text-slate-300" />
+                          )}
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="bg-slate-900 border border-slate-900 text-white px-4 py-2 text-[10px] font-black uppercase tracking-wider rounded-xl cursor-pointer hover:bg-brand-cyan hover:border-brand-cyan transition-all shadow-sm active:scale-95">
+                              Fazer Upload do Logo
+                              <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                            </label>
+                            {localLogo && (
+                              <button 
+                                type="button"
+                                onClick={() => setLocalLogo(null)}
+                                className="text-rose-500 border border-rose-200/30 hover:border-rose-250 bg-rose-500/5 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
+                              >
+                                Remover Logotipo
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-[9px] text-slate-500 font-medium leading-relaxed">
+                            Formato recomendado: <strong className="text-slate-700 font-bold font-semibold">PNG transparente</strong> ou <strong className="text-slate-700 font-bold font-semibold">SVG</strong>.<br />
+                            Tamanho ideal sugerido: proporção retangular de 300x80px. Limite máximo: <strong className="text-slate-700 font-semibold font-bold">500KB</strong>.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeSubTab === 'integrations' && (
+                <motion.div
+                  key="integrations"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="text-xs font-black uppercase text-brand-cyan tracking-wider flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Mensageria & WhatsApp Webhook
+                    </h3>
+                    <p className="text-[10px] text-slate-400 mt-1">Configure o número emissor de notificações automáticas de consultas e lembretes para os pacientes.</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Meu Número de Zap Emissor</label>
+                        <input 
+                          type="text" 
+                          value={localProviderPhone} 
+                          onChange={(e) => setLocalProviderPhone(e.target.value)}
+                          placeholder="Ex: +55 (47) 99999-9999"
+                          className="w-full text-xs p-3 border border-slate-200 rounded-xl bg-slate-50/50 outline-none focus:border-brand-cyan transition-all font-mono text-slate-800 shadow-inner" 
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Nome / Marca do Provedor</label>
+                        <input 
+                          type="text" 
+                          value={localProviderName} 
+                          onChange={(e) => setLocalProviderName(e.target.value)}
+                          placeholder="Ex: MB.SISTEMAS"
+                          className="w-full text-xs p-3 border border-slate-200 rounded-xl bg-slate-50/50 outline-none focus:border-brand-cyan transition-all font-sans text-slate-800 shadow-inner" 
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-2xl flex items-start gap-3 mt-2">
+                      <div className="p-2 bg-emerald-500/10 text-emerald-600 rounded-xl shrink-0">
+                        <Check className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-[11px] font-extrabold text-emerald-800 uppercase tracking-wide">Integração Ativa e Homologada</h4>
+                        <p className="text-[10px] text-slate-600 font-medium leading-normal mt-1">
+                          A confirmação rápida via chatbot e API de lembretes em lote utilizará estas credenciais registradas para interagir com seus pacientes.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeSubTab === 'finance' && (
+                <motion.div
+                  key="finance"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="text-xs font-black uppercase text-brand-cyan tracking-wider">Preferências Financeiras</h3>
+                    <p className="text-[10px] text-slate-400 mt-1">Configure moedas padrão, regras de auditorias e faturamento automatizado.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Moeda Padrão</label>
+                      <select className="w-full text-xs p-3 border border-slate-200 rounded-xl bg-slate-50/50 outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700">
+                        <option>Real Brasileiro - BRL (R$)</option>
+                        <option>Dólar Americano - USD ($)</option>
+                        <option>Euro - EUR (€)</option>
+                      </select>
+                    </div>
+
+                    <div className="border border-slate-200/60 rounded-2xl p-4 flex items-center justify-between gap-4 bg-slate-50/50">
+                      <div className="space-y-0.5">
+                        <label className="text-[10px] uppercase font-black text-slate-600 tracking-wider block">Recibo Automático</label>
+                        <span className="text-[9px] text-slate-400 font-medium font-semibold">Emitir rascunho de recibo ao receber pagamentos</span>
+                      </div>
+                      <input 
+                        type="checkbox" 
+                        defaultChecked 
+                        className="w-4 h-4 rounded text-brand-cyan focus:ring-brand-cyan border-slate-300 accent-brand-cyan shrink-0 cursor-pointer" 
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeSubTab === 'pwa' && (
+                <motion.div
+                  key="pwa"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-6 text-left"
+                >
+                  <div className="border-b border-slate-100 pb-3">
+                    <h3 className="text-xs font-black uppercase text-brand-cyan tracking-wider">Progressive Web App (PWA)</h3>
+                    <p className="text-[10px] text-slate-400 mt-1">Transforme seu OdontoDash em um sistema de desktop executado nativamente fora do navegador.</p>
+                  </div>
+
+                  <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-200/50 space-y-4">
+                    <p className="text-[11px] text-slate-600 leading-relaxed font-semibold">
+                      Ao instalar, o aplicativo funciona em seu próprio contêiner otimizado, criando atalhos na tela de início, oferecendo suporte a notificações nativas e carregando em frações de segundos.
+                    </p>
+                    
+                    <div className="bg-amber-500/5 border border-amber-500/10 p-3.5 rounded-xl text-[10px] text-amber-850 flex items-start gap-2.5">
+                      <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                      <div>
+                        <strong className="font-bold">Observação Importante:</strong><br />
+                        Para instalar, você não pode estar utilizando o visualizador em sandbox. Clique em "Abrir em nova aba" ou use o link público compartilhado para habilitar o sinal de PWA no seu navegador Chrome/Edge.
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      {deferredPrompt ? (
+                        <button 
+                          onClick={onInstallPWA}
+                          className="bg-brand-cyan hover:bg-cyan-600 text-white px-5 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all rounded-xl shadow-md active:scale-95 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Monitor className="w-4 h-4" />
+                          Instalar OdontoDash App
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2 text-slate-400/80">
+                          <ShieldCheck className="w-4 h-4 text-slate-400" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Pendente de sinalização do navegador (já instalado)</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-        </section>
 
-        <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Rodapé & Rodapé de Documentos</h3>
-          <div className="space-y-1">
-            <label className="text-[9px] uppercase font-bold text-slate-400">Informações Institucionais</label>
-            <textarea 
-              value={localFooterText}
-              onChange={(e) => setLocalFooterText(e.target.value)}
-              placeholder="Ex: Av. Paulista, 1000 - São Paulo, SP | Tel: (11) 9999-9999 | CRO-SP 123456"
-              className="w-full text-xs p-3 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan min-h-[80px] resize-none"
-            />
-            <p className="text-[9px] text-slate-400 italic">Essas informações aparecerão no rodapé da plataforma e em documentos gerados.</p>
-          </div>
-        </section>
-
-        <section className="space-y-4 border-t border-slate-100 pt-6">
-          <div>
-            <h3 className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              Canal de Disparo & Meu WhatsApp
-            </h3>
-            <p className="text-[10px] text-slate-400 mt-0.5">Configure o número oficial da clínica e a assinatura da sua marca integradora de mensagens.</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400">Meu Número de WhatsApp Emissor</label>
-              <input 
-                type="text" 
-                value={localProviderPhone} 
-                onChange={(e) => setLocalProviderPhone(e.target.value)}
-                placeholder="Ex: +55 (47) 99999-9999"
-                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-mono" 
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[9px] uppercase font-bold text-slate-400">Nome / Marca do Provedor</label>
-              <input 
-                type="text" 
-                value={localProviderName} 
-                onChange={(e) => setLocalProviderName(e.target.value)}
-                placeholder="Ex: MB.SISTEMAS"
-                className="w-full text-xs p-2 border border-slate-100 bg-slate-50 outline-none focus:border-brand-cyan transition-all font-sans" 
-              />
-            </div>
-          </div>
-        </section>
-
-        <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Unidades & Localização</h3>
-          <div className="space-y-1">
-            <label className="text-[9px] uppercase font-bold text-slate-400">Endereço Principal</label>
-            <input type="text" defaultValue="Av. Paulista, 1000 - São Paulo, SP" className="w-full text-xs p-2 border border-slate-100 bg-slate-50" />
-          </div>
-        </section>
-
-        <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Aplicativo (PWA)</h3>
-          <div className="bg-slate-50 p-6 border border-slate-100 rounded-lg space-y-4">
-            <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
-              Transforme o sistema em um aplicativo desktop ou mobile. Isso permite acesso rápido pela área de trabalho e funcionamento offline básico.
-            </p>
-            
-            <div className="bg-amber-50 border border-amber-100 p-3 rounded text-[9px] text-amber-700 flex items-start gap-2">
-              <Info className="w-3 h-3 shrink-0 mt-0.5" />
-              <p>
-                <strong>Nota:</strong> Para instalar, você deve estar acessando o sistema diretamente em uma aba do navegador (fora do visualizador do editor). Abra o "Shared App URL" ou use o botão de abrir em nova aba.
-              </p>
-            </div>
-
-            {deferredPrompt ? (
+          {/* Action Toolbar */}
+          <div className="pt-6 border-t border-slate-100 flex flex-wrap justify-between items-center gap-3 mt-8 bg-slate-50/30 -mx-6 md:-mx-8 -mb-6 md:-mb-8 p-6">
+            <button 
+              type="button"
+              onClick={handleRestoreDefaults}
+              className="text-[10px] font-black uppercase tracking-wider text-slate-400 hover:text-slate-600 hover:underline px-2.5 py-1.5 transition-all"
+            >
+              Restaurar Padrões Locais
+            </button>
+            <div className="flex gap-2">
               <button 
-                onClick={onInstallPWA}
-                className="bg-brand-cyan text-white px-6 py-2 text-[10px] font-extrabold uppercase tracking-widest hover:bg-cyan-600 transition-all rounded shadow-sm flex items-center gap-2"
+                type="button"
+                disabled={isSaving || !hasUnsavedChanges}
+                onClick={handleSave}
+                className={cn(
+                  "px-6 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all rounded-xl cursor-pointer flex items-center gap-2 active:scale-95 shadow-sm",
+                  hasUnsavedChanges 
+                    ? "bg-slate-900 text-white hover:bg-slate-800" 
+                    : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                )}
               >
-                <Monitor className="w-3.5 h-3.5" />
-                Instalar Aplicativo
+                {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
+                Salvar Preferências
               </button>
-            ) : (
-              <div className="flex items-center gap-2 text-slate-400">
-                <ShieldCheck className="w-4 h-4" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Pendente de sinal do navegador ou já instalado</span>
-              </div>
-            )}
+            </div>
           </div>
-        </section>
-
-        <section className="space-y-4">
-          <h3 className="text-[10px] font-bold text-brand-cyan uppercase tracking-wider">Financeiro & Faturamento</h3>
-          <div className="flex items-center gap-4">
-             <div className="flex-1 space-y-1">
-                <label className="text-[9px] uppercase font-bold text-slate-400">Moeda Padrão</label>
-                <select className="w-full text-xs p-2 border border-slate-100 bg-slate-50"><option>BRL (R$)</option></select>
-             </div>
-             <div className="flex-1 space-y-1 px-4 flex items-center gap-2">
-                <input type="checkbox" defaultChecked />
-                <label className="text-[9px] uppercase font-bold text-slate-400">Gerar Recibo Automático</label>
-             </div>
-          </div>
-        </section>
-        
-
-
-        <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
-          <button className="text-[10px] font-bold uppercase text-slate-400">Restaurar Padrões</button>
-          <button 
-            disabled={isSaving}
-            onClick={handleSave}
-            className="bg-slate-900 text-white px-8 py-2 text-[10px] font-bold uppercase tracking-widest hover:bg-brand-cyan transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
-          >
-            {isSaving && <Loader2 className="w-3 h-3 animate-spin" />}
-            Salvar Preferências
-          </button>
         </div>
       </div>
     </div>
@@ -9521,7 +9902,10 @@ function LoginView({
     setError(null);
     
     // Sanitize credentials before checking
-    const cleanUsername = username.trim().toLowerCase();
+    let cleanUsername = username.trim().toLowerCase();
+    if (cleanUsername.startsWith('/') || cleanUsername.startsWith('.')) {
+      cleanUsername = cleanUsername.replace(/^[\/\.]+/, '');
+    }
     const cleanPassword = password.trim();
 
     // Layer 1: Local Device Lockout
@@ -9584,6 +9968,12 @@ function LoginView({
         const initialAna = INITIAL_USERS.find(u => u.username === 'ana.admin');
         if (initialAna && initialAna.password === '123') {
           user = initialAna;
+          isCorrectPassword = true;
+        }
+      } else if (cleanUsername === 'administrador' && cleanPassword === '123') {
+        const initialAdmin = INITIAL_USERS.find(u => u.username === 'administrador');
+        if (initialAdmin && initialAdmin.password === '123') {
+          user = initialAdmin;
           isCorrectPassword = true;
         }
       }
@@ -9691,135 +10081,165 @@ function LoginView({
     }
   };
 
-  return (
-    <div className="h-screen w-screen bg-[#f8fafc] flex flex-col items-center justify-center relative overflow-hidden font-sans">
-      {/* Background decorations */}
-      <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
-        <div className="absolute top-[-10%] right-[-5%] w-[600px] h-[600px] rounded-full bg-brand-cyan/20 blur-[120px]" />
-        <div className="absolute bottom-[-10%] left-[-5%] w-[500px] h-[500px] rounded-full bg-blue-400/10 blur-[100px]" />
-      </div>
+  const firstWord = (clinicName.split(' ')[0] || 'odonto').toLowerCase();
+  const restWords = (clinicName.split(' ').slice(1).join(' ') || 'dash').toLowerCase();
 
-      {/* MB.SISTEMAS Background Watermark */}
+  return (
+    <div className="h-screen w-screen bg-[#f1f5f9] flex flex-col items-center justify-center relative overflow-hidden font-sans p-4 select-none">
+      {/* Background decoration watermark resembling legacy enterprise layouts */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none z-0 overflow-hidden">
-        <span className="text-[10vw] font-black tracking-[0.2em] text-slate-950/[0.025] uppercase pointer-events-none -rotate-12 whitespace-nowrap select-none">
-          MB.SISTEMAS
+        <span className="text-[10vw] font-black tracking-[0.25em] text-slate-900/[0.012] uppercase pointer-events-none -rotate-12 whitespace-nowrap select-none">
+          {clinicName.toUpperCase()}
         </span>
       </div>
 
-      {/* Discrete Corner Support Watermark */}
-      <div className="absolute bottom-5 right-5 pointer-events-none select-none text-[8px] font-black tracking-[0.3em] text-slate-950/[0.15] uppercase z-10">
-        MB.SISTEMAS
-      </div>
-
-      <div className="w-full max-w-[400px] px-6 relative z-10">
+      <div className="w-full max-w-[560px] relative z-10 flex flex-col items-center">
+        {/* Main Dialog Container matching the dimensions and border system */}
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white/80 backdrop-blur-xl rounded-[40px] shadow-2xl shadow-slate-200/40 p-8 border border-white"
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.25 }}
+          className="w-full bg-white rounded shadow-xl relative overflow-hidden border border-slate-300 min-h-[350px] p-8 flex flex-col md:flex-row shadow-slate-200/50"
         >
-          <div className="mb-8 text-center text-slate-800">
-            <div className="flex items-center justify-center gap-2 mb-4">
+          {/* Left area - Branding and graphic overlapping shapes */}
+          <div className="md:w-[220px] h-[100px] md:h-auto relative select-none flex items-center shrink-0 border-b md:border-b-0 md:border-r border-slate-100 pb-4 md:pb-0">
+            {/* Branding with dynamic layout */}
+            <div className="absolute top-2 left-2 flex items-center">
               {clinicLogo ? (
-                <img src={clinicLogo} alt={clinicName} className="h-12 w-auto object-contain" />
+                <img src={clinicLogo} alt={clinicName} className="h-9 max-w-[190px] object-contain" />
               ) : (
-                <>
-                  <div className="w-10 h-10 bg-brand-cyan rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-cyan/20">
-                    <Plus className="w-6 h-6" />
-                  </div>
-                  <h1 className="text-xl font-black text-slate-800 tracking-tighter">
-                    {clinicName.split(' ')[0]}<span className="text-brand-cyan">{clinicName.split(' ').slice(1).join(' ') || 'Gate'}</span>
-                  </h1>
-                </>
+                <div className="flex items-baseline font-sans text-3xl tracking-tighter">
+                  <span className="font-extrabold text-[#cc0033] relative flex items-center">
+                    {firstWord}
+                    {/* Retro blue point in the letter loop to mimic Benner visual badge */}
+                    {firstWord.includes('o') && (
+                      <span className="absolute left-[4px] top-[12px] w-2.5 h-2.5 rounded-full bg-[#0b66af]" />
+                    )}
+                  </span>
+                  <span className="text-slate-300 font-light mx-2.5 text-2xl">|</span>
+                  <span className="font-light text-slate-500 tracking-wide text-2xl">{restWords}</span>
+                </div>
               )}
             </div>
-            <h3 className="text-2xl font-bold tracking-tight mb-2 text-slate-900">Bem-vindo de volta</h3>
-            <p className="text-sm text-slate-500">Insira suas credenciais para continuar.</p>
+
+            {/* Overlapping Curved Shapes (Replicating red circle + blue overlapping circle) */}
+            <div className="hidden md:block pointer-events-none absolute inset-0">
+              {/* Giant Red Circle bottom left */}
+              <div className="absolute -bottom-24 -left-20 w-[240px] h-[240px] rounded-full bg-[#cc0033] opacity-100 z-0" />
+              {/* Smaller Blue Circle sitting at its shoulder */}
+              <div className="absolute bottom-[40px] left-[130px] w-14 h-14 rounded-full bg-[#0b66af] opacity-100 z-10 shadow" />
+            </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="relative group">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-brand-cyan transition-colors">
-                <User className="w-4 h-4" />
+          {/* Right area - Credentials inputs, classic button rows, and licensing info */}
+          <form onSubmit={handleSubmit} className="flex-1 md:pl-8 pt-4 md:pt-2 flex flex-col justify-between">
+            <div className="space-y-4">
+              {/* Grid of inputs aligning exactly like legacy systems */}
+              <div className="space-y-2 max-w-[280px] mx-auto md:mx-0">
+                <div className="grid grid-cols-[68px_1fr] items-center gap-2">
+                  <span className="text-right text-xs font-sans font-medium text-slate-700 select-none">Usuário:</span>
+                  <input 
+                    type="text" 
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    disabled={isLoading}
+                    className="w-full text-xs p-1 px-1.5 border border-slate-300 rounded font-sans text-slate-800 outline-none focus:border-[#0e71b8] focus:ring-1 focus:ring-[#0e71b8]/20 bg-white transition-all shadow-inner"
+                    placeholder=""
+                    autoFocus
+                  />
+                </div>
+
+                <div className="grid grid-cols-[68px_1fr] items-center gap-2">
+                  <span className="text-right text-xs font-sans font-medium text-slate-700 select-none">Senha:</span>
+                  <input 
+                    type="password" 
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={isLoading}
+                    className="w-full text-xs p-1 px-1.5 border border-slate-300 rounded font-sans text-slate-800 outline-none focus:border-[#0e71b8] focus:ring-1 focus:ring-[#0e71b8]/20 bg-white transition-all shadow-inner"
+                    placeholder=""
+                  />
+                </div>
               </div>
-              <input 
-                type="text" 
-                value={username}
-                disabled={isLoading}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-white border border-slate-100 text-slate-800 text-sm py-4 px-4 pl-11 outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-2xl placeholder:text-slate-400"
-                placeholder="Nome de usuário"
-                autoFocus
-              />
+
+              {/* OK & Cancelar standard classic button rows */}
+              <div className="flex justify-start gap-2 max-w-[280px] mx-auto md:mx-0 pl-[76px]">
+                <button 
+                  type="submit"
+                  disabled={isLoading}
+                  className="min-w-[80px] bg-slate-50 hover:bg-slate-100 hover:text-slate-900 text-slate-700 border border-slate-300 rounded py-1 text-xs font-medium cursor-pointer active:scale-95 transition-all text-center flex items-center justify-center gap-1 shadow-sm disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
+                  ) : "OK"}
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => { setUsername(''); setPassword(''); setError(null); }}
+                  className="min-w-[80px] bg-slate-50 hover:bg-slate-100 hover:text-slate-900 text-slate-700 border border-slate-300 rounded py-1 text-xs font-medium cursor-pointer active:scale-95 transition-all text-center"
+                >
+                  Cancelar
+                </button>
+              </div>
             </div>
 
-            <div className="relative group">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-brand-cyan transition-colors">
-                <Lock className="w-4 h-4" />
-              </div>
-              <input 
-                type="password" 
-                value={password}
-                disabled={isLoading}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-white border border-slate-100 text-slate-800 text-sm py-4 px-4 pl-11 outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all rounded-2xl placeholder:text-slate-400"
-                placeholder="Sua senha"
-              />
-            </div>
-
+            {/* Error Message Space (if any) */}
             <AnimatePresence>
               {error && (
                 <motion.div 
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="bg-red-50 text-red-600 text-[11px] p-4 rounded-2xl flex items-center gap-2 font-bold overflow-hidden"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 3 }}
+                  className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] p-2 rounded-lg font-medium leading-normal max-w-[280px] mx-auto md:mx-0 mt-3"
                 >
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{error}</span>
+                  {error}
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-slate-900 hover:bg-black text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shadow-xl shadow-slate-900/10 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed group flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <>
-                  Entrar no Sistema
-                  <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
-            </button>
-
-          </form>
-
-          {onOpenFreeTrial && (
-            <div className="mt-6 pt-6 border-t border-slate-100 flex flex-col items-center gap-3">
-              <div className="text-center">
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Ainda não é cliente?</p>
-                <p className="text-[10px] text-slate-400 mt-0.5">Crie um ambiente de testes personalizado</p>
-              </div>
-              <button
-                type="button"
-                onClick={onOpenFreeTrial}
-                className="w-full bg-emerald-50 hover:bg-emerald-100/85 text-emerald-600 border border-emerald-200/50 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-wide transition-all shadow-sm flex items-center justify-center gap-2 active:scale-[0.98]"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
-                Experimentar Teste Grátis
-              </button>
+            {/* Corporate/Licensing text area inside the form */}
+            <div className="border-t border-slate-100 pt-3 mt-4 text-center md:text-left select-none max-w-[280px] mx-auto md:mx-0">
+              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tight leading-none mb-1 font-mono">
+                ODONTOLOGIA - {clinicName.toUpperCase()} - SECURE CLOUD
+              </p>
+              <p className="text-[9px] text-slate-400 font-sans leading-relaxed">
+                Este software está licenciado para:
+              </p>
+              <p className="text-[10px] font-black text-slate-600 uppercase tracking-tight font-sans leading-tight">
+                {clinicName.toUpperCase()} LTDA
+              </p>
             </div>
-          )}
+          </form>
         </motion.div>
-        
-        <p className="text-slate-400 text-[9px] flex items-center justify-center gap-2 mt-8 px-4 text-center">
-          <Shield className="w-3 h-3 text-brand-cyan/40" />
-          {footerText}
-        </p>
+
+        {/* Unified corporate bottom footer copy */}
+        <div className="w-full text-center mt-3 select-none text-[10px] text-slate-400 font-sans">
+          Copyright © 2026 {clinicName} | {firstWord}.com.br
+        </div>
+
+        {/* Accessible Shortcuts (Trial or public self-booking App) situated below the widget to keep the layout authentic but operational */}
+        {onOpenFreeTrial && (
+          <div className="flex flex-col items-center gap-3 mt-6">
+            <button 
+              type="button"
+              onClick={onOpenFreeTrial}
+              className="flex items-center gap-2 px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.03] text-white font-extrabold text-[11px] uppercase tracking-widest rounded-full shadow-lg shadow-emerald-600/20 cursor-pointer active:scale-95 transition-all animate-pulse"
+              style={{ animationDuration: '3s' }}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 fill-amber-300/30 shrink-0" />
+              Experimentar Teste Grátis
+            </button>
+            <button 
+              type="button"
+              onClick={onOpenBooking}
+              className="text-[10px] font-bold text-slate-500 hover:text-brand-cyan transition-colors underline decoration-slate-350 hover:decoration-brand-cyan/40 underline-offset-4 cursor-pointer"
+            >
+              Agendamento de Consultas
+            </button>
+          </div>
+        )}
       </div>
+
       <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
     </div>
   );
@@ -10766,8 +11186,8 @@ function Footer({
   footerText: string;
 }) {
   return (
-    <footer className="mt-auto py-8 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
+    <footer className="mt-auto py-4 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="text-center md:text-left">
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">{footerText}</p>
         </div>

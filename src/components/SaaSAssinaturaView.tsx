@@ -5,7 +5,7 @@ import {
   Smartphone, ShieldCheck, RefreshCw, Zap, Receipt, ChevronRight, CheckCircle2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { doc, updateDoc, setDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, getDoc } from 'firebase/firestore';
 
 interface SaaSAssinaturaViewProps {
   currentUser: any;
@@ -22,6 +22,9 @@ export default function SaaSAssinaturaView({
   patientsCount,
   dentistCount
 }: SaaSAssinaturaViewProps) {
+  const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [promoStatus, setPromoStatus] = useState<{ type: 'idle' | 'loading' | 'success' | 'error'; message: string }>({ type: 'idle', message: '' });
+
   // Plan setup
   const plans = [
     {
@@ -105,13 +108,82 @@ export default function SaaSAssinaturaView({
   const getTrialDaysRemaining = () => {
     if (!currentUser?.trialStartedAt) return 14;
     const start = new Date(currentUser.trialStartedAt);
-    const end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const bonusDays = Number(currentUser?.trialExtensionDays) || 0;
+    const end = new Date(start.getTime() + (14 + bonusDays) * 24 * 60 * 60 * 1000);
     const diff = end.getTime() - new Date().getTime();
     const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
     return days > 0 ? days : 0;
   };
 
   const trialDaysRemaining = getTrialDaysRemaining();
+
+  const handleClaimVoucher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!promoCodeInput.trim() || !db) return;
+    setPromoStatus({ type: 'loading', message: 'Validando cupom...' });
+
+    try {
+      const cleanCode = promoCodeInput.trim().toUpperCase().replace(/\s+/g, '');
+      const couponRef = doc(db, 'saas_coupons', cleanCode);
+      const snap = await getDoc(couponRef);
+
+      if (!snap.exists()) {
+        setPromoStatus({ type: 'error', message: 'Cupom inválido ou inexistente.' });
+        return;
+      }
+
+      const couponData = snap.data();
+      if (!couponData.active) {
+        setPromoStatus({ type: 'error', message: 'Este cupom não está mais ativo.' });
+        return;
+      }
+
+      const maxUses = couponData.maxUses || 0;
+      const usesCount = couponData.usesCount || 0;
+      if (usesCount >= maxUses) {
+        setPromoStatus({ type: 'error', message: 'Este cupom atingiu o limite de usos.' });
+        return;
+      }
+
+      const claimedList = currentUser?.claimedCoupons || [];
+      if (claimedList.includes(cleanCode)) {
+        setPromoStatus({ type: 'error', message: 'Este cupom já foi ativado nesta clínica.' });
+        return;
+      }
+
+      const extraDays = Number(couponData.extraDays) || 15;
+      const newExtensionDays = (currentUser.trialExtensionDays || 0) + extraDays;
+      const updatedCoupons = [...claimedList, cleanCode];
+
+      // Update in database
+      await updateDoc(doc(db, 'users', currentUser.id), {
+        trialExtensionDays: newExtensionDays,
+        claimedCoupons: updatedCoupons
+      });
+
+      // Update uses count in coupon
+      await updateDoc(couponRef, {
+        usesCount: usesCount + 1
+      });
+
+      // Update local state
+      const updatedUser = {
+        ...currentUser,
+        trialExtensionDays: newExtensionDays,
+        claimedCoupons: updatedCoupons
+      };
+      onUpdateCurrentUser(updatedUser);
+
+      setPromoStatus({ 
+        type: 'success', 
+        message: `Parabéns! Cupom ativado com sucesso. Mais +${extraDays} dias de teste grátis foram adicionados à sua clínica.` 
+      });
+      setPromoCodeInput('');
+    } catch (err: any) {
+      console.error(err);
+      setPromoStatus({ type: 'error', message: `Erro ao ativar cupom: ${err?.message || err}` });
+    }
+  };
 
   // Load simulated invoice list from local state or config
   useEffect(() => {
@@ -247,71 +319,45 @@ export default function SaaSAssinaturaView({
   return (
     <div className="max-w-6xl mx-auto space-y-8 animate-fade-in py-2">
       
-      {/* Dynamic Status Greeting Header */}
-      <div className="bg-slate-900 text-white rounded-3xl p-6 md:p-8 relative overflow-hidden shadow-xl border border-slate-800">
-        <div className="absolute top-[-30%] right-[-10%] w-[400px] h-[400px] rounded-full bg-brand-cyan/15 blur-[100px] pointer-events-none" />
-        <div className="absolute bottom-[-30%] left-[-10%] w-[350px] h-[350px] rounded-full bg-indigo-500/10 blur-[90px] pointer-events-none" />
-        
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-3">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-cyan/10 border border-brand-cyan/20 text-brand-cyan text-[10px] font-bold uppercase tracking-widest">
-              <Zap className="w-3.5 h-3.5" />
-              Dental Analytics SaaS Engine
-            </span>
-            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
-              Gerencie sua Assinatura do <span className="text-brand-cyan">OdontoDash</span>
-            </h1>
-            <p className="text-slate-400 text-xs md:text-sm max-w-xl leading-relaxed">
-              Descubra o poder da análise em tempo real com limites adaptáveis e módulos desbloqueáveis sob demanda.
-            </p>
-          </div>
+      {/* Dynamic Status Greeting Header - Only for Trial/Test accounts, otherwise empty */}
+      {isTrialActive ? (
+        <div className="bg-slate-900 text-white rounded-3xl p-6 relative overflow-hidden shadow-xl border border-slate-800 text-left">
+          <div className="absolute top-[-30%] right-[-10%] w-[350px] h-[350px] rounded-full bg-brand-cyan/15 blur-[100px] pointer-events-none" />
+          <div className="absolute bottom-[-30%] left-[-10%] w-[300px] h-[300px] rounded-full bg-indigo-500/10 blur-[90px] pointer-events-none" />
           
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 md:min-w-[280px] space-y-4">
-            <h3 className="text-xs font-black uppercase text-brand-cyan tracking-widest flex items-center justify-between">
-              Status da Conta
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            </h3>
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-brand-cyan/10 border border-brand-cyan/20 text-brand-cyan text-[10px] font-bold uppercase tracking-widest">
+                <Sparkles className="w-3.5 h-3.5 text-brand-cyan" />
+                Status da Conta de Experiência
+              </span>
+              <h1 className="text-xl md:text-2xl font-black tracking-tight">
+                Ambiente de Teste Ativo no <span className="text-brand-cyan">OdontoDash</span>
+              </h1>
+              <p className="text-slate-400 text-xs max-w-xl">
+                Seu acesso é temporário e concedido com os recursos completos do plano <strong className="text-brand-cyan font-bold">{currentPlanId}</strong>.
+              </p>
+            </div>
             
-            {isTrialActive ? (
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 md:min-w-[280px] space-y-3 shrink-0">
+              <h3 className="text-xs font-black uppercase text-brand-cyan tracking-widest flex items-center justify-between">
+                Status do Período de Teste
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              </h3>
               <div className="space-y-2">
                 <div className="flex justify-between items-end">
-                  <span className="text-xs text-slate-300">Modo de Experiência:</span>
-                  <span className="text-xs font-mono font-bold text-amber-400">{currentPlanId}</span>
+                  <span className="text-[10px] text-slate-350 uppercase font-black tracking-wider">Modo:</span>
+                  <span className="text-xs font-mono font-black text-amber-450">{currentPlanId}</span>
                 </div>
-                <div className="p-3 bg-amber-500/15 border border-amber-500/20 text-amber-300 rounded-xl flex items-center gap-2 text-xs font-bold leading-tight">
+                <div className="p-2.5 bg-amber-500/15 border border-amber-500/20 text-amber-305 rounded-xl flex items-center gap-2 text-xs font-bold leading-tight">
                   <Sparkles className="w-4 h-4 text-amber-400 animate-bounce shrink-0" />
-                  <span>Seu teste expira em <strong className="text-lg font-black">{trialDaysRemaining}</strong> dias</span>
+                  <span>Seu teste expira em <strong className="text-base font-black">{trialDaysRemaining}</strong> dias</span>
                 </div>
               </div>
-            ) : isPremiumActive ? (
-              <div className="space-y-2">
-                <div className="flex justify-between items-end">
-                  <span className="text-xs text-slate-300">Licença Premium:</span>
-                  <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-widest">{currentPlanId} active</span>
-                </div>
-                <div className="p-3 bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 rounded-xl flex items-center gap-2 text-xs font-bold">
-                  <ShieldCheck className="w-4.5 h-4.5 text-emerald-400 shrink-0" />
-                  <div>
-                    <p className="font-extrabold leading-normal">Faturamento SaaS Ativo</p>
-                    <p className="text-[10px] text-emerald-300/80 font-normal mt-0.5">Próxima renovação: {currentUser?.nextRenewalDate || 'Próximo mês'}</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex justify-between items-end">
-                  <span className="text-xs text-slate-300">Assinatura:</span>
-                  <span className="text-xs font-black text-rose-400 uppercase">Inativo / Expirado</span>
-                </div>
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl flex items-center gap-2 text-xs font-bold">
-                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>Assinatura expirada. Por favor regularize o checkout abaixo.</span>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Real SaaS Tenant Limit Progress Counters */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-white rounded-3xl p-6 border border-slate-200/60 shadow-sm">
@@ -518,6 +564,60 @@ export default function SaaSAssinaturaView({
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Promotional Claim Voucher Widget */}
+      <div className="bg-gradient-to-br from-indigo-50/50 via-slate-50 to-indigo-100/30 rounded-3xl p-6 md:p-8 border border-indigo-100 shadow-sm text-left grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+        <div className="md:col-span-2 space-y-2">
+          <span className="text-[10px] bg-indigo-600/10 text-indigo-700 border border-indigo-100 font-black uppercase tracking-wider px-2.5 py-1 rounded-full">
+            CAMPANHAS DE TESTE SAAS
+          </span>
+          <h3 className="text-md font-black text-slate-800 flex items-center gap-2">
+            <Zap className="w-5 h-5 text-indigo-500 animate-pulse" />
+            Ativar Cupom / Voucher Promocional
+          </h3>
+          <p className="text-slate-500 text-xs leading-relaxed max-w-lg">
+            Possui um cupom de ativação ou voucher de prazo extra disponibilizado por um administrador de suporte? Insira o código exclusivo abaixo para estender seu período de experimentação gratuita instantaneamente.
+          </p>
+        </div>
+
+        <div>
+          <form onSubmit={handleClaimVoucher} className="space-y-3">
+            <div className="relative">
+              <input
+                type="text"
+                value={promoCodeInput}
+                onChange={(e) => {
+                  setPromoCodeInput(e.target.value.toUpperCase());
+                  setPromoStatus({ type: 'idle', message: '' });
+                }}
+                placeholder="DIGITE O SEU CUPOM"
+                className="w-full pl-4 pr-10 py-3 text-xs font-mono font-bold tracking-wider placeholder-slate-400 bg-white border border-slate-200 rounded-xl outline-none focus:border-indigo-600 ring-indigo-500 transition-all text-slate-850"
+              />
+              <span className="absolute right-3.5 top-1/2 -translate-y-1/2">
+                🎟️
+              </span>
+            </div>
+
+            {promoStatus.type !== 'idle' && (
+              <p className={`text-[11px] font-bold ${
+                promoStatus.type === 'success' ? 'text-emerald-700 bg-emerald-50 border border-emerald-150 p-2.5 rounded-lg' :
+                promoStatus.type === 'error' ? 'text-rose-700 bg-rose-50 border border-rose-150 p-2.5 rounded-lg' :
+                'text-slate-500 animate-pulse'
+              }`}>
+                {promoStatus.message}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={promoStatus.type === 'loading' || !promoCodeInput.trim()}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shadow-indigo-600/10 active:scale-95 flex items-center justify-center gap-2"
+            >
+              {promoStatus.type === 'loading' ? 'Validando...' : 'Aplicar Cupom'}
+            </button>
+          </form>
         </div>
       </div>
 
