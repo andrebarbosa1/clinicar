@@ -540,14 +540,6 @@ export default function App() {
   const trialDaysRemaining = getTrialDaysRemaining();
 
   const isModuleLockedBySaaS = (moduleName: string) => {
-    if (currentPlanId === 'Lite') {
-      const allowed = ['dashboard', 'agenda', 'pacientes', 'assinatura'];
-      return !allowed.includes(moduleName.toLowerCase());
-    }
-    if (currentPlanId === 'Pro') {
-      const blocked = ['estoque'];
-      return blocked.includes(moduleName.toLowerCase());
-    }
     return false;
   };
 
@@ -600,6 +592,17 @@ export default function App() {
       setActivePage('SuperAdmin');
     }
   }, [currentUser]);
+
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activePage !== 'Dashboard') {
+        setActivePage('Dashboard');
+        setSubPage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activePage]);
   const [subPage, setSubPage] = useState<string | null>(null);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [selectedPatientDetail, setSelectedPatientDetail] = useState<any | null>(null);
@@ -902,7 +905,7 @@ export default function App() {
         // Se for ambiente trial, filtra pelos dados criados pelo mesmo trial
         pQuery = query(collection(db, 'patients'), where('trialOwnerId', '==', trialId));
       } else if (role === 'dentista') {
-        pQuery = query(collection(db, 'patients'), where('dentistaResponsavel', '==', currentUser.name));
+        pQuery = collection(db, 'patients');
       } else if (role === 'admin' || role === 'recepcionista' || hasModule('Pacientes')) {
         pQuery = collection(db, 'patients');
       }
@@ -982,6 +985,22 @@ export default function App() {
   const statuses = ['Todos', 'Realizado', 'Agendado', 'Pendente', 'Cancelado'];
   const paymentStatuses = ['Todos', 'Pago', 'Pendente', 'Atrasado'];
   const doctorsList = useMemo(() => ['Todos', ...Array.from(new Set(users.filter(u => u.role === 'Dentista' || u.role === 'Admin').map(u => u.name)))], [users]);
+
+  // Patients filtered based on role (Dentists should only see their assigned patients)
+  const patientsForUser = useMemo(() => {
+    if (!currentUser) return [];
+    if (currentUser.role === 'Dentista') {
+      const recordPatientNames = new Set(data.map(r => (r.paciente || '').trim().toLowerCase()).filter(Boolean));
+      const recordPatientIds = new Set(data.map(r => r.patientId).filter(Boolean));
+      return patients.filter(p => {
+        const isResp = p.dentistaResponsavel === currentUser.name;
+        const nameMatch = recordPatientNames.has((p.name || '').trim().toLowerCase());
+        const idMatch = p.id && recordPatientIds.has(p.id);
+        return isResp || nameMatch || idMatch;
+      });
+    }
+    return patients;
+  }, [patients, currentUser, data]);
 
   // Filtered data based on role
   const filteredRecords = React.useMemo(() => {
@@ -1279,26 +1298,6 @@ export default function App() {
       return false;
     }
 
-    // SaaS expiration check
-    if (isTrialActive && trialDaysRemaining <= 0) {
-      alert("Seu período de teste grátis (Trial) expirou. Por favor, regularize sua assinatura na aba 'Plano & Assinatura' para registrar novos pacientes.");
-      setActivePage('Assinatura');
-      setSubPage(null);
-      return false;
-    }
-
-    // SaaS allocation/limits verification
-    const isNew = !existingId || existingId.trim() === '';
-    if (isNew) {
-      const maxPatientsAllowed = currentPlanId === 'Lite' ? 100 : currentPlanId === 'Pro' ? 1000 : 999990;
-      if (patients.length >= maxPatientsAllowed) {
-        alert(`Limite de pacientes atingido! Seu plano atual (${currentPlanId}) suporta no máximo ${maxPatientsAllowed} pacientes ativos.\n\nAcesse a aba 'Plano & Assinatura' para migrar seu plano de forma segura integrada.`);
-        setActivePage('Assinatura');
-        setSubPage(null);
-        return false;
-      }
-    }
-
     try {
       const patientId = (existingId && existingId.trim() !== '') ? existingId : `pat-${Date.now()}`;
       console.log(existingId ? `[handleCreatePatient] Atualizando paciente ${existingId}...` : `[handleCreatePatient] Criando novo paciente ${patientId}...`);
@@ -1580,23 +1579,6 @@ export default function App() {
   };
 
   const handleCreateUser = async (newUser: any): Promise<boolean> => {
-    // SaaS trial check
-    if (isTrialActive && trialDaysRemaining <= 0) {
-      alert("Seu período de teste grátis (Trial) expirou. Por favor, regularize sua assinatura na aba 'Plano & Assinatura' para gerenciar sua equipe.");
-      setActivePage('Assinatura');
-      return false;
-    }
-
-    // SaaS dentist/staff limit check
-    const maxDentists = currentPlanId === 'Lite' ? 1 : currentPlanId === 'Pro' ? 5 : 99999;
-    const currentDentistCount = users.filter((u: any) => u?.role === 'Dentista').length;
-    
-    if (newUser.role === 'Dentista' && currentDentistCount >= maxDentists) {
-      alert(`Limite de profissionais atingido! Seu plano atual (${currentPlanId}) suporta no máximo ${maxDentists} profissional(is) do tipo Dentista.\n\nAcesse a aba 'Plano & Assinatura' para fazer upgrade do seu plano.`);
-      setActivePage('Assinatura');
-      return false;
-    }
-
     const id = `user-${Date.now()}`;
     const user: any = {
       id,
@@ -1929,20 +1911,33 @@ export default function App() {
     if (!record) return;
 
     try {
+      // Optimistic update
+      setData(prev => prev.map(r => r.id === recordId ? { ...r, status: 'Realizado' } : r));
+
       // 1. Update record status
       await setDoc(doc(db, 'records', recordId), {
-        status: 'Concluído'
+        status: 'Realizado'
       }, { merge: true });
 
       // 2. Update doctor status
       const doctor = users.find(u => u.name === record.dentista);
       if (doctor) {
-        await setDoc(doc(db, 'users', doctor.id), {
-          availability: 'disponivel',
-          currentPatient: null
-        }, { merge: true });
+        try {
+          await setDoc(doc(db, 'users', doctor.id), {
+            availability: 'disponivel',
+            currentPatient: null
+          }, { merge: true });
+        } catch (doctorErr) {
+          console.warn("Could not update doctor status (continuing anyway):", doctorErr);
+        }
       }
     } catch (e) {
+      console.error("Erro ao finalizar consulta:", e);
+      // Revert optimistic
+      const original = data.find(r => r.id === recordId);
+      if (original) {
+        setData(prev => prev.map(r => r.id === recordId ? original : r));
+      }
       handleFirestoreError(e, OperationType.UPDATE, 'records/' + recordId);
     }
   };
@@ -2308,7 +2303,7 @@ export default function App() {
     if (subPage === 'Prontuario' && activePage === 'Pacientes' && selectedPatientId) {
       return (
         <MedicalChartView 
-          patientName={patients.find(p => p.id === selectedPatientId)?.name || selectedPatientId} 
+          patientName={patientsForUser.find(p => p.id === selectedPatientId)?.name || selectedPatientId} 
           patientId={selectedPatientId}
           data={filteredRecords} 
           onBack={() => setSubPage(null)} 
@@ -2321,8 +2316,8 @@ export default function App() {
           onAddCertificate={(p) => { setSelectedPatientId(p); setSubPage('NovoAtestado'); }}
           onAddPrescription={(p) => { setSelectedPatientId(p); setSubPage('NovaReceita'); }}
           onUpdateAnamnesis={(p) => { setSelectedPatientId(p); setSubPage('EditarAnamnese'); }}
-          patients={patients}
-          documents={documents.filter(d => d.patientName === selectedPatientId || d.patientId === selectedPatientId || (selectedPatientId && d.patientName === patients.find(p => p.id === selectedPatientId)?.name))}
+          patients={patientsForUser}
+          documents={documents.filter(d => d.patientName === selectedPatientId || d.patientId === selectedPatientId || (selectedPatientId && d.patientName === patientsForUser.find(p => p.id === selectedPatientId)?.name))}
           onDeleteDocument={handleDeleteDocument}
           onUploadDocument={handleCreateDocument}
           onUpdatePatient={(p) => {
@@ -2346,7 +2341,7 @@ export default function App() {
     if (subPage === 'NovoRegistro' && activePage === 'Pacientes' && selectedPatientId) {
       return (
         <AppointmentFormView 
-          patients={patients} 
+          patients={patientsForUser} 
           data={filteredRecords} 
           users={users} 
           onSave={handleCreateClinicalRecord} 
@@ -2379,7 +2374,7 @@ export default function App() {
     if (subPage === 'EditarAnamnese' && activePage === 'Pacientes' && selectedPatientId) {
       return (
         <AnamnesisFormView 
-          patients={patients}
+          patients={patientsForUser}
           onSave={handleUpdateAnamnesis}
           onBack={() => setSubPage('Prontuario')}
           patientId={selectedPatientId}
@@ -2387,13 +2382,13 @@ export default function App() {
       );
     }
     if (subPage === 'Cadastrar' && activePage === 'Pacientes') {
-      return <PatientFormView patients={patients} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <PatientFormView patients={patientsForUser} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'Editar' && activePage === 'Pacientes' && selectedPatientId) {
-      return <PatientFormView isEdit patientId={selectedPatientId} patients={patients} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <PatientFormView isEdit patientId={selectedPatientId} patients={patientsForUser} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'NovoAgendamento' && activePage === 'Agenda') {
-      return <AppointmentFormView patients={patients} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
+      return <AppointmentFormView patients={patientsForUser} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
     }
 
     // Permission Guard for module rendering
@@ -2420,32 +2415,13 @@ export default function App() {
               onSendWhatsApp={handleWhatsAppReminder} 
               onSendReminder={handleSendManualReminder} 
               canSeeFinancials={canSeeFinancials}
+              users={users}
             />
           </div>
         );
       case 'Retorno':
-        if (currentPlanId === 'Lite') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Módulo de Retorno de Pacientes"
-              requiredPlan="Pro"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
-        return <RecallView data={data} clinicName={clinicName} patients={patients} />;
+        return <RecallView data={data} clinicName={clinicName} patients={patientsForUser} />;
       case 'Mensagens':
-        if (currentPlanId === 'Lite') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Módulo de Mensagens Automáticas"
-              requiredPlan="Pro"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
         if (!hasModule('Mensagens')) {
           return (
             <div className="p-8 text-center bg-white rounded-2xl border border-slate-100 shadow-sm max-w-md mx-auto my-12">
@@ -2460,23 +2436,13 @@ export default function App() {
         return (
           <MessagesView 
             data={data} 
-            patients={patients} 
+            patients={patientsForUser} 
             clinicName={clinicName} 
             db={db} 
             currentUser={currentUser}
           />
         );
       case 'Documentos':
-        if (currentPlanId === 'Lite') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Gerador Digital de Receitas, Atestados e Prontuários"
-              requiredPlan="Pro"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
         return <DocumentsView 
           data={data} 
           users={users} 
@@ -2489,18 +2455,18 @@ export default function App() {
         return (
           <PatientsView 
             data={filteredData} 
-            patients={patients}
+            patients={patientsForUser}
             onOpenChart={(id) => { setSelectedPatientId(id); setSubPage('Prontuario'); }}
             onOpenEdit={(id) => { setSelectedPatientId(id); setSubPage('Editar'); }}
             onDelete={(id) => {
-              const p = patients.find(pat => pat.id === id);
+              const p = patientsForUser.find(pat => pat.id === id);
               if (p) setPatientToDelete(p);
             }}
             currentUserRole={currentUser?.role}
             canSeeFinancials={canSeeFinancials}
             onAdd={() => setSubPage('Cadastrar')}
             onViewDetail={(p) => {
-              const fullInfo = patients.find(pat => pat.name === p.name);
+              const fullInfo = patientsForUser.find(pat => pat.name === p.name);
               const patientRecords = data.filter(r => r.paciente === p.name);
               const sortedRecords = [...patientRecords].filter(r => r.data && isValid(parseISO(r.data)))
                 .sort((a,b) => parseISO(b.data).getTime() - parseISO(a.data).getTime());
@@ -2538,38 +2504,7 @@ export default function App() {
           onEditEmail={(record) => setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id })}
         />;
       case 'Financeiro':
-        if (currentPlanId === 'Lite') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Módulo de Análise Financeira, DRE e Contas"
-              requiredPlan="Pro"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
-        return canAccessFinance ? <FinanceView data={filteredData} patients={patients} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
-      case 'Equipe':
-        if (currentPlanId === 'Lite') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Gestão Multiprofissional e Segurança"
-              requiredPlan="Pro"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
-        return <TeamView 
-          data={filteredData} 
-          users={users} 
-          currentUser={currentUser} 
-          onViewAgenda={(doctorName) => {
-            setFilterDentista(doctorName);
-            setActivePage('Agenda');
-          }}
-          onDeleteUser={handleDeleteUser}
-        />;
+        return canAccessFinance ? <FinanceView data={filteredData} patients={patientsForUser} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Administração':
         return canAccessAdmin ? (
           <AdminView 
@@ -2588,7 +2523,7 @@ export default function App() {
             deferredPrompt={deferredPrompt}
             onInstallPWA={handleInstallPWA}
             data={data}
-            patients={patients}
+            patients={patientsForUser}
             documents={documents}
             onRestore={handleRestoreData}
           />
@@ -2596,16 +2531,6 @@ export default function App() {
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
         );
       case 'Estoque':
-        if (currentPlanId === 'Lite' || currentPlanId === 'Pro') {
-          return (
-            <SaaSLockedFeatureView
-              featureName="Controle de Estoque de Alinhadores e Insumos"
-              requiredPlan="Platinum"
-              currentPlan={currentPlanId}
-              onUpgradeClick={() => setActivePage('Assinatura')}
-            />
-          );
-        }
         return <StockView currentUser={currentUser} />;
       case 'Assinatura':
         return (
@@ -2629,177 +2554,162 @@ export default function App() {
           />
         );
       default:
-        return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} />;
+        return <DashboardView filteredData={filteredData} upcomingAppointments={upcomingAppointments} onSendWhatsApp={handleWhatsAppReminder} onSendReminder={handleSendManualReminder} users={users} />;
     }
+  };
+
+  const renderDashboardBackground = () => {
+    const canSeeFinancials = hasModule('Financeiro');
+    return (
+      <div className="space-y-6 opacity-25 select-none pointer-events-none blur-[1px]">
+        {isLoadingData && (
+          <div className="flex items-center gap-3 bg-brand-cyan/10 border border-brand-cyan/20 p-3 rounded-xl">
+            <Activity className="w-4 h-4 text-brand-cyan animate-spin" />
+            <span className="text-[10px] font-bold text-brand-cyan uppercase tracking-widest">Sincronizando dados em tempo real...</span>
+          </div>
+        )}
+        <DashboardView 
+          filteredData={filteredData} 
+          upcomingAppointments={upcomingAppointments}
+          onSendWhatsApp={handleWhatsAppReminder} 
+          onSendReminder={handleSendManualReminder} 
+          canSeeFinancials={canSeeFinancials}
+          users={users}
+        />
+      </div>
+    );
   };
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans text-slate-900">
       {/* Sidebar para Desktop */}
       <aside className="hidden lg:flex flex-col w-64 h-screen bg-slate-800 border-r border-slate-700/50 sticky top-0 shrink-0 select-none z-50">
-        {/* Branding */}
-        <div className="p-4 border-b border-white/5 flex items-center gap-2.5 shrink-0">
-          {clinicLogo ? (
-            <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain brightness-110 contrast-110" />
-          ) : (
-            <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-              <Stethoscope className="h-4.5 w-4.5 text-white" />
+          {/* Branding */}
+          <div className="p-4 border-b border-white/5 flex items-center gap-2.5 shrink-0">
+            {clinicLogo ? (
+              <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain brightness-110 contrast-110" />
+            ) : (
+              <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+                <Stethoscope className="h-4.5 w-4.5 text-white" />
+              </div>
+            )}
+            <div className="flex flex-col min-w-0">
+              <span className="text-xs font-black text-white tracking-tight leading-none truncate">{clinicName}</span>
+              <span className="text-[9px] text-brand-cyan font-bold tracking-widest mt-0.5">ANALYTICS</span>
             </div>
-          )}
-          <div className="flex flex-col min-w-0">
-            <span className="text-xs font-black text-white tracking-tight leading-none truncate">{clinicName}</span>
-            <span className="text-[9px] text-brand-cyan font-bold tracking-widest mt-0.5">ANALYTICS</span>
           </div>
-        </div>
 
-        {/* Navigation vertical list */}
-        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-          {hasModule('Dashboard') && (
-            <SidebarNavItem 
-              icon={<LayoutDashboard className="w-4 h-4" />} 
-              label="Dashboard" 
-              active={activePage === 'Dashboard'} 
-              onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Pacientes') && (
-            <SidebarNavItem 
-              icon={<Users className="w-4 h-4" />} 
-              label="Pacientes" 
-              active={activePage === 'Pacientes'} 
-              onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Agenda') && (
-            <SidebarNavItem 
-              icon={<Calendar className="w-4 h-4" />} 
-              label="Agenda" 
-              active={activePage === 'Agenda'} 
-              onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Retorno') && (
-            <SidebarNavItem 
-              icon={<RotateCcw className="w-4 h-4" />} 
-              label="Retorno" 
-              active={activePage === 'Retorno'} 
-              isLocked={isModuleLockedBySaaS('Retorno')}
-              onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Mensagens') && (
-            <SidebarNavItem 
-              icon={<MessageSquare className="w-4 h-4" />} 
-              label="Mensagens" 
-              active={activePage === 'Mensagens'} 
-              isLocked={isModuleLockedBySaaS('Mensagens')}
-              onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Documentos') && (
-            <SidebarNavItem 
-              icon={<FileText className="w-4 h-4" />} 
-              label="Documentos" 
-              active={activePage === 'Documentos'} 
-              isLocked={isModuleLockedBySaaS('Documentos')}
-              onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Financeiro') && (
-            <SidebarNavItem 
-              icon={<DollarSign className="w-4 h-4" />} 
-              label="Financeiro" 
-              active={activePage === 'Financeiro'} 
-              isLocked={isModuleLockedBySaaS('Financeiro')}
-              onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Equipe') && (
-            <SidebarNavItem 
-              icon={<Stethoscope className="w-4 h-4" />} 
-              label="Equipe / Dentistas" 
-              active={activePage === 'Equipe'} 
-              isLocked={isModuleLockedBySaaS('Equipe')}
-              onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Estoque') && (
-            <SidebarNavItem 
-              icon={<Package className="w-4 h-4" />} 
-              label="Estoque & Suprimentos" 
-              active={activePage === 'Estoque'} 
-              isLocked={isModuleLockedBySaaS('Estoque')}
-              onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
-            />
-          )}
-          {hasModule('Administração') && (
-            <SidebarNavItem 
-              icon={<Activity className="w-4 h-4" />} 
-              label="Administração" 
-              active={activePage === 'Administração'} 
-              onClick={() => { setActivePage('Administração'); setSubPage(null); }}
-            />
-          )}
-          {currentUser?.role === 'Admin' && (
-            <SidebarNavItem 
-              icon={<Sparkles className="w-4 h-4 text-brand-cyan animate-pulse" />} 
-              label="Plano & Assinatura" 
-              active={activePage === 'Assinatura'} 
-              onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
-            />
-          )}
-          {(currentUser?.role === 'SuperAdmin' || currentUser?.username === 'administrador') && (
-            <SidebarNavItem 
-              icon={<Shield className="w-4 h-4 text-brand-cyan animate-pulse" />} 
-              label="Painel Central (SaaS)" 
-              active={activePage === 'SuperAdmin'} 
-              onClick={() => { setActivePage('SuperAdmin'); setSubPage(null); }}
-            />
-          )}
-        </div>
+          {/* Navigation vertical list */}
+          <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+            {hasModule('Dashboard') && (
+              <SidebarNavItem 
+                icon={<LayoutDashboard className="w-4 h-4" />} 
+                label="Dashboard" 
+                active={activePage === 'Dashboard'} 
+                onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Pacientes') && (
+              <SidebarNavItem 
+                icon={<Users className="w-4 h-4" />} 
+                label="Pacientes" 
+                active={activePage === 'Pacientes'} 
+                onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Agenda') && (
+              <SidebarNavItem 
+                icon={<Calendar className="w-4 h-4" />} 
+                label="Agenda" 
+                active={activePage === 'Agenda'} 
+                onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Retorno') && (
+              <SidebarNavItem 
+                icon={<RotateCcw className="w-4 h-4" />} 
+                label="Retorno" 
+                active={activePage === 'Retorno'} 
+                onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Mensagens') && (
+              <SidebarNavItem 
+                icon={<MessageSquare className="w-4 h-4" />} 
+                label="Mensagens" 
+                active={activePage === 'Mensagens'} 
+                onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Documentos') && (
+              <SidebarNavItem 
+                icon={<FileText className="w-4 h-4" />} 
+                label="Documentos" 
+                active={activePage === 'Documentos'} 
+                onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Financeiro') && (
+              <SidebarNavItem 
+                icon={<DollarSign className="w-4 h-4" />} 
+                label="Financeiro" 
+                active={activePage === 'Financeiro'} 
+                onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Estoque') && (
+              <SidebarNavItem 
+                icon={<Package className="w-4 h-4" />} 
+                label="Estoque & Suprimentos" 
+                active={activePage === 'Estoque'} 
+                onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+              />
+            )}
+            {hasModule('Administração') && (
+              <SidebarNavItem 
+                icon={<Activity className="w-4 h-4" />} 
+                label="Administração" 
+                active={activePage === 'Administração'} 
+                onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+              />
+            )}
+          </div>
 
-        {/* Bottom Section */}
-        <div className="p-3 border-t border-white/5 bg-slate-950/20 space-y-2.5 shrink-0">
-          {currentUser && (
-            <div className="px-2.5 py-2.5 mb-1 bg-white/5 rounded-xl flex items-center gap-2.5 shrink-0">
-              <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-[10px] font-bold text-slate-300 uppercase shrink-0">
-                {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+          {/* Bottom Section */}
+          <div className="p-3 border-t border-white/5 bg-slate-950/20 space-y-2.5 shrink-0">
+            {currentUser && (
+              <div className="px-2.5 py-2.5 mb-1 bg-white/5 rounded-xl flex items-center gap-2.5 shrink-0">
+                <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-[10px] font-bold text-slate-300 uppercase shrink-0">
+                  {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+                </div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-xs font-bold text-slate-200 leading-tight truncate">{currentUser.name}</span>
+                  <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider leading-normal truncate">
+                    {currentUser.role}
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-xs font-bold text-slate-200 leading-tight truncate">{currentUser.name}</span>
-                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider leading-normal truncate">
-                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
-                </span>
-              </div>
-            </div>
-          )}
+            )}
 
-          {currentUser?.isTrial && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300 text-[9px] font-bold">
-              <Sparkles className="w-3 h-3 text-amber-400 animate-pulse shrink-0" />
-              <span className="truncate">Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
-            </div>
-          )}
+            <button 
+              type="button"
+              onClick={() => setShowKeyboardShortcuts(true)}
+              className="w-full flex items-center justify-center gap-2 py-2 bg-slate-800 text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-700/80 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+              title="Ver atalhos de teclado (Ctrl + K)"
+            >
+              <Keyboard className="w-3.5 h-3.5 text-brand-cyan" />
+              <span>Atalhos de Teclado</span>
+            </button>
 
-          <button 
-            type="button"
-            onClick={() => setShowKeyboardShortcuts(true)}
-            className="w-full flex items-center justify-center gap-2 py-2 bg-slate-800 text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-700/80 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
-            title="Ver atalhos de teclado (Ctrl + K)"
-          >
-            <Keyboard className="w-3.5 h-3.5 text-brand-cyan" />
-            <span>Atalhos de Teclado</span>
-          </button>
-
-          <button 
-            onClick={handleLogout}
-            className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-400 rounded-lg border border-rose-500/20 hover:bg-rose-500/20 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Sair do Sistema</span>
-          </button>
-        </div>
-      </aside>
+            <button 
+              onClick={handleLogout}
+              className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-400 rounded-lg border border-rose-500/20 hover:bg-rose-500/20 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sair do Sistema</span>
+            </button>
+          </div>
+        </aside>
 
       {/* Conteúdo Principal (Direita) */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -2861,179 +2771,156 @@ export default function App() {
 
       {/* Header (apenas Mobile) */}
       <header className="lg:hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
-        <div className="flex items-center gap-2 md:gap-3 shrink-0">
-          <button 
-            onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="p-1.5 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
-          >
-            {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-          </button>
-
-          <div className="flex items-center gap-2">
-            {clinicLogo ? (
-              <img src={clinicLogo} alt={clinicName} className="h-7 max-w-[130px] object-contain" />
-            ) : (
-              <div className="w-7 h-7 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-                <Stethoscope className="h-4.5 w-4.5 text-white" />
-              </div>
-            )}
-            <h1 className="text-sm md:text-base font-bold text-slate-800 tracking-tight hidden xs:block">
-              {clinicName} <span className="text-brand-cyan font-normal">Analytics</span>
-            </h1>
-            {currentUser?.isTrial && (
-              <div className="hidden xl:flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-full text-amber-700 text-[8.5px] font-black uppercase tracking-wider ml-1">
-                <Sparkles className="w-2.5 h-2.5 text-amber-500 animate-pulse" />
-                <span>Teste Grátis ({currentUser.trialPlan || 'Pro'})</span>
-              </div>
-            )}
-          </div>
-          
-          {currentUser && (
-            <div className="hidden xl:flex items-center gap-2 pl-3 border-l border-slate-100 shrink-0">
-              <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-500 border border-slate-200 uppercase">
-                {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
-              </div>
-              <div className="flex flex-col">
-                <span className="text-[10px] font-bold text-slate-700 leading-tight">{currentUser.name}</span>
-                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-tighter leading-none">
-                  {currentUser.role} {currentUser.isTrial && '(Trial)'}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1 lg:gap-2">
-          {/* RealTime Clock - Topo */}
-          <div className="hidden xl:flex items-center mr-1">
-            <RealTimeClock />
-          </div>
-
-          {/* Desktop Navigation */}
-          <nav className="hidden lg:flex items-center gap-0.5">
-            {hasModule('Dashboard') && (
-              <RibbonItem 
-                icon={<LayoutDashboard className="w-3.5 h-3.5" />} 
-                label="Dashboard" 
-                active={activePage === 'Dashboard'} 
-                onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Pacientes') && (
-              <RibbonItem 
-                icon={<Users className="w-3.5 h-3.5" />} 
-                label="Pacientes" 
-                active={activePage === 'Pacientes'} 
-                onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Agenda') && (
-              <RibbonItem 
-                icon={<Calendar className="w-3.5 h-3.5" />} 
-                label="Agenda" 
-                active={activePage === 'Agenda'} 
-                onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Retorno') && (
-              <RibbonItem 
-                icon={<RotateCcw className="w-3.5 h-3.5" />} 
-                label="Retorno" 
-                active={activePage === 'Retorno'} 
-                isLocked={isModuleLockedBySaaS('Retorno')}
-                onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Mensagens') && (
-              <RibbonItem 
-                icon={<MessageSquare className="w-3.5 h-3.5" />} 
-                label="Mensagens" 
-                active={activePage === 'Mensagens'} 
-                isLocked={isModuleLockedBySaaS('Mensagens')}
-                onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Documentos') && (
-              <RibbonItem 
-                icon={<FileText className="w-3.5 h-3.5" />} 
-                label="Documentos" 
-                active={activePage === 'Documentos'} 
-                isLocked={isModuleLockedBySaaS('Documentos')}
-                onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Financeiro') && (
-              <RibbonItem 
-                icon={<DollarSign className="w-3.5 h-3.5" />} 
-                label="Financeiro" 
-                active={activePage === 'Financeiro'} 
-                isLocked={isModuleLockedBySaaS('Financeiro')}
-                onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Equipe') && (
-              <RibbonItem 
-                icon={<Stethoscope className="w-3.5 h-3.5" />} 
-                label="Equipe" 
-                active={activePage === 'Equipe'} 
-                isLocked={isModuleLockedBySaaS('Equipe')}
-                onClick={() => { setActivePage('Equipe'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Estoque') && (
-              <RibbonItem 
-                icon={<Package className="w-3.5 h-3.5" />} 
-                 label="Estoque" 
-                active={activePage === 'Estoque'} 
-                isLocked={isModuleLockedBySaaS('Estoque')}
-                onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Administração') && (
-              <RibbonItem 
-                icon={<Activity className="w-3.5 h-3.5" />} 
-                label="Adm" 
-                active={activePage === 'Administração'} 
-                onClick={() => { setActivePage('Administração'); setSubPage(null); }}
-              />
-            )}
-            {currentUser?.role === 'Admin' && (
-              <RibbonItem 
-                icon={<Sparkles className="w-3.5 h-3.5" />} 
-                label="Assinatura" 
-                active={activePage === 'Assinatura'} 
-                onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
-              />
-            )}
-          </nav>
-
-          <div className="w-px h-6 bg-slate-100 mx-0.5 shrink-0" />
-          
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2 md:gap-3 shrink-0">
             <button 
-              onClick={() => {
-                const url = window.location.origin + window.location.pathname + '?booking=true';
-                navigator.clipboard.writeText(url);
-                alert('Link de agendamento online copiado!');
-                setIsPublicBooking(true);
-              }}
-              className="p-2 bg-brand-cyan/10 border border-brand-cyan/20 rounded-xl text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shadow-sm hover:shadow-md"
-              title="Copiar Link e Ver Tela de Agendamento"
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="p-1.5 lg:hidden text-slate-500 hover:bg-slate-50 rounded-lg transition-colors"
             >
-              <Monitor className="w-5 h-5 transition-transform group-hover:scale-110" />
+              {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
-          </div>
-        </div>
 
-        <button 
-            onClick={handleLogout}
-            className="flex flex-col items-center justify-center px-4 py-1.5 bg-rose-50 text-rose-600 rounded border border-rose-100 hover:bg-rose-100 transition-all cursor-pointer group min-w-[55px] shrink-0 active:scale-95"
-            title="Sair do Sistema"
-          >
-            <LogOut className="w-4 h-4 group-hover:scale-110 transition-transform" />
-            <span className="text-[8px] uppercase font-black tracking-widest mt-1">Sair</span>
-          </button>
-      </header>
+            <div className="flex items-center gap-2">
+              {clinicLogo ? (
+                <img src={clinicLogo} alt={clinicName} className="h-7 max-w-[130px] object-contain" />
+              ) : (
+                <div className="w-7 h-7 bg-brand-cyan rounded flex items-center justify-center shrink-0">
+                  <Stethoscope className="h-4.5 w-4.5 text-white" />
+                </div>
+              )}
+              <h1 className="text-sm md:text-base font-bold text-slate-800 tracking-tight hidden xs:block">
+                {clinicName} <span className="text-brand-cyan font-normal">Analytics</span>
+              </h1>
+            </div>
+            
+            {currentUser && (
+              <div className="hidden xl:flex items-center gap-2 pl-3 border-l border-slate-100 shrink-0">
+                <div className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-[9px] font-bold text-slate-500 border border-slate-200 uppercase">
+                  {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-slate-700 leading-tight">{currentUser.name}</span>
+                  <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-tighter leading-none">
+                    {currentUser.role}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 lg:gap-2">
+            {/* RealTime Clock - Topo */}
+            <div className="hidden xl:flex items-center mr-1">
+              <RealTimeClock />
+            </div>
+
+            {/* Desktop Navigation */}
+            <nav className="hidden lg:flex items-center gap-0.5">
+              {hasModule('Dashboard') && (
+                <RibbonItem 
+                  icon={<LayoutDashboard className="w-3.5 h-3.5" />} 
+                  label="Dashboard" 
+                  active={activePage === 'Dashboard'} 
+                  onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Pacientes') && (
+                <RibbonItem 
+                  icon={<Users className="w-3.5 h-3.5" />} 
+                  label="Pacientes" 
+                  active={activePage === 'Pacientes'} 
+                  onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Agenda') && (
+                <RibbonItem 
+                  icon={<Calendar className="w-3.5 h-3.5" />} 
+                  label="Agenda" 
+                  active={activePage === 'Agenda'} 
+                  onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Retorno') && (
+                <RibbonItem 
+                  icon={<RotateCcw className="w-3.5 h-3.5" />} 
+                  label="Retorno" 
+                  active={activePage === 'Retorno'} 
+                  isLocked={isModuleLockedBySaaS('Retorno')}
+                  onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Mensagens') && (
+                <RibbonItem 
+                  icon={<MessageSquare className="w-3.5 h-3.5" />} 
+                  label="Mensagens" 
+                  active={activePage === 'Mensagens'} 
+                  isLocked={isModuleLockedBySaaS('Mensagens')}
+                  onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Documentos') && (
+                <RibbonItem 
+                  icon={<FileText className="w-3.5 h-3.5" />} 
+                  label="Documentos" 
+                  active={activePage === 'Documentos'} 
+                  isLocked={isModuleLockedBySaaS('Documentos')}
+                  onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Financeiro') && (
+                <RibbonItem 
+                  icon={<DollarSign className="w-3.5 h-3.5" />} 
+                  label="Financeiro" 
+                  active={activePage === 'Financeiro'} 
+                  isLocked={isModuleLockedBySaaS('Financeiro')}
+                  onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Estoque') && (
+                <RibbonItem 
+                  icon={<Package className="w-3.5 h-3.5" />} 
+                   label="Estoque" 
+                  active={activePage === 'Estoque'} 
+                  isLocked={isModuleLockedBySaaS('Estoque')}
+                  onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+                />
+              )}
+              {hasModule('Administração') && (
+                <RibbonItem 
+                  icon={<Activity className="w-3.5 h-3.5" />} 
+                  label="Adm" 
+                  active={activePage === 'Administração'} 
+                  onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+                />
+              )}
+            </nav>
+
+            <div className="w-px h-6 bg-slate-100 mx-0.5 shrink-0" />
+            
+            <div className="flex items-center gap-1.5">
+              <button 
+                onClick={() => {
+                  const url = window.location.origin + window.location.pathname + '?booking=true';
+                  navigator.clipboard.writeText(url);
+                  alert('Link de agendamento online copiado!');
+                  setIsPublicBooking(true);
+                }}
+                className="p-2 bg-brand-cyan/10 border border-brand-cyan/20 rounded-xl text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shadow-sm hover:shadow-md"
+                title="Copiar Link e Ver Tela de Agendamento"
+              >
+                <Monitor className="w-5 h-5 transition-transform group-hover:scale-110" />
+              </button>
+            </div>
+          </div>
+
+          <button 
+              onClick={handleLogout}
+              className="flex flex-col items-center justify-center px-4 py-1.5 bg-rose-50 text-rose-600 rounded border border-rose-100 hover:bg-rose-100 transition-all cursor-pointer group min-w-[55px] shrink-0 active:scale-95"
+              title="Sair do Sistema"
+            >
+              <LogOut className="w-4 h-4 group-hover:scale-110 transition-transform" />
+              <span className="text-[8px] uppercase font-black tracking-widest mt-1">Sair</span>
+            </button>
+        </header>
 
       {/* Mobile Menu Overlay */}
       <AnimatePresence>
@@ -3072,16 +2959,9 @@ export default function App() {
                 {hasModule('Financeiro') && (
                   <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
                 )}
-                {hasModule('Equipe') && <MobileNavItem icon={<Stethoscope className="w-5 h-5" />} label="Equipe" active={activePage === 'Equipe'} onClick={() => { setActivePage('Equipe'); setIsMenuOpen(false); }} />}
                 {hasModule('Estoque') && <MobileNavItem icon={<Package className="w-5 h-5" />} label="Estoque & Suprimentos" active={activePage === 'Estoque'} onClick={() => { setActivePage('Estoque'); setIsMenuOpen(false); }} />}
                 {hasModule('Administração') && (
                   <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
-                )}
-                {currentUser?.role === 'Admin' && (
-                  <MobileNavItem icon={<Sparkles className="w-5 h-5 text-brand-cyan" />} label="Plano & Assinatura" active={activePage === 'Assinatura'} onClick={() => { setActivePage('Assinatura'); setIsMenuOpen(false); }} />
-                )}
-                {(currentUser?.role === 'SuperAdmin' || currentUser?.username === 'administrador') && (
-                  <MobileNavItem icon={<Shield className="w-5 h-5 text-brand-cyan" />} label="Painel Central (SaaS)" active={activePage === 'SuperAdmin'} onClick={() => { setActivePage('SuperAdmin'); setIsMenuOpen(false); }} />
                 )}
               </div>
               
@@ -3099,137 +2979,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Filters Bar */}
-      {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && (
-        <nav className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 sticky top-[53px] md:top-[61px] lg:top-0 z-40 shrink-0">
-          <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
-            <div className="flex items-center gap-2">
-              <div className="relative group flex-1 md:flex-none">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-                <input 
-                  type="text" 
-                  placeholder="Buscar paciente..."
-                  className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
-                  value={searchPatient}
-                  onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 md:gap-4">
-              <div className="flex items-center gap-2 flex-1 md:flex-none">
-                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
-                <select 
-                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                  value={filterDateRange}
-                  onChange={(e) => {
-                    const val = e.target.value as any;
-                    setFilterDateRange(val);
-                    if (val === 'today') {
-                      setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
-                      setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
-                    } else if (val === 'month') {
-                      setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-                      setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
-                    } else if (val === 'last_month') {
-                      const lastMonth = subMonths(new Date(), 1);
-                      setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
-                      setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
-                    }
-                  }}
-                >
-                  <option value="month">Este Mês</option>
-                  <option value="last_month">Mês Passado</option>
-                  <option value="today">Hoje</option>
-                  <option value="custom">Customizado</option>
-                </select>
-
-                {filterDateRange === 'custom' && (
-                  <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
-                    <input 
-                      type="date"
-                      className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                      value={filterStartDate}
-                      onChange={(e) => setFilterStartDate(e.target.value)}
-                    />
-                    <span className="text-[10px] text-slate-400">até</span>
-                    <input 
-                      type="date"
-                      className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                      value={filterEndDate}
-                      onChange={(e) => setFilterEndDate(e.target.value)}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2 flex-1 md:flex-none">
-                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
-                <select 
-                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                  value={filterProcedure}
-                  onChange={(e) => setFilterProcedure(e.target.value)}
-                >
-                  {procedures.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2 flex-1 md:flex-none">
-                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
-                <select 
-                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                >
-                  {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-
-              <div className="flex items-center gap-2 flex-1 md:flex-none">
-                <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
-                <select 
-                  className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                  value={filterPayment}
-                  onChange={(e) => setFilterPayment(e.target.value)}
-                >
-                  {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-
-              {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-                <div className="flex items-center gap-2 flex-1 md:flex-none">
-                  <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
-                  <select 
-                    className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
-                    value={filterDentista}
-                    onChange={(e) => setFilterDentista(e.target.value)}
-                  >
-                    {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Relógio e Ícone (ao lado contrário do menu de busca no topo) */}
-          <div className="hidden lg:flex items-center gap-3 shrink-0 self-end lg:self-auto pl-4 border-l border-slate-200/60 ml-2">
-            <RealTimeClock />
-            
-            <button 
-              onClick={() => {
-                const url = window.location.origin + window.location.pathname + '?booking=true';
-                navigator.clipboard.writeText(url);
-                alert('Link de agendamento online copiado!');
-                setIsPublicBooking(true);
-              }}
-              className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
-              title="Copiar Link de Agendamento"
-            >
-              <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
-            </button>
-          </div>
-        </nav>
-      )}
+      {/* Filters removed from main background area because they are now placed permanently inside the active modal windows */}
 
       <main className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
@@ -3291,39 +3041,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Global Account Status Banner - visible on all pages ONLY for trial accounts, otherwise empty */}
-            {isTrialActive && (
-              <div 
-                id="global-trial-status-banner" 
-                className="bg-amber-550/10 border border-amber-500/20 p-3.5 px-5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4 text-slate-800 shadow-sm animate-fade-in text-xs shrink-0 select-none text-left"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-amber-500/15 text-amber-600 rounded-xl shrink-0">
-                    <Sparkles className="w-4 h-4 animate-pulse" />
-                  </div>
-                  <div>
-                    <h3 className="font-extrabold text-xs text-amber-800 uppercase tracking-wider flex flex-wrap items-center gap-2">
-                      Status da Conta
-                      <span className="text-[10px] bg-amber-500/20 text-amber-700 px-2 py-0.5 rounded-md border border-amber-500/30 font-black normal-case font-mono tracking-normal">
-                        Modo de Experiência: {currentPlanId}
-                      </span>
-                    </h3>
-                    <p className="text-[11px] text-slate-600 font-medium mt-1 leading-normal">
-                      Seu período de teste grátis (Trial) expira em <strong className="text-amber-800 font-black text-[13px] font-mono leading-none">{trialDaysRemaining}</strong> dias. Regularize sua assinatura na aba <strong className="text-amber-805 font-bold">Plano & Assinatura</strong> para manter o cadastro ativo.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setActivePage('Assinatura'); setSubPage(null); }}
-                  className="bg-amber-600 hover:bg-amber-700 border border-amber-700 text-white font-extrabold px-4 py-2 rounded-xl text-xs transition-all active:scale-95 cursor-pointer shrink-0 shadow-sm shadow-amber-650/10"
-                >
-                  Regularizar Assinatura
-                </button>
-              </div>
-            )}
-
-            {renderContent()}
+            {activePage === 'Dashboard' ? renderContent() : renderDashboardBackground()}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -3335,6 +3053,215 @@ export default function App() {
       />
 
       {renderLegal()}
+
+      {activePage !== 'Dashboard' && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
+          <div className="bg-slate-50 w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 shadow-2xl relative">
+            {activePage === 'SuperAdmin' ? (
+              <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white px-5 py-3.5 flex items-center justify-between shrink-0 select-none border-b border-white/10 font-sans relative overflow-hidden">
+                <div className="absolute right-0 top-0 h-full w-1/3 bg-radial-gradient opacity-10 pointer-events-none" />
+                <div className="flex items-center gap-2.5 relative z-101">
+                  <div className="w-8 h-8 rounded-lg bg-brand-cyan/20 flex items-center justify-center text-brand-cyan border border-brand-cyan/35 animate-in zoom-in duration-300">
+                    <Shield className="w-4.5 h-4.5 animate-pulse text-brand-cyan" />
+                  </div>
+                  <div className="text-left">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-black text-white leading-none uppercase tracking-wider">
+                        Painel Central SaaS
+                      </h2>
+                      <span className="text-[8px] bg-brand-cyan/20 text-brand-cyan font-bold tracking-widest px-1.5 py-0.5 rounded border border-brand-cyan/35">
+                        PROVEDOR CENTRAL
+                      </span>
+                    </div>
+                    <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">Sistemas & Clientes OdontoDash</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 relative z-101">
+                  <button 
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="bg-white/10 hover:bg-white/15 px-3 py-1.5 rounded-lg border border-white/15 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer text-white hover:scale-105 active:scale-95"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-brand-cyan animate-spin-slow" /> Forçar Sincronização
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white transition-all text-xs font-black rounded-lg border border-rose-500/30 cursor-pointer shadow-sm active:scale-95"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-white" />
+                    <span>Fazer Logout</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-800 text-white px-5 py-3.5 flex items-center justify-between shrink-0 select-none border-b border-slate-700/60 font-sans">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-brand-cyan/20 flex items-center justify-center text-brand-cyan border border-brand-cyan/35 animate-in zoom-in duration-300">
+                    <Stethoscope className="w-4.5 h-4.5 animate-pulse" />
+                  </div>
+                  <div className="text-left">
+                    <h2 className="text-sm font-black text-white leading-none uppercase tracking-wider">
+                      {activePage === 'Estoque' ? 'Estoque & Suprimentos' : activePage}
+                    </h2>
+                    <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">{clinicName}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 hover:text-white transition-all text-xs font-black rounded-lg border border-slate-600 cursor-pointer shadow-sm active:scale-95"
+                >
+                  <X className="w-3.5 h-3.5 text-brand-cyan font-black" />
+                  <span>Fechar Janela</span>
+                </button>
+              </div>
+            )}
+
+            {/* Smart Search Filters, Date/Time and Booking Copier directly inside the top in a fixed/sticky way */}
+            {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && (
+              <div className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 shrink-0 shadow-sm z-30 font-sans">
+                <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="relative group flex-1 md:flex-none">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
+                      <input 
+                        type="text" 
+                        placeholder="Buscar paciente..."
+                        className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
+                        value={searchPatient}
+                        onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3 md:gap-4">
+                    <div className="flex items-center gap-2 flex-1 md:flex-none">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+                      <select 
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
+                        value={filterDateRange}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          setFilterDateRange(val);
+                          if (val === 'today') {
+                            setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
+                            setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
+                          } else if (val === 'month') {
+                            setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+                            setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+                          } else if (val === 'last_month') {
+                            const lastMonth = subMonths(new Date(), 1);
+                            setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
+                            setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
+                          }
+                        }}
+                      >
+                        <option value="month">Este Mês</option>
+                        <option value="last_month">Mês Passado</option>
+                        <option value="today">Hoje</option>
+                        <option value="custom">Customizado</option>
+                      </select>
+
+                      {filterDateRange === 'custom' && (
+                        <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
+                          <input 
+                            type="date"
+                            className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                            value={filterStartDate}
+                            onChange={(e) => setFilterStartDate(e.target.value)}
+                          />
+                          <span className="text-[10px] text-slate-400">até</span>
+                          <input 
+                            type="date"
+                            className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
+                            value={filterEndDate}
+                            onChange={(e) => setFilterEndDate(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 md:flex-none">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
+                      <select 
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        value={filterProcedure}
+                        onChange={(e) => setFilterProcedure(e.target.value)}
+                      >
+                        {procedures.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 md:flex-none">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
+                      <select 
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        value={filterStatus}
+                        onChange={(e) => setFilterStatus(e.target.value)}
+                      >
+                        {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 md:flex-none">
+                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
+                      <select 
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        value={filterPayment}
+                        onChange={(e) => setFilterPayment(e.target.value)}
+                      >
+                        {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
+                      <div className="flex items-center gap-2 flex-1 md:flex-none">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
+                        <select 
+                          className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                          value={filterDentista}
+                          onChange={(e) => setFilterDentista(e.target.value)}
+                        >
+                          {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Relógio e Ícone */}
+                <div className="flex items-center gap-3 shrink-0 self-end md:self-auto pl-4 md:border-l md:border-slate-200/60 ml-2">
+                  <RealTimeClock />
+                  
+                  <button 
+                    onClick={() => {
+                      const url = window.location.origin + window.location.pathname + '?booking=true';
+                      navigator.clipboard.writeText(url);
+                      alert('Link de agendamento online copiado!');
+                      setIsPublicBooking(true);
+                    }}
+                    className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
+                    title="Copiar Link de Agendamento"
+                  >
+                    <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className={cn(
+              "flex-1 overflow-y-auto",
+              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin'
+                ? "p-0 space-y-0 h-full flex flex-col overflow-hidden"
+                : "p-4 sm:p-6 lg:p-8 space-y-6"
+            )}>
+              {renderContent()}
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </div>
   );
@@ -4650,18 +4577,25 @@ function DashboardView({
   upcomingAppointments = [],
   onSendWhatsApp,
   onSendReminder,
-  canSeeFinancials = true
+  canSeeFinancials = true,
+  users = []
 }: { 
   filteredData: DentalRecord[];
   upcomingAppointments?: DentalRecord[];
   onSendWhatsApp: (record: DentalRecord) => void;
   onSendReminder: (record: DentalRecord) => void;
   canSeeFinancials?: boolean;
+  users?: any[];
 }) {
+  // Get all doctors/dentists
+  const doctors = useMemo(() => {
+    return users.filter((u: any) => u.role === 'Dentista');
+  }, [users]);
+
   // Metrics
   const metrics = useMemo(() => {
     const activeRecords = filteredData.filter(r => r.status !== 'Cancelado');
-    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
     
     const totalValue = realizedRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
     const uniquePatients = new Set(realizedRecords.map(r => r.paciente).filter(Boolean)).size;
@@ -4684,7 +4618,7 @@ function DashboardView({
   // Chart Data: Monthly Billing
   const monthlyData = useMemo(() => {
     const months: { [key: string]: number } = {};
-    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
     realizedRecords.slice(0).reverse().forEach(r => {
       if (r.data && isValid(parseISO(r.data))) {
         const month = format(parseISO(r.data), 'MMM', { locale: ptBR });
@@ -4697,7 +4631,7 @@ function DashboardView({
   // Chart Data: Productivity by Dentist
   const dentistProductivity = useMemo(() => {
     const dentists: { [key: string]: number } = {};
-    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
     realizedRecords.forEach(r => {
       const dentista = r.dentista || 'Não definido';
       dentists[dentista] = (dentists[dentista] || 0) + (Number(r.valor) || 0);
@@ -4723,7 +4657,7 @@ function DashboardView({
   // Chart Data: Procedure Distribution
   const procedureDistribution = useMemo(() => {
     const counts: { [key: string]: number } = {};
-    const realizedRecords = filteredData.filter(r => r.status === 'Realizado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
     realizedRecords.forEach(r => {
       counts[r.procedimento] = (counts[r.procedimento] || 0) + 1;
     });
@@ -4784,6 +4718,91 @@ function DashboardView({
           icon={<AlertCircle className="w-4 h-4" />}
         />
       </div>
+
+      {/* Painel de Status dos Médicos (Tempo Real) */}
+      <section className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan shrink-0">
+              <Stethoscope className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                Status dos Médicos em Tempo Real
+              </h2>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Visão do Painel de Recepção</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest bg-slate-50 border border-slate-100 px-2 py-1 rounded">Sincronizado</span>
+          </div>
+        </div>
+
+        {doctors.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center text-slate-400">
+            <Users className="w-8 h-8 mb-2 text-slate-300" />
+            <p className="text-xs font-black uppercase tracking-widest">Nenhum médico dentista cadastrado.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {doctors.map((doctor) => {
+              const isBusy = doctor.availability === 'em_atendimento';
+              const specialty = (doctor.role === 'Admin' || doctor.name.includes('Ana')) ? 'Ortodontia' : 'Clínica Geral';
+              return (
+                <div 
+                  key={doctor.id} 
+                  className={cn(
+                    "border rounded-2xl p-4 flex items-center gap-4 transition-all hover:shadow-sm duration-300 relative",
+                    isBusy 
+                      ? "border-cyan-200 bg-[#f0f9ff]/70 shadow-sm shadow-cyan-100/40" 
+                      : "border-slate-200 bg-slate-50/30"
+                  )}
+                >
+                  <div className="relative shrink-0">
+                    <div className={cn(
+                      "w-12 h-12 rounded-2xl flex items-center justify-center font-black text-sm border transition-all duration-300",
+                      isBusy 
+                        ? "bg-brand-cyan/15 text-brand-cyan border-brand-cyan/20" 
+                        : "bg-slate-50 text-slate-500 border-slate-100"
+                    )}>
+                      {doctor.name.split(' ').pop().charAt(0).toUpperCase()}
+                    </div>
+                    <span className={cn(
+                      "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white",
+                      isBusy ? "bg-cyan-500 animate-pulse" : "bg-emerald-500"
+                    )} />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm font-black text-slate-900 leading-tight truncate" title={doctor.name}>{doctor.name}</h3>
+                    <p className="text-[9px] text-slate-400 uppercase font-black tracking-wider mt-0.5 mb-1.5">{specialty}</p>
+                    
+                    <span className={cn(
+                      "text-[9px] font-black uppercase tracking-wider py-0.5 px-2 rounded-md border inline-block transition-colors duration-300",
+                      isBusy 
+                        ? "bg-cyan-50 text-cyan-600 border-cyan-100" 
+                        : "bg-emerald-50/50 text-emerald-600 border-emerald-100/50"
+                    )}>
+                      {isBusy ? "Em Atendimento" : "Disponível"}
+                    </span>
+
+                    {isBusy && doctor.currentPatient && (
+                      <p className="text-[10px] text-cyan-700/90 mt-2 font-medium truncate flex items-center gap-1 bg-cyan-100/30 px-2 py-0.5 rounded-lg border border-cyan-100/50 animate-pulse">
+                        <User className="w-3 h-3 shrink-0" />
+                        <span className="truncate">Pac: <strong className="font-extrabold">{doctor.currentPatient}</strong></span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Próximos Agendamentos Section */}
@@ -4856,7 +4875,7 @@ function DashboardView({
         )}>
           <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6">Mix de Procedimentos</h2>
           <div className="h-[180px]">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie data={procedureDistribution} cx="50%" cy="50%" innerRadius={45} outerRadius={65} paddingAngle={4} dataKey="value">
                   {procedureDistribution.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -4891,7 +4910,7 @@ function DashboardView({
               </div>
             </div>
             <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={monthlyData}>
                   <defs>
                     <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
@@ -4917,9 +4936,9 @@ function DashboardView({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {canSeeFinancials && (
           <section className="bg-white p-6 border border-slate-200 rounded-[32px] shadow-sm h-[320px] lg:col-span-4">
-            <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6">Produção por Equipe</h2>
+            <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-6">Faturamento por Dentista</h2>
             <div className="h-[200px]">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+              <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={dentistProductivity} layout="vertical" margin={{ left: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                   <XAxis type="number" hide />
@@ -5413,121 +5432,202 @@ function AgendaView({
   onSendWhatsApp: (record: DentalRecord) => void;
   onEditEmail: (record: DentalRecord) => void;
 }) {
-  const upcoming = data
-    .filter(r => r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento')
-    .sort((a, b) => {
-      const dateA = new Date(`${a.data}T${a.horario || '00:00'}`).getTime();
-      const dateB = new Date(`${b.data}T${b.horario || '00:00'}`).getTime();
-      return dateA - dateB;
-    });
+  const todayStr = useMemo(() => {
+    const local = new Date();
+    const offset = local.getTimezoneOffset();
+    const localDate = new Date(local.getTime() - (offset * 60 * 1000));
+    return localDate.toISOString().split('T')[0];
+  }, []);
+
+  // Atuais: agendamentos de hoje (inclusive realizados) ou de datas passadas que ainda estão pendentes
+  const currentApts = useMemo(() => {
+    return data
+      .filter(r => {
+        if (r.data === todayStr) {
+          return r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento' || r.status === 'Realizado' || r.status === 'Concluído';
+        }
+        return r.data < todayStr && (r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento');
+      })
+      .sort((a, b) => {
+        if (a.data !== b.data) return a.data.localeCompare(b.data);
+        return (a.horario || '00:00').localeCompare(b.horario || '00:00');
+      });
+  }, [data, todayStr]);
+
+  // Próximos agendamentos: agendamentos futuros
+  const upcomingApts = useMemo(() => {
+    return data
+      .filter(r => r.data > todayStr && (r.status === 'Agendado' || r.status === 'Pendente' || r.status === 'Em Atendimento'))
+      .sort((a, b) => {
+        const dateA = new Date(`${a.data}T${a.horario || '00:00'}`).getTime();
+        const dateB = new Date(`${b.data}T${b.horario || '00:00'}`).getTime();
+        return dateA - dateB;
+      });
+  }, [data, todayStr]);
+
   const cancelled = fullData.filter(r => r.status === 'Cancelado').sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
-  return (
-    <section className="bg-white border border-slate-200 overflow-hidden flex flex-col">
-      <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex justify-between items-center text-xs">
-        <h2 className="font-bold text-slate-600 uppercase tracking-widest flex items-center gap-2">
-          <Calendar className="w-3.5 h-3.5 text-brand-cyan" />
-          Próximos Agendamentos
-        </h2>
-        <div className="flex gap-2">
-          <button 
-            onClick={onAdd}
-            className="text-[10px] bg-brand-cyan text-white px-3 py-1 font-bold rounded cursor-pointer hover:bg-brand-cyan-dark transition-colors shadow-sm active:scale-95"
-          >
-            Novo Agendamento
-          </button>
+  const renderAppointmentCard = (apt: DentalRecord) => (
+    <div key={apt.id} className={cn(
+      "border p-3 rounded flex gap-3 items-start relative hover:border-brand-cyan transition-all group",
+      apt.status === 'Em Atendimento' ? "bg-cyan-50/50 border-brand-cyan shadow-sm" : 
+      (apt.status === 'Realizado' || apt.status === 'Concluído') ? "bg-emerald-50/20 border-emerald-100 opacity-80" : "bg-slate-50/50 border-slate-100"
+    )}>
+      <div className="bg-white p-2 border border-slate-100 rounded text-center min-w-[55px] shadow-sm flex flex-col items-center">
+        <div className="text-[10px] text-slate-400 uppercase font-black tracking-tighter">
+          {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'MMM', { locale: ptBR }) : '...'}
+        </div>
+        <div className="text-base font-black text-slate-800 leading-none my-0.5">
+          {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'dd') : '-'}
+        </div>
+        <div className={cn(
+          "text-[9px] font-bold px-1 rounded-sm mt-1 ring-1",
+          (apt.status === 'Realizado' || apt.status === 'Concluído') 
+            ? "bg-emerald-100/15 text-emerald-600 ring-emerald-500/20" 
+            : "bg-brand-cyan/10 text-brand-cyan ring-brand-cyan/20"
+        )}>
+          {apt.horario || '--:--'}
         </div>
       </div>
-      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {upcoming.length === 0 ? (
-          <div className="col-span-full py-12 text-center text-slate-400">Nenhum agendamento pendente.</div>
-        ) : (
-          upcoming.slice(0, 12).map((apt) => (
-            <div key={apt.id} className={cn(
-              "border p-3 rounded flex gap-3 items-start relative hover:border-brand-cyan transition-all group",
-              apt.status === 'Em Atendimento' ? "bg-cyan-50/50 border-brand-cyan shadow-sm" : "bg-slate-50/50 border-slate-100"
-            )}>
-              <div className="bg-white p-2 border border-slate-100 rounded text-center min-w-[55px] shadow-sm flex flex-col items-center">
-                <div className="text-[10px] text-slate-400 uppercase font-black tracking-tighter">
-                  {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'MMM', { locale: ptBR }) : '...'}
-                </div>
-                <div className="text-base font-black text-slate-800 leading-none my-0.5">
-                  {apt.data && isValid(parseISO(apt.data)) ? format(parseISO(apt.data), 'dd') : '-'}
-                </div>
-                <div className="text-[9px] font-bold bg-brand-cyan/10 text-brand-cyan px-1 rounded-sm mt-1 ring-1 ring-brand-cyan/20">
-                  {apt.horario || '--:--'}
-                </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-slate-900 truncate">{apt.paciente}</div>
-                <div className="text-[10px] text-slate-500 uppercase tracking-tighter mb-1">{apt.procedimento}</div>
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-[10px] bg-white px-1.5 border border-slate-100 rounded text-slate-400 font-bold">{apt.dentista}</span>
-                  <StatusBadge status={apt.status} />
-                  <button 
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onSendWhatsApp(apt); }}
-                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-full transition-all cursor-pointer shadow-sm border border-emerald-100/50 active:scale-95 z-10"
-                    title="Enviar Lembrete por WhatsApp"
-                  >
-                    <MessageCircle className="w-3.5 h-3.5 pointer-events-none" />
-                  </button>
-                  <button 
-                    onClick={() => onSendReminder(apt)}
-                    className={cn(
-                      "p-1.5 transition-all rounded-full cursor-pointer border shadow-sm active:scale-95",
-                      (apt as any).reminderSent 
-                        ? "text-emerald-600 border-emerald-100 bg-emerald-50" 
-                        : "text-slate-400 border-slate-100 hover:bg-slate-50 hover:text-brand-cyan"
-                    )}
-                    title={(apt as any).reminderSent ? `E-mail enviado em: ${new Date((apt as any).reminderSentAt).toLocaleString()}` : "Enviar Lembrete por E-mail"}
-                  >
-                    <Mail className="w-3.5 h-3.5" />
-                  </button>
-                  <button 
-                    onClick={() => onEditEmail(apt)}
-                    className="p-1.5 text-slate-400 hover:text-brand-cyan hover:bg-slate-50 rounded-full transition-all cursor-pointer border border-slate-100 shadow-sm active:scale-95"
-                    title="Cadastrar/Editar E-mail do Paciente"
-                  >
-                    <MailOpen className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-bold text-slate-900 truncate">{apt.paciente}</div>
+        <div className="text-[10px] text-slate-500 uppercase tracking-tighter mb-1">{apt.procedimento}</div>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-[10px] bg-white px-1.5 border border-slate-100 rounded text-slate-400 font-bold">{apt.dentista}</span>
+          <StatusBadge status={apt.status} />
+          {(apt.status !== 'Realizado' && apt.status !== 'Concluído') && (
+            <>
+              <button 
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onSendWhatsApp(apt); }}
+                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-full transition-all cursor-pointer shadow-sm border border-emerald-100/50 active:scale-95 z-10"
+                title="Enviar Lembrete por WhatsApp"
+              >
+                <MessageCircle className="w-3.5 h-3.5 pointer-events-none" />
+              </button>
+              <button 
+                onClick={() => onSendReminder(apt)}
+                className={cn(
+                  "p-1.5 transition-all rounded-full cursor-pointer border shadow-sm active:scale-95",
+                  (apt as any).reminderSent 
+                    ? "text-emerald-600 border-emerald-100 bg-emerald-50" 
+                    : "text-slate-400 border-slate-100 hover:bg-slate-50 hover:text-brand-cyan"
+                )}
+                title={(apt as any).reminderSent ? `E-mail enviado em: ${new Date((apt as any).reminderSentAt).toLocaleString()}` : "Enviar Lembrete por E-mail"}
+              >
+                <Mail className="w-3.5 h-3.5" />
+              </button>
+              <button 
+                onClick={() => onEditEmail(apt)}
+                className="p-1.5 text-slate-400 hover:text-brand-cyan hover:bg-slate-50 rounded-full transition-all cursor-pointer border border-slate-100 shadow-sm active:scale-95"
+                title="Cadastrar/Editar E-mail do Paciente"
+              >
+                <MailOpen className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+        </div>
 
-                <div className="flex gap-2">
-                  {apt.status === 'Em Atendimento' ? (
-                    <button 
-                      onClick={() => onFinish(apt.id)}
-                      className="flex-1 bg-emerald-500 text-white text-[9px] font-bold uppercase py-1 rounded hover:bg-emerald-600 transition-colors cursor-pointer flex items-center justify-center gap-1"
-                    >
-                      <CheckCircle2 className="w-3 h-3" />
-                      Finalizar
-                    </button>
-                  ) : (
-                    <>
-                      <button 
-                        onClick={() => onStart(apt.id)}
-                        className="flex-1 bg-brand-cyan/10 hover:bg-brand-cyan hover:text-white text-brand-cyan text-[9px] font-bold uppercase py-1 rounded transition-colors cursor-pointer"
-                      >
-                        Iniciar
-                      </button>
-                      <button 
-                        onClick={() => onCancel(apt.id)}
-                        className="flex-1 bg-rose-50 hover:bg-rose-500 hover:text-white text-rose-500 text-[9px] font-bold uppercase py-1 rounded transition-colors cursor-pointer"
-                      >
-                        Cancelar
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-              <button className="text-slate-300 hover:text-brand-cyan cursor-pointer"><MoreVertical className="w-4 h-4" /></button>
+        <div className="flex gap-2">
+          {apt.status === 'Em Atendimento' ? (
+            <button 
+              onClick={() => onFinish(apt.id)}
+              className="flex-1 bg-emerald-500 text-white text-[9px] font-bold uppercase py-1 rounded hover:bg-emerald-600 transition-colors cursor-pointer flex items-center justify-center gap-1"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              Finalizar Atendimento
+            </button>
+          ) : (apt.status === 'Realizado' || apt.status === 'Concluído') ? (
+            <div className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Atendimento Concluído
             </div>
-          ))
-        )}
+          ) : (
+            <>
+              <button 
+                onClick={() => onStart(apt.id)}
+                className="flex-1 bg-brand-cyan/10 hover:bg-brand-cyan hover:text-white text-brand-cyan text-[9px] font-bold uppercase py-1 rounded transition-colors cursor-pointer"
+              >
+                Iniciar
+              </button>
+              <button 
+                onClick={() => onCancel(apt.id)}
+                className="flex-1 bg-rose-50 hover:bg-rose-500 hover:text-white text-rose-500 text-[9px] font-bold uppercase py-1 rounded transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {(apt.status !== 'Realizado' && apt.status !== 'Concluído') && (
+        <button className="text-slate-300 hover:text-brand-cyan cursor-pointer"><MoreVertical className="w-4 h-4" /></button>
+      )}
+    </div>
+  );
+
+  return (
+    <section className="bg-white border border-slate-200 overflow-hidden flex flex-col rounded-3xl shadow-sm">
+      {/* HEADER PRINCIPAL DA AGENDA */}
+      <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <Calendar className="w-5 h-5 text-brand-cyan" />
+          <div>
+            <h2 className="font-extrabold text-sm text-slate-800 uppercase tracking-tight">
+              Agenda do Sistema
+            </h2>
+            <p className="text-[10px] text-slate-400 font-medium">Controle e acompanhamento de consultas diárias e futuras</p>
+          </div>
+        </div>
+        <button 
+          onClick={onAdd}
+          className="text-xs bg-slate-900 text-white px-4 py-2 font-black rounded-xl cursor-pointer hover:bg-slate-800 transition-colors shadow-sm active:scale-95"
+        >
+          Novo Agendamento
+        </button>
+      </div>
+
+      <div className="p-6 space-y-8">
+        {/* SEÇÃO 1: AGENDAMENTOS ATUAIS & HOJE */}
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+            <Clock className="w-4 h-4 text-amber-500" />
+            <h3 className="font-extrabold text-xs text-slate-700 uppercase tracking-wider">
+              Agendamentos Atuais e Pendentes ({currentApts.length})
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {currentApts.length === 0 ? (
+              <div className="col-span-full py-8 text-center text-slate-400 text-xs font-semibold bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                Abaixo, nenhum agendamento hoje ou pendências.
+              </div>
+            ) : (
+              currentApts.map(renderAppointmentCard)
+            )}
+          </div>
+        </div>
+
+        {/* SEÇÃO 2: PRÓXIMOS AGENDAMENTOS */}
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+            <Calendar className="w-4 h-4 text-brand-cyan" />
+            <h3 className="font-extrabold text-xs text-slate-700 uppercase tracking-wider">
+              Próximos Agendamentos ({upcomingApts.length})
+            </h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {upcomingApts.length === 0 ? (
+              <div className="col-span-full py-8 text-center text-slate-400 text-xs font-semibold bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                Nenhum agendamento marcado para os próximos dias.
+              </div>
+            ) : (
+              upcomingApts.slice(0, 24).map(renderAppointmentCard)
+            )}
+          </div>
+        </div>
       </div>
 
       {cancelled.length > 0 && (
-        <div className="border-t border-slate-100 bg-slate-50/30 p-4">
+        <div className="border-t border-slate-100 bg-slate-50/30 p-6">
           <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cancelados Recentemente</h3>
           <div className="flex flex-wrap gap-2">
             {cancelled.slice(0, 5).map(c => (
@@ -7129,7 +7229,7 @@ function MedicalChartView({
   const [activeTab, setActiveTab] = useState(navItems[0].id);
 
   return (
-    <div className="flex flex-col h-full bg-slate-50/50 -m-4 md:-m-8 lg:-m-10">
+    <div className="flex flex-col h-full bg-slate-50/50">
       {/* Top Header/Bar for Prontuario */}
       <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-20 shadow-sm">
         <div className="flex items-center gap-3">
@@ -9236,7 +9336,7 @@ function AdminView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'backup'>('users');
 
-  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Equipe', 'Administração', 'Documentos'];
+  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Administração', 'Documentos'];
 
   const toggleModule = (module: string, currentModules: string[], setter: (m: string[]) => void) => {
     if (currentModules.includes(module)) {

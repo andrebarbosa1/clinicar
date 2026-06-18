@@ -502,53 +502,26 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
   };
 
   return (
-    <div className="space-y-6" id="super-admin-main-element">
-      
-      {/* SaaS Header Banner - compact & sticky */}
-      <div className="sticky top-0 z-40 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-3 px-5 rounded-2xl border border-white/10 text-white shadow-lg backdrop-blur-md relative overflow-hidden">
-        <div className="absolute right-0 top-0 h-full w-1/3 bg-radial-gradient opacity-10 pointer-events-none" />
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative z-10">
-          <div className="space-y-0.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[8px] bg-brand-cyan/20 text-brand-cyan font-bold tracking-widest px-2 py-0.5 rounded-md border border-brand-cyan/30">
-                PROVEDOR SAAS CENTRAL
-              </span>
-              <span className="text-[8px] bg-indigo-500/10 text-indigo-200 font-medium px-2 py-0.5 rounded-md border border-indigo-500/20">
-                LGPD COMPLIANT
-              </span>
-            </div>
-            <h1 className="text-base font-black text-white tracking-tight flex items-center gap-2">
-              <ShieldAlert className="w-5 h-5 text-brand-cyan animate-pulse" />
-              Painel Central SaaS
-            </h1>
+    <div className="h-full flex flex-col" id="super-admin-main-element">
+
+      {/* FIXED TOP MENU (TABS RIBBON) & ALERTS */}
+      <div className="sticky top-0 z-30 bg-slate-50 pt-4 pb-3 space-y-3 shrink-0 px-4 sm:px-6 lg:px-8 border-b border-slate-200/85">
+        {/* Success and Error Warnings */}
+        {successMsg && (
+          <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-4 rounded-2xl flex items-center gap-3 text-xs font-semibold shadow-sm animate-in fade-in duration-300">
+            <Check className="w-4.5 h-4.5 text-emerald-600 shrink-0 bg-emerald-100 p-1 rounded-full" />
+            {successMsg}
           </div>
-          
-          <button 
-            type="button"
-            onClick={() => window.location.reload()}
-            className="self-end sm:self-center bg-white/10 hover:bg-white/15 px-3 py-1.5 rounded-xl border border-white/15 text-[10px] font-bold transition-all flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3 h-3" /> Forçar Sincronização
-          </button>
-        </div>
-      </div>
+        )}
+        {errorMsg && (
+          <div className="bg-red-50 border border-red-100 text-red-800 p-4 rounded-2xl flex items-center gap-3 text-xs font-semibold shadow-sm animate-in fade-in duration-300">
+            <AlertTriangle className="w-4.5 h-4.5 text-red-600 shrink-0 bg-red-100 p-1 rounded-full" />
+            {errorMsg}
+          </div>
+        )}
 
-      {/* Success and Error Warnings */}
-      {successMsg && (
-        <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 p-4 rounded-2xl flex items-center gap-3 text-xs font-semibold shadow-sm animate-in fade-in duration-300">
-          <Check className="w-4.5 h-4.5 text-emerald-600 shrink-0 bg-emerald-100 p-1 rounded-full" />
-          {successMsg}
-        </div>
-      )}
-      {errorMsg && (
-        <div className="bg-red-50 border border-red-100 text-red-800 p-4 rounded-2xl flex items-center gap-3 text-xs font-semibold shadow-sm animate-in fade-in duration-300">
-          <AlertTriangle className="w-4.5 h-4.5 text-red-600 shrink-0 bg-red-100 p-1 rounded-full" />
-          {errorMsg}
-        </div>
-      )}
-
-      {/* SaaS Operations Tabs Ribbon */}
-      <div className="flex overflow-x-auto gap-1 bg-white p-1.5 rounded-2xl border border-slate-200/50 shadow-sm no-scrollbar">
+        {/* SaaS Operations Tabs Ribbon */}
+        <div className="flex overflow-x-auto gap-1 bg-white p-1.5 rounded-2xl border border-slate-200/50 shadow-sm no-scrollbar">
         <button
           onClick={() => setActiveTab('users')}
           className={`px-4 py-3 rounded-xl font-bold text-xs shrink-0 flex items-center gap-2 transition-all ${activeTab === 'users' ? 'bg-slate-900 text-white' : 'hover:bg-slate-50 text-slate-600'}`}
@@ -588,12 +561,14 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
           <Ticket className="w-4 h-4" />
           Cupons & Ativação de Teste
         </button>
+        </div>
       </div>
 
-      {/* RENDER TAB CONTENTS */}
+      {/* RENDER TAB CONTENTS - SCROLLABLE */}
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6">
 
-      {/* TAB 1: CLIENTS & USER LIST */}
-      {activeTab === 'users' && (
+        {/* TAB 1: CLIENTS & USER LIST */}
+        {activeTab === 'users' && (
         <div className="space-y-6">
           {/* Overview Stat Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -1336,6 +1311,8 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
           </div>
         </div>
       )}
+
+      </div>
 
       {/* Edit Access Control Modal */}
       {editingUser && (

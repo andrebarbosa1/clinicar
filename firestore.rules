@@ -27,25 +27,25 @@ service cloud.firestore {
     // --- Enterprise Entities Validation Helpers ---
     
     function isValidClinicalRecord(rec) {
-      return rec.id is string && rec.id.size() <= 128
-        && rec.data is string && rec.data.size() <= 50
-        && rec.paciente is string && rec.paciente.size() <= 150
-        && rec.procedimento is string && rec.procedimento.size() <= 200
-        && rec.dentista is string && rec.dentista.size() <= 150
-        && (rec.status == 'Realizado' || rec.status == 'Agendado' || rec.status == 'Cancelado' || rec.status == 'Pendente')
-        && (rec.statusPagamento == 'Pago' || rec.statusPagamento == 'Pendente' || rec.statusPagamento == 'Atrasado')
-        && (rec.valor is number || rec.valor is int)
+      return (rec.id == null || rec.id is string && rec.id.size() <= 128)
+        && (rec.data == null || rec.data is string && rec.data.size() <= 50)
+        && (rec.paciente == null || rec.paciente is string && rec.paciente.size() <= 150)
+        && (rec.procedimento == null || rec.procedimento is string && rec.procedimento.size() <= 200)
+        && (rec.dentista == null || rec.dentista is string && rec.dentista.size() <= 150)
+        && (rec.status == null || rec.status == 'Realizado' || rec.status == 'Agendado' || rec.status == 'Cancelado' || rec.status == 'Pendente' || rec.status == 'Em Atendimento' || rec.status == 'Concluído')
+        && (rec.statusPagamento == null || rec.statusPagamento == 'Pago' || rec.statusPagamento == 'Pendente' || rec.statusPagamento == 'Atrasado')
+        && (rec.valor == null || rec.valor is number || rec.valor is int)
         && (rec.reminderSent == null || rec.reminderSent is bool || !('reminderSent' in rec))
         && (rec.reminderSentAt == null || rec.reminderSentAt is string || !('reminderSentAt' in rec));
     }
 
     function isValidAppUser(u) {
-      return u.id is string && u.id.size() <= 128
-        && u.name is string && u.name.size() <= 150
-        && u.role is string && u.role.size() <= 50
-        && u.modules is string && u.modules.size() <= 1000
-        && u.username is string && u.username.size() <= 100
-        && u.password is string && u.password.size() <= 256;
+      return (u.id == null || u.id is string && u.id.size() <= 128)
+        && (u.name == null || u.name is string && u.name.size() <= 150)
+        && (u.role == null || u.role is string && u.role.size() <= 50)
+        && (u.modules == null || u.modules is string && u.modules.size() <= 1000)
+        && (u.username == null || u.username is string && u.username.size() <= 100)
+        && (u.password == null || u.password is string && u.password.size() <= 256);
     }
 
     function isValidPatient(p) {
