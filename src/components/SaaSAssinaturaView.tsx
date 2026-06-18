@@ -191,10 +191,10 @@ export default function SaaSAssinaturaView({
       {
         id: 'INV-3882',
         date: currentUser?.trialStartedAt ? new Date(currentUser.trialStartedAt).toLocaleDateString() : new Date().toLocaleDateString(),
-        plan: `${currentPlanId} (Trial)`,
-        amount: 'R$ 0,00',
+        plan: `${currentPlanId} (Teste Grátis)`,
+        amount: 'Sem valor (A Combinar)',
         status: 'Instanciado',
-        method: 'Grátis'
+        method: 'Licença Única'
       }
     ];
 
@@ -335,7 +335,7 @@ export default function SaaSAssinaturaView({
                 Ambiente de Teste Ativo no <span className="text-brand-cyan">OdontoDash</span>
               </h1>
               <p className="text-slate-400 text-xs max-w-xl">
-                Seu acesso é temporário e concedido com os recursos completos do plano <strong className="text-brand-cyan font-bold">{currentPlanId}</strong>.
+                Seu acesso de teste é gratuito e sem valor cobrado agora. A licença única definitiva será combinada diretamente com o cliente/atendimento.
               </p>
             </div>
             
