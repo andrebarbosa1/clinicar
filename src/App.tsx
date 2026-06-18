@@ -294,12 +294,41 @@ const SecurityUtils = {
     return 3600 * 1000;                         // 1 hour lockout for 8+ failures
   },
 
+  getDeviceId: () => {
+    try {
+      let dId = localStorage.getItem('odonto_device_id') || sessionStorage.getItem('odonto_device_id');
+      if (!dId) {
+        dId = 'dev_' + Math.random().toString(36).substring(2, 11) + Math.random().toString(36).substring(2, 11);
+        localStorage.setItem('odonto_device_id', dId);
+        sessionStorage.setItem('odonto_device_id', dId);
+      }
+      return dId;
+    } catch {
+      return 'dev_fallback';
+    }
+  },
+
   getLockoutStatus: () => {
     try {
-      const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
-      if (!lock) return { isLocked: false, remaining: 0 };
+      const win = window as any;
+      win.__bruteMemoryAttempts = win.__bruteMemoryAttempts || 0;
       
-      const { timestamp, attempts } = JSON.parse(lock);
+      const lock = localStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY) || sessionStorage.getItem(SecurityUtils.BRUTE_FORCE_KEY);
+      let attempts = win.__bruteMemoryAttempts;
+      let timestamp = Date.now();
+      
+      if (lock) {
+        try {
+          const parsed = JSON.parse(lock);
+          if (parsed.attempts > attempts) {
+            attempts = parsed.attempts;
+            timestamp = parsed.timestamp;
+          }
+        } catch {}
+      }
+      
+      if (attempts === 0) return { isLocked: false, remaining: 0 };
+
       const now = Date.now();
       const elapsed = now - timestamp;
       const lockoutTime = SecurityUtils.getLockoutDelay(attempts);
@@ -315,6 +344,8 @@ const SecurityUtils = {
 
       if (elapsed >= lockoutTime) {
         localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        sessionStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        win.__bruteMemoryAttempts = 0;
         return { isLocked: false, remaining: 0 };
       }
 
@@ -326,15 +357,21 @@ const SecurityUtils = {
 
   recordAttempt: (success: boolean) => {
     try {
+      const win = window as any;
       const status = SecurityUtils.getLockoutStatus();
       if (success) {
         localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        sessionStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+        win.__bruteMemoryAttempts = 0;
       } else {
         const attempts = (status.attempts || 0) + 1;
-        localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, JSON.stringify({
+        win.__bruteMemoryAttempts = attempts;
+        const payload = JSON.stringify({
           timestamp: Date.now(),
           attempts
-        }));
+        });
+        localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, payload);
+        sessionStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, payload);
       }
     } catch (e) {
       console.error(e);
@@ -393,6 +430,57 @@ const SecurityUtils = {
       }
     } catch (e) {
       console.error("[Prevention] Error logging security tracker:", e);
+    }
+  },
+
+  // Layer 3: Firestore lock synced per browser/device ID to stop multi-username brute force (existent or non-existent usernames)
+  checkDeviceLockout: async (): Promise<{ isLocked: boolean; remaining: number }> => {
+    const dId = SecurityUtils.getDeviceId();
+    try {
+      const docRef = doc(db, 'device_attempts', dId);
+      const docSnap = await getDoc(docRef);
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const lockoutUntil = data?.lockoutUntil || 0;
+        const attempts = data?.attempts || 0;
+        const now = Date.now();
+        
+        if (attempts >= SecurityUtils.MAX_ATTEMPTS && lockoutUntil > now) {
+          return { isLocked: true, remaining: Math.ceil((lockoutUntil - now) / 1000) };
+        }
+      }
+    } catch (e) {
+      console.error("[Device Security] Check failed:", e);
+    }
+    return { isLocked: false, remaining: 0 };
+  },
+
+  recordDeviceAttempt: async (success: boolean): Promise<void> => {
+    const dId = SecurityUtils.getDeviceId();
+    try {
+      const docRef = doc(db, 'device_attempts', dId);
+      if (success) {
+        await deleteDoc(docRef);
+      } else {
+        const docSnap = await getDoc(docRef);
+        let attempts = 1;
+        if (docSnap.exists()) {
+          attempts = (docSnap.data()?.attempts || 0) + 1;
+        }
+        
+        const lockoutDelay = SecurityUtils.getLockoutDelay(attempts);
+        const lockoutUntil = attempts >= SecurityUtils.MAX_ATTEMPTS ? Date.now() + lockoutDelay : 0;
+        
+        await setDoc(docRef, {
+          deviceId: dId,
+          attempts,
+          lastAttempt: Date.now(),
+          lockoutUntil
+        });
+      }
+    } catch (e) {
+      console.error("[Device Security] Record failed:", e);
     }
   }
 };
@@ -10045,6 +10133,17 @@ function LoginView({
       return;
     }
 
+    // Layer 1.5: Firestore Device Lockout (distributed protection per browser/device ID)
+    try {
+      const devLock = await SecurityUtils.checkDeviceLockout();
+      if (devLock.isLocked) {
+        setError(`Este dispositivo foi temporariamente bloqueado após exceder o limite de tentativas de login incorretas no sistema. Tente de novo em ${devLock.remaining}s.`);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
     if (!username || !password) {
       setError('Preencha todos os campos.');
       return;
@@ -10073,6 +10172,18 @@ function LoginView({
       const dbLockout = await SecurityUtils.checkFirestoreLockout(cleanUsername);
       if (dbLockout.isLocked) {
         setError(`Esta conta ("${cleanUsername}") encontra-se bloqueada temporariamente para conter ataques de força bruta. Tente de novo em ${dbLockout.remaining}s.`);
+        setIsLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Layer 3.5: Second layer device lockout check
+    try {
+      const devLockout = await SecurityUtils.checkDeviceLockout();
+      if (devLockout.isLocked) {
+        setError(`Este dispositivo foi temporariamente bloqueado após exceder o limite de tentativas de login incorretas no sistema. Tente de novo em ${devLockout.remaining}s.`);
         setIsLoading(false);
         return;
       }
@@ -10113,6 +10224,7 @@ function LoginView({
     if (user && isCorrectPassword) {
       SecurityUtils.recordAttempt(true);
       await SecurityUtils.recordAttemptFirestore(cleanUsername, true);
+      await SecurityUtils.recordDeviceAttempt(true);
 
       // Clean consecutive failed login attempts on success
       try {
@@ -10135,6 +10247,7 @@ function LoginView({
     } else {
       SecurityUtils.recordAttempt(false);
       await SecurityUtils.recordAttemptFirestore(cleanUsername, false);
+      await SecurityUtils.recordDeviceAttempt(false);
       const updatedLocalLockout = SecurityUtils.getLockoutStatus();
       setLockout(updatedLocalLockout);
 
