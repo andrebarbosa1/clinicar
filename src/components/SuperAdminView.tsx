@@ -72,6 +72,13 @@ interface BruteForceLog {
   lockoutUntil: number;
 }
 
+interface DeviceLockoutLog {
+  id: string; // Device ID
+  attempts: number;
+  lastAttempt: number;
+  lockoutUntil: number;
+}
+
 interface GlobalNotice {
   id: string;
   message: string;
@@ -110,6 +117,7 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
   // States for live fetched metrics and logs
   const [recordsCountByClinic, setRecordsCountByClinic] = useState<Record<string, number>>({});
   const [securityLogs, setSecurityLogs] = useState<BruteForceLog[]>([]);
+  const [deviceLogs, setDeviceLogs] = useState<DeviceLockoutLog[]>([]);
   const [globalNotice, setGlobalNotice] = useState<GlobalNotice>({
     id: 'global_banner',
     message: '',
@@ -158,6 +166,21 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       });
       setSecurityLogs(logs);
     }, (err) => console.warn("Failed loading login attempts:", err));
+
+    // 1.5. Subscribe to brute-force device lockout status
+    const unsubDeviceLogs = onSnapshot(collection(db, 'device_attempts'), (snapshot) => {
+      const logs: DeviceLockoutLog[] = [];
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        logs.push({
+          id: doc.id,
+          attempts: d.attempts || 0,
+          lastAttempt: d.lastAttempt || 0,
+          lockoutUntil: d.lockoutUntil || 0
+        });
+      });
+      setDeviceLogs(logs);
+    }, (err) => console.warn("Failed loading device attempts:", err));
 
     // 2. Fetch or subscribe to general notice banner Configuration
     const unsubNotice = onSnapshot(doc(db, 'system_announcements', 'global_banner'), (snapshot) => {
@@ -209,6 +232,7 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
 
     return () => {
       unsubSecurityLogs();
+      unsubDeviceLogs();
       unsubNotice();
       unsubCoupons();
     };
@@ -317,6 +341,20 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
     } catch (err: any) {
       console.error(err);
       setErrorMsg(`Erro de desbloqueio: ${err?.message || err}`);
+      setTimeout(() => setErrorMsg(null), 4000);
+    }
+  };
+
+  // Action: Unlock device / clear device brute-force lockout record
+  const handleUnlockDevice = async (deviceIdToUnlock: string) => {
+    if (!db) return;
+    try {
+      await deleteDoc(doc(db, 'device_attempts', deviceIdToUnlock));
+      setSuccessMsg(`O bloqueio do dispositivo [${deviceIdToUnlock}] foi cancelado com sucesso.`);
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(`Erro de desbloqueio de dispositivo: ${err?.message || err}`);
       setTimeout(() => setErrorMsg(null), 4000);
     }
   };
@@ -961,27 +999,33 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
             <div className="space-y-1">
               <h4 className="text-xs font-black uppercase tracking-wider">Segurança Ativa Contra Força Bruta</h4>
               <p className="text-xs leading-relaxed max-w-2xl text-slate-650">
-                Seu OdontoDash implementa limites estritos contra distributed brute-force. Endpoints de login que acumulam falhas consecutivas são suspensos temporariamente na nuvem. Abaixo, monitore e cancele bloqueios incorretos solicitados por clientes que erraram suas senhas.
+                Seu OdontoDash implementa limites estritos contra distributed brute-force. Endpoints de login que acumulam falhas consecutivas são suspensos temporariamente na nuvem. Abaixo, monitore e cancele bloqueios incorretos solicitados por clientes que erraram suas senhas (por conta ou por dispositivo).
               </p>
             </div>
           </div>
 
+          {/* SECTION A: ACCOUNTS LOGS */}
           <div className="bg-white rounded-2xl border border-slate-200/50 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100">
-              <h3 className="text-xs font-black uppercase text-slate-800 tracking-tight">Status de Credenciais e Bloqueios Firestore</h3>
-              <p className="text-[10px] text-slate-400">Monitor de tentativas incorretas arquivadas nos últimos acessos</p>
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-black uppercase text-slate-800 tracking-tight">Status de Credenciais e Bloqueios por Conta</h3>
+                <p className="text-[10px] text-slate-400">Monitor de tentativas incorretas filtradas por nome de usuário (existente ou não)</p>
+              </div>
+              <span className="text-[10px] bg-slate-100 px-2 shadow-inner border py-0.5 rounded-full font-bold text-slate-500">
+                {securityLogs.length} Registros
+              </span>
             </div>
 
             <div className="overflow-x-auto">
               {securityLogs.length === 0 ? (
                 <div className="p-12 text-center text-slate-400 text-xs">
-                  A segurança está impecável. Nenhuma falha de login registrada recentemente.
+                  A segurança de contas está impecável. Nenhuma falha por username registrada recentemente.
                 </div>
               ) : (
                 <table className="w-full text-left text-xs text-slate-605">
                   <thead className="bg-slate-50 font-black text-[9px] text-slate-400 uppercase tracking-widest">
                     <tr>
-                      <th className="px-5 py-3">Username Associado</th>
+                      <th className="px-5 py-3">Username Tentado</th>
                       <th className="px-5 py-3 text-center">Tentativas Consecutivas</th>
                       <th className="px-5 py-3">Último Erro Registrado</th>
                       <th className="px-5 py-3">Status de Bloqueio</th>
@@ -1040,6 +1084,88 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
               )}
             </div>
           </div>
+
+          {/* SECTION B: DEVICE LOCKOUTS */}
+          <div className="bg-white rounded-2xl border border-slate-200/50 shadow-sm overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-black uppercase text-slate-800 tracking-tight">Status de Bloqueio por Navegador / Dispositivo</h3>
+                <p className="text-[10px] text-slate-400">Monitor de tentativas por impressões digitais de máquina para coibir ataques robotizados rápidos</p>
+              </div>
+              <span className="text-[10px] bg-slate-100 px-2 shadow-inner border py-0.5 rounded-full font-bold text-slate-500">
+                {deviceLogs.length} Dispositivos
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              {deviceLogs.length === 0 ? (
+                <div className="p-12 text-center text-slate-400 text-xs">
+                  A segurança de dispositivos está excelente. Nenhum navegador foi bloqueado recentemente.
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs text-slate-605">
+                  <thead className="bg-slate-50 font-black text-[9px] text-slate-400 uppercase tracking-widest">
+                    <tr>
+                      <th className="px-5 py-3">ID do Dispositivo</th>
+                      <th className="px-5 py-3 text-center">Tentativas Acumuladas</th>
+                      <th className="px-5 py-3">Último Disparo Recebido</th>
+                      <th className="px-5 py-3">Status de Bloqueio</th>
+                      <th className="px-5 py-3 text-right">Controles SaaS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-105">
+                    {deviceLogs.map(log => {
+                      const isLocked = log.attempts >= 5 && log.lockoutUntil > Date.now();
+                      const timeLock = isLocked 
+                        ? Math.ceil((log.lockoutUntil - Date.now()) / 1000 / 60) 
+                        : 0;
+
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50/30 transition-colors font-medium">
+                          <td className="px-5 py-4 font-mono font-bold text-slate-750">
+                            {log.id}
+                          </td>
+                          <td className="px-5 py-4 text-center">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono ${log.attempts >= 5 ? 'bg-red-50 text-red-650 ring-1 ring-red-200' : 'bg-slate-100 text-slate-600'}`}>
+                              {log.attempts} tentativas
+                            </span>
+                          </td>
+                          <td className="px-5 py-4 text-slate-400 font-mono text-[11px]">
+                            {log.lastAttempt ? new Date(log.lastAttempt).toLocaleString() : 'N/A'}
+                          </td>
+                          <td className="px-5 py-4">
+                            {isLocked ? (
+                              <span className="inline-flex items-center gap-1.5 text-[10px] font-bold bg-rose-50 text-rose-700 px-3 py-1 rounded-full border border-rose-200">
+                                <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                                Bloqueado por {timeLock} min
+                              </span>
+                            ) : log.attempts >= 5 ? (
+                              <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
+                                Lock expirado (Dispositivo liberado)
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full font-bold">
+                                Seguro / Monitorado
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-5 py-4 text-right">
+                            <button
+                              onClick={() => handleUnlockDevice(log.id)}
+                              className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 hover:border-emerald-200 text-emerald-700 hover:text-emerald-800 text-xs font-extrabold rounded-lg transition-all"
+                            >
+                              Resetar Dispositivo
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
         </div>
       )}
 
