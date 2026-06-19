@@ -82,7 +82,7 @@ service cloud.firestore {
     }
 
     function isValidClinicSetting(s) {
-      return s.id is string && s.id.size() <= 128
+      return (s.id == null || s.id is string && s.id.size() <= 128)
         && s.clinicName is string && s.clinicName.size() <= 200;
     }
 
