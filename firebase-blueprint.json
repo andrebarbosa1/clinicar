@@ -101,7 +101,7 @@
         "clinicName": { "type": "string" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "clinicName"]
+      "required": ["clinicName"]
     },
     "SystemAnnouncement": {
       "title": "SystemAnnouncement",
