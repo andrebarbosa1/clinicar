@@ -2122,6 +2122,7 @@ export default function App() {
     try {
       const docId = trialId ? `clinic-${trialId}` : 'clinic';
       await setDoc(doc(db, 'settings', docId), {
+        id: docId,
         ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -2311,6 +2312,7 @@ export default function App() {
               try {
                 // Salva as configurações diretamente no documento isolado do trial gerado
                 await setDoc(doc(db, 'settings', `clinic-${trialIdGenerated}`), {
+                  id: `clinic-${trialIdGenerated}`,
                   clinicName: details.clinicName,
                   updatedAt: new Date().toISOString()
                 }, { merge: true });
