@@ -674,6 +674,7 @@ export default function App() {
     }
   }, []);
   const [activePage, setActivePage] = useState('Dashboard');
+  const [adminTab, setAdminTab] = useState<'users' | 'settings' | 'backup'>('users');
   
   React.useEffect(() => {
     if (currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador')) {
@@ -2616,6 +2617,8 @@ export default function App() {
             patients={patientsForUser}
             documents={documents}
             onRestore={handleRestoreData}
+            adminTab={adminTab}
+            setAdminTab={setAdminTab}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
@@ -2671,137 +2674,369 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col lg:flex-row font-sans text-slate-900">
-      {/* Sidebar para Desktop */}
-      <aside className="hidden lg:flex flex-col w-64 h-screen bg-slate-800 border-r border-slate-700/50 sticky top-0 shrink-0 select-none z-50">
-          {/* Branding */}
-          <div className="p-4 border-b border-white/5 flex items-center gap-2.5 shrink-0">
-            {clinicLogo ? (
-              <img src={clinicLogo} alt={clinicName} className="h-8 max-w-[150px] object-contain brightness-110 contrast-110" />
-            ) : (
-              <div className="w-8 h-8 bg-brand-cyan rounded flex items-center justify-center shrink-0">
-                <Stethoscope className="h-4.5 w-4.5 text-white" />
-              </div>
-            )}
-            <div className="flex flex-col min-w-0">
-              <span className="text-xs font-black text-white tracking-tight leading-none truncate">{clinicName}</span>
-              <span className="text-[9px] text-brand-cyan font-bold tracking-widest mt-0.5">ANALYTICS</span>
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 pt-14">
+      {/* Unified Fixed Top Navbar */}
+      <header className="fixed top-0 left-0 right-0 h-14 bg-slate-900 border-b border-slate-800 text-white z-[110] select-none flex items-center justify-between px-4 font-sans">
+        {/* Logo / Branding */}
+        <div className="flex items-center gap-2 mr-4 cursor-pointer" onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}>
+          {clinicLogo ? (
+            <img src={clinicLogo} alt={clinicName} className="h-7 max-w-[130px] object-contain brightness-110 contrast-110" />
+          ) : (
+            <div className="w-7 h-7 bg-brand-cyan rounded flex items-center justify-center shrink-0 shadow-sm">
+              <Stethoscope className="h-4 w-4 text-white" />
             </div>
+          )}
+          <div className="flex flex-col">
+            <span className="text-xs font-black tracking-tight leading-none text-white">{clinicName}</span>
+            <span className="text-[8px] text-brand-cyan font-bold tracking-wider mt-0.5 uppercase">OdontoDash</span>
           </div>
+        </div>
 
-          {/* Navigation vertical list */}
-          <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-            {hasModule('Dashboard') && (
-              <SidebarNavItem 
-                icon={<LayoutDashboard className="w-4 h-4" />} 
-                label="Dashboard" 
-                active={activePage === 'Dashboard'} 
-                onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Pacientes') && (
-              <SidebarNavItem 
-                icon={<Users className="w-4 h-4" />} 
-                label="Pacientes" 
-                active={activePage === 'Pacientes'} 
-                onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Agenda') && (
-              <SidebarNavItem 
-                icon={<Calendar className="w-4 h-4" />} 
-                label="Agenda" 
-                active={activePage === 'Agenda'} 
-                onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Retorno') && (
-              <SidebarNavItem 
-                icon={<RotateCcw className="w-4 h-4" />} 
-                label="Retorno" 
-                active={activePage === 'Retorno'} 
-                onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Mensagens') && (
-              <SidebarNavItem 
-                icon={<MessageSquare className="w-4 h-4" />} 
-                label="Mensagens" 
-                active={activePage === 'Mensagens'} 
-                onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Documentos') && (
-              <SidebarNavItem 
-                icon={<FileText className="w-4 h-4" />} 
-                label="Documentos" 
-                active={activePage === 'Documentos'} 
-                onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Financeiro') && (
-              <SidebarNavItem 
-                icon={<DollarSign className="w-4 h-4" />} 
-                label="Financeiro" 
-                active={activePage === 'Financeiro'} 
-                onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Estoque') && (
-              <SidebarNavItem 
-                icon={<Package className="w-4 h-4" />} 
-                label="Estoque & Suprimentos" 
-                active={activePage === 'Estoque'} 
-                onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
-              />
-            )}
-            {hasModule('Administração') && (
-              <SidebarNavItem 
-                icon={<Activity className="w-4 h-4" />} 
-                label="Administração" 
-                active={activePage === 'Administração'} 
-                onClick={() => { setActivePage('Administração'); setSubPage(null); }}
-              />
-            )}
-          </div>
+        {/* Desktop Main Navigation Horizontal (Cascading on Hover) */}
+        <nav className="hidden lg:flex items-center gap-1.5 h-full">
+          {/* Dashboard */}
+          {hasModule('Dashboard') && (
+            <button
+              onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                activePage === 'Dashboard' 
+                  ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                  : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+              )}
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-brand-cyan" />
+              <span>Dashboard</span>
+            </button>
+          )}
 
-          {/* Bottom Section */}
-          <div className="p-3 border-t border-white/5 bg-slate-950/20 space-y-2.5 shrink-0">
-            {currentUser && (
-              <div className="px-2.5 py-2.5 mb-1 bg-white/5 rounded-xl flex items-center gap-2.5 shrink-0">
-                <div className="w-8 h-8 rounded-full bg-slate-700 border border-slate-600 flex items-center justify-center text-[10px] font-bold text-slate-300 uppercase shrink-0">
-                  {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
-                </div>
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-slate-200 leading-tight truncate">{currentUser.name}</span>
-                  <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider leading-normal truncate">
-                    {currentUser.role}
-                  </span>
+          {/* Dropdown Atendimento */}
+          {(hasModule('Agenda') || hasModule('Pacientes')) && (
+            <div className="relative group/menu h-full flex items-center">
+              <button
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
+                  ['Agenda', 'Pacientes'].includes(activePage)
+                    ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                    : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+                )}
+              >
+                <Calendar className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>Atendimento</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+              </button>
+              {/* Cascade Dropdown Submenu */}
+              <div className="absolute top-[85%] left-0 hidden group-hover/menu:block pt-2 w-52 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl p-1.5 space-y-0.5">
+                  {hasModule('Agenda') && (
+                    <>
+                      <button
+                        onClick={() => { setActivePage('Agenda'); setSubPage(null); }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                          activePage === 'Agenda' && subPage === null ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-brand-cyan" />
+                        <span>Ver Agenda</span>
+                      </button>
+                      <button
+                        onClick={() => { setActivePage('Agenda'); setSubPage('NovoAgendamento'); }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                          activePage === 'Agenda' && subPage === 'NovoAgendamento' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <Calendar className="w-3.5 h-3.5 text-brand-cyan" />
+                        <span>Novo Agendamento</span>
+                      </button>
+                    </>
+                  )}
+                  {hasModule('Pacientes') && (
+                    <>
+                      <button
+                        onClick={() => { setActivePage('Pacientes'); setSubPage(null); }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                          activePage === 'Pacientes' && (subPage === null || subPage === 'Prontuario') ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <Users className="w-3.5 h-3.5 text-brand-cyan" />
+                        <span>Lista de Pacientes</span>
+                      </button>
+                      <button
+                        onClick={() => { setActivePage('Pacientes'); setSubPage('Cadastrar'); }}
+                        className={cn(
+                          "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                          activePage === 'Pacientes' && subPage === 'Cadastrar' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                        )}
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-brand-cyan" />
+                        <span>Cadastrar Paciente</span>
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            <button 
-              type="button"
-              onClick={() => setShowKeyboardShortcuts(true)}
-              className="w-full flex items-center justify-center gap-2 py-2 bg-slate-800 text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-700/80 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
-              title="Ver atalhos de teclado (Ctrl + K)"
-            >
-              <Keyboard className="w-3.5 h-3.5 text-brand-cyan" />
-              <span>Atalhos de Teclado</span>
-            </button>
+          {/* Dropdown Operacional */}
+          {(hasModule('Estoque') || hasModule('Documentos')) && (
+            <div className="relative group/menu h-full flex items-center">
+              <button
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
+                  ['Estoque', 'Documentos'].includes(activePage)
+                    ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                    : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+                )}
+              >
+                <Package className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>Operacional</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+              </button>
+              <div className="absolute top-[85%] left-0 hidden group-hover/menu:block pt-2 w-52 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl p-1.5 space-y-0.5">
+                  {hasModule('Estoque') && (
+                    <button
+                      onClick={() => { setActivePage('Estoque'); setSubPage(null); }}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                        activePage === 'Estoque' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      <Package className="w-3.5 h-3.5 text-brand-cyan" />
+                      <span>Controle de Estoque</span>
+                    </button>
+                  )}
+                  {hasModule('Documentos') && (
+                    <button
+                      onClick={() => { setActivePage('Documentos'); setSubPage(null); }}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                        activePage === 'Documentos' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      <FileText className="w-3.5 h-3.5 text-brand-cyan" />
+                      <span>Gestão de Documentos</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
-            <button 
-              onClick={handleLogout}
-              className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-400 rounded-lg border border-rose-500/20 hover:bg-rose-500/20 transition-all font-bold text-xs cursor-pointer select-none active:scale-95"
+          {/* Dropdown Comunicação */}
+          {(hasModule('Mensagens') || hasModule('Retorno')) && (
+            <div className="relative group/menu h-full flex items-center">
+              <button
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
+                  ['Mensagens', 'Retorno'].includes(activePage)
+                    ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                    : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+                )}
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>Comunicação</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+              </button>
+              <div className="absolute top-[85%] left-0 hidden group-hover/menu:block pt-2 w-52 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl p-1.5 space-y-0.5">
+                  {hasModule('Mensagens') && (
+                    <button
+                      onClick={() => { setActivePage('Mensagens'); setSubPage(null); }}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                        activePage === 'Mensagens' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 text-brand-cyan" />
+                      <span>Central WhatsApp</span>
+                    </button>
+                  )}
+                  {hasModule('Retorno') && (
+                    <button
+                      onClick={() => { setActivePage('Retorno'); setSubPage(null); }}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                        activePage === 'Retorno' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-brand-cyan" />
+                      <span>Controle de Retornos</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dropdown Financeiro */}
+          {hasModule('Financeiro') && (
+            <div className="relative group/menu h-full flex items-center">
+              <button
+                onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                  activePage === 'Financeiro' 
+                    ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                    : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+                )}
+              >
+                <DollarSign className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>Financeiro</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+              </button>
+              <div className="absolute top-[85%] left-0 hidden group-hover/menu:block pt-2 w-52 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl p-1.5 space-y-0.5">
+                  <button
+                    onClick={() => { setActivePage('Financeiro'); setSubPage(null); }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer"
+                  >
+                    <DollarSign className="w-3.5 h-3.5 text-brand-cyan" />
+                    <span>Painel Geral</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dropdown Administração */}
+          {hasModule('Administração') && (
+            <div className="relative group/menu h-full flex items-center">
+              <button
+                onClick={() => { setActivePage('Administração'); setSubPage(null); }}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                  activePage === 'Administração' 
+                    ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                    : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+                )}
+              >
+                <Activity className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>Administração</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 group-hover:rotate-180 transition-transform" />
+              </button>
+              <div className="absolute top-[85%] left-0 hidden group-hover/menu:block pt-2 w-52 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl p-1.5 space-y-0.5">
+                  <button
+                    onClick={() => { setActivePage('Administração'); setAdminTab('users'); setSubPage(null); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                      activePage === 'Administração' && adminTab === 'users' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <Users className="w-3.5 h-3.5 text-brand-cyan" />
+                    <span>Gestão de Usuários</span>
+                  </button>
+                  <button
+                    onClick={() => { setActivePage('Administração'); setAdminTab('settings'); setSubPage(null); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                      activePage === 'Administração' && adminTab === 'settings' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <Settings className="w-3.5 h-3.5 text-brand-cyan" />
+                    <span>Dados da Clínica</span>
+                  </button>
+                  <button
+                    onClick={() => { setActivePage('Administração'); setAdminTab('backup'); setSubPage(null); }}
+                    className={cn(
+                      "w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-colors flex items-center gap-2 cursor-pointer",
+                      activePage === 'Administração' && adminTab === 'backup' ? "bg-brand-cyan text-white" : "text-slate-300 hover:text-white hover:bg-white/5"
+                    )}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-brand-cyan" />
+                    <span>Restauração & Backup</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dropdown SuperAdmin */}
+          {currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador') && (
+            <button
+              onClick={() => { setActivePage('SuperAdmin'); setSubPage(null); }}
+              className={cn(
+                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer",
+                activePage === 'SuperAdmin' 
+                  ? "bg-brand-cyan/25 text-white border border-brand-cyan/40" 
+                  : "text-slate-300 hover:text-white hover:bg-white/5 border border-transparent"
+              )}
             >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Sair do Sistema</span>
+              <Shield className="w-3.5 h-3.5 text-brand-cyan animate-pulse" />
+              <span>SaaS Central</span>
             </button>
+          )}
+        </nav>
+
+        {/* Right Section: User Badge, Shortcuts, Clock, and Logout */}
+        <div className="flex items-center gap-2 font-sans">
+          {/* Agenda online short link */}
+          <button 
+            onClick={() => {
+              const url = window.location.origin + window.location.pathname + '?booking=true';
+              navigator.clipboard.writeText(url);
+              alert('Link de agendamento online copiado!');
+              setIsPublicBooking(true);
+            }}
+            className="p-1.5 bg-brand-cyan/15 border border-brand-cyan/35 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0"
+            title="Copiar Link de Agendamento Online"
+          >
+            <Monitor className="w-4 h-4 transition-transform group-hover:scale-105" />
+          </button>
+
+          {/* Shortcuts helper */}
+          <button 
+            onClick={() => setShowKeyboardShortcuts(true)}
+            className="hidden md:flex p-1.5 bg-slate-800 border border-slate-700 rounded-lg text-slate-300 hover:bg-slate-700 transition-all items-center justify-center"
+            title="Atalhos de Teclado (Ctrl + K)"
+          >
+            <Keyboard className="w-4 h-4 text-brand-cyan" />
+          </button>
+
+          <div className="w-px h-6 bg-slate-800 hidden xs:block" />
+
+          {/* Dynamic Clock */}
+          <div className="hidden xl:block">
+            <RealTimeClock />
           </div>
-        </aside>
 
-      {/* Conteúdo Principal (Direita) */}
+          {currentUser && (
+            <div className="flex items-center gap-2 pl-1.5 py-1">
+              <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 text-[10px] font-bold text-slate-300 flex items-center justify-center uppercase select-none shrink-0 border-brand-cyan/30">
+                {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+              </div>
+              <div className="hidden sm:flex flex-col min-w-0 pr-1 select-none">
+                <span className="text-[11px] font-bold text-slate-100 leading-tight leading-none truncate">{currentUser.name?.split(' ')[0]}</span>
+                <span className="text-[8px] uppercase font-bold text-brand-cyan tracking-wider truncate">{currentUser.role}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Logout Btn */}
+          <button 
+            onClick={handleLogout}
+            className="p-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white transition-all rounded-lg cursor-pointer"
+            title="Sair do Sistema"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+
+          {/* Hamburger for mobile */}
+          <button 
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="p-1.5 lg:hidden text-slate-305 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
+          >
+            {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
+        </div>
+      </header>
+
+      {/* Conteúdo Principal (Central) */}
       <div className="flex-1 flex flex-col min-w-0">
         <AnimatePresence>
         {quotaExceeded && (
@@ -2860,7 +3095,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header (apenas Mobile) */}
-      <header className="lg:hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
+      <header className="hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
           <div className="flex items-center gap-2 md:gap-3 shrink-0">
             <button 
               onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -3021,44 +3256,244 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsMenuOpen(false)}
-              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] lg:hidden"
+              className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-[115] lg:hidden"
             />
             <motion.div 
               initial={{ x: -300 }}
               animate={{ x: 0 }}
-              exit={{ x: -300 }}
-              className="fixed top-0 left-0 bottom-0 w-72 bg-white shadow-2xl z-[101] lg:hidden flex flex-col pt-20"
+              exit={{ x: -280 }}
+              className="fixed top-0 left-0 bottom-0 w-72 bg-slate-900 text-white shadow-2xl z-[120] lg:hidden flex flex-col pt-16 border-r border-slate-800"
             >
-              <div className="px-6 mb-8 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-500 border border-slate-200 uppercase">
-                  {currentUser.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
+              <div className="px-6 mb-6 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-slate-350 uppercase shrink-0">
+                  {currentUser?.name?.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2)}
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-sm font-bold text-slate-800">{currentUser.name}</span>
-                  <span className="text-[10px] uppercase font-bold text-brand-cyan tracking-widest">{currentUser.role}</span>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-sm font-bold text-slate-100 truncate leading-snug">{currentUser?.name}</span>
+                  <span className="text-[10px] uppercase font-bold text-brand-cyan tracking-wider leading-none">{currentUser?.role}</span>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto px-4 space-y-2">
-                {hasModule('Dashboard') && <MobileNavItem icon={<LayoutDashboard className="w-5 h-5" />} label="Dashboard" active={activePage === 'Dashboard'} onClick={() => { setActivePage('Dashboard'); setIsMenuOpen(false); }} />}
-                {hasModule('Pacientes') && <MobileNavItem icon={<Users className="w-5 h-5" />} label="Pacientes" active={activePage === 'Pacientes'} onClick={() => { setActivePage('Pacientes'); setIsMenuOpen(false); }} />}
-                {hasModule('Agenda') && <MobileNavItem icon={<Calendar className="w-5 h-5" />} label="Agenda" active={activePage === 'Agenda'} onClick={() => { setActivePage('Agenda'); setIsMenuOpen(false); }} />}
-                {hasModule('Retorno') && <MobileNavItem icon={<RotateCcw className="w-5 h-5" />} label="Retorno" active={activePage === 'Retorno'} onClick={() => { setActivePage('Retorno'); setIsMenuOpen(false); }} />}
-                {hasModule('Mensagens') && <MobileNavItem icon={<MessageSquare className="w-5 h-5" />} label="Mensagens" active={activePage === 'Mensagens'} onClick={() => { setActivePage('Mensagens'); setIsMenuOpen(false); }} />}
-                {hasModule('Documentos') && <MobileNavItem icon={<FileText className="w-5 h-5" />} label="Documentos" active={activePage === 'Documentos'} onClick={() => { setActivePage('Documentos'); setIsMenuOpen(false); }} />}
-                {hasModule('Financeiro') && (
-                  <MobileNavItem icon={<DollarSign className="w-5 h-5" />} label="Financeiro" active={activePage === 'Financeiro'} onClick={() => { setActivePage('Financeiro'); setIsMenuOpen(false); }} />
+              <div className="flex-1 overflow-y-auto px-4 py-2 space-y-4 no-scrollbar font-sans">
+                {/* Dashboard */}
+                {hasModule('Dashboard') && (
+                  <button
+                    onClick={() => { setActivePage('Dashboard'); setSubPage(null); setIsMenuOpen(false); }}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-bold rounded-xl transition-all border text-left cursor-pointer",
+                      activePage === 'Dashboard' ? "bg-brand-cyan/20 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-350 hover:bg-white/5"
+                    )}
+                  >
+                    <LayoutDashboard className="w-4 h-4 text-brand-cyan" />
+                    <span>Dashboard</span>
+                  </button>
                 )}
-                {hasModule('Estoque') && <MobileNavItem icon={<Package className="w-5 h-5" />} label="Estoque & Suprimentos" active={activePage === 'Estoque'} onClick={() => { setActivePage('Estoque'); setIsMenuOpen(false); }} />}
+
+                {/* Group: Atendimento */}
+                {(hasModule('Agenda') || hasModule('Pacientes')) && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-black tracking-widest text-slate-500 uppercase px-3.5 mb-1.5 flex items-center gap-1.5">
+                      <Calendar className="w-3 h-3 text-brand-cyan" />
+                      <span>Atendimento</span>
+                    </div>
+                    {hasModule('Agenda') && (
+                      <>
+                        <button
+                          onClick={() => { setActivePage('Agenda'); setSubPage(null); setIsMenuOpen(false); }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                            activePage === 'Agenda' && subPage === null ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-350 hover:bg-white/5"
+                          )}
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                          <span>Ver Agenda</span>
+                        </button>
+                        <button
+                          onClick={() => { setActivePage('Agenda'); setSubPage('NovoAgendamento'); setIsMenuOpen(false); }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                            activePage === 'Agenda' && subPage === 'NovoAgendamento' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                          )}
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                          <span>Novo Agendamento</span>
+                        </button>
+                      </>
+                    )}
+                    {hasModule('Pacientes') && (
+                      <>
+                        <button
+                          onClick={() => { setActivePage('Pacientes'); setSubPage(null); setIsMenuOpen(false); }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                            activePage === 'Pacientes' && (subPage === null || subPage === 'Prontuario') ? "bg-brand-cyan/25 border-brand-cyan/35 text-white font-bold" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5 font-bold"
+                          )}
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                          <span>Lista de Pacientes</span>
+                        </button>
+                        <button
+                          onClick={() => { setActivePage('Pacientes'); setSubPage('Cadastrar'); setIsMenuOpen(false); }}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                            activePage === 'Pacientes' && subPage === 'Cadastrar' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white font-bold" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5 font-bold"
+                          )}
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                          <span>Cadastrar Paciente</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Group: Operacional */}
+                {(hasModule('Estoque') || hasModule('Documentos')) && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-black tracking-widest text-slate-500 uppercase px-3.5 mb-1.5 flex items-center gap-1.5">
+                      <Package className="w-3 h-3 text-brand-cyan" />
+                      <span>Operacional</span>
+                    </div>
+                    {hasModule('Estoque') && (
+                      <button
+                        onClick={() => { setActivePage('Estoque'); setSubPage(null); setIsMenuOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                          activePage === 'Estoque' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                        <span>Controle de Estoque</span>
+                      </button>
+                    )}
+                    {hasModule('Documentos') && (
+                      <button
+                        onClick={() => { setActivePage('Documentos'); setSubPage(null); setIsMenuOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                          activePage === 'Documentos' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                        <span>Documentos Clínicos</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Group: Comunicação */}
+                {(hasModule('Mensagens') || hasModule('Retorno')) && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-black tracking-widest text-slate-500 uppercase px-3.5 mb-1.5 flex items-center gap-1.5">
+                      <MessageSquare className="w-3 h-3 text-brand-cyan" />
+                      <span>Comunicação</span>
+                    </div>
+                    {hasModule('Mensagens') && (
+                      <button
+                        onClick={() => { setActivePage('Mensagens'); setSubPage(null); setIsMenuOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                          activePage === 'Mensagens' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                        <span>Central WhatsApp</span>
+                      </button>
+                    )}
+                    {hasModule('Retorno') && (
+                      <button
+                        onClick={() => { setActivePage('Retorno'); setSubPage(null); setIsMenuOpen(false); }}
+                        className={cn(
+                          "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                          activePage === 'Retorno' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                        <span>Gestão de Retornos</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Group: Financeiro */}
+                {hasModule('Financeiro') && (
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-black tracking-widest text-slate-500 uppercase px-3.5 mb-1.5 flex items-center gap-1.5">
+                      <DollarSign className="w-3 h-3 text-brand-cyan" />
+                      <span>Financeiro</span>
+                    </div>
+                    <button
+                      onClick={() => { setActivePage('Financeiro'); setSubPage(null); setIsMenuOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                        activePage === 'Financeiro' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                      )}
+                    >
+                      <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                      <span>Painel Financeiro</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Group: Configurações */}
                 {hasModule('Administração') && (
-                  <MobileNavItem icon={<Activity className="w-5 h-5" />} label="Administração" active={activePage === 'Administração'} onClick={() => { setActivePage('Administração'); setIsMenuOpen(false); }} />
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-black tracking-widest text-slate-500 uppercase px-3.5 mb-1.5 flex items-center gap-1.5">
+                      <Activity className="w-3 h-3 text-brand-cyan" />
+                      <span>Administração</span>
+                    </div>
+                    <button
+                      onClick={() => { setActivePage('Administração'); setAdminTab('users'); setSubPage(null); setIsMenuOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                        activePage === 'Administração' && adminTab === 'users' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                      )}
+                    >
+                      <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                      <span>Gestão de Usuários</span>
+                    </button>
+                    <button
+                      onClick={() => { setActivePage('Administração'); setAdminTab('settings'); setSubPage(null); setIsMenuOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                        activePage === 'Administração' && adminTab === 'settings' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                      )}
+                    >
+                      <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                      <span>Dados da Clínica</span>
+                    </button>
+                    <button
+                      onClick={() => { setActivePage('Administração'); setAdminTab('backup'); setSubPage(null); setIsMenuOpen(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all border text-left pl-6 cursor-pointer",
+                        activePage === 'Administração' && adminTab === 'backup' ? "bg-brand-cyan/25 border-brand-cyan/35 text-white" : "bg-transparent border-transparent text-slate-355 hover:bg-white/5"
+                      )}
+                    >
+                      <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />
+                      <span>Backup e Restauro</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Central SaaS */}
+                {currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador') && (
+                  <button
+                    onClick={() => { setActivePage('SuperAdmin'); setSubPage(null); setIsMenuOpen(false); }}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-bold rounded-xl transition-all border text-left cursor-pointer",
+                      activePage === 'SuperAdmin' ? "bg-brand-cyan/20 border-brand-cyan/35 text-white animate-pulse" : "bg-transparent border-transparent text-slate-350 hover:bg-white/5"
+                    )}
+                  >
+                    <Shield className="w-4 h-4 text-brand-cyan" />
+                    <span>SaaS Central Admin</span>
+                  </button>
                 )}
               </div>
-              
-              <div className="p-4 border-t border-slate-100">
+
+              <div className="p-4 border-t border-slate-800">
                 <button 
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-3 p-3 text-rose-500 font-bold text-sm hover:bg-rose-50 rounded-xl transition-colors"
+                  onClick={() => { handleLogout(); setIsMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 p-3 text-rose-450 font-bold text-sm hover:bg-rose-500/10 rounded-xl transition-colors cursor-pointer"
                 >
                   <LogOut className="w-5 h-5" />
                   Sair do Sistema
@@ -3071,7 +3506,7 @@ export default function App() {
 
       {/* Filters removed from main background area because they are now placed permanently inside the active modal windows */}
 
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto bg-slate-50">
         <AnimatePresence mode="wait">
           <motion.div
             key={activePage}
@@ -3079,7 +3514,12 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -5 }}
             transition={{ duration: 0.15 }}
-            className="p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl) mx-auto w-full"
+            className={cn(
+              "w-full mx-auto flex-1 flex flex-col",
+              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin'
+                ? "p-0"
+                : "p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl)"
+            )}
           >
             {globalBanner && globalBanner.active && !bannerDismissed && (
               <div id="saas-system-banner" className={`p-4 rounded-2xl border flex items-start sm:items-center justify-between gap-4 font-sans shadow-md animate-in slide-in-from-top-4 duration-300 relative overflow-hidden text-left shrink-0 select-none ${
@@ -3131,105 +3571,26 @@ export default function App() {
               </div>
             )}
 
-            {activePage === 'Dashboard' ? renderContent() : renderDashboardBackground()}
-          </motion.div>
-        </AnimatePresence>
-      </main>
-
-      <Footer 
-        onPrivacyPolicy={() => setShowPrivacyPolicy(true)} 
-        onTerms={() => setShowTermsOfUse(true)} 
-        footerText={footerText}
-      />
-
-      {renderLegal()}
-
-      {activePage !== 'Dashboard' && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-4 overflow-hidden">
-          <div className="bg-slate-50 w-full max-w-7xl h-[95vh] flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 shadow-2xl relative">
-            {activePage === 'SuperAdmin' ? (
-              <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white px-5 py-3.5 flex items-center justify-between shrink-0 select-none border-b border-white/10 font-sans relative overflow-hidden">
-                <div className="absolute right-0 top-0 h-full w-1/3 bg-radial-gradient opacity-10 pointer-events-none" />
-                <div className="flex items-center gap-2.5 relative z-101">
-                  <div className="w-8 h-8 rounded-lg bg-brand-cyan/20 flex items-center justify-center text-brand-cyan border border-brand-cyan/35 animate-in zoom-in duration-300">
-                    <Shield className="w-4.5 h-4.5 animate-pulse text-brand-cyan" />
-                  </div>
-                  <div className="text-left">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-black text-white leading-none uppercase tracking-wider">
-                        Painel Central SaaS
-                      </h2>
-                      <span className="text-[8px] bg-brand-cyan/20 text-brand-cyan font-bold tracking-widest px-1.5 py-0.5 rounded border border-brand-cyan/35">
-                        PROVEDOR CENTRAL
-                      </span>
-                    </div>
-                    <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">Sistemas & Clientes OdontoDash</p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2.5 relative z-101">
-                  <button 
-                    type="button"
-                    onClick={() => window.location.reload()}
-                    className="bg-white/10 hover:bg-white/15 px-3 py-1.5 rounded-lg border border-white/15 text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer text-white hover:scale-105 active:scale-95"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-brand-cyan animate-spin-slow" /> Forçar Sincronização
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white transition-all text-xs font-black rounded-lg border border-rose-500/30 cursor-pointer shadow-sm active:scale-95"
-                  >
-                    <LogOut className="w-3.5 h-3.5 text-white" />
-                    <span>Fazer Logout</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-slate-800 text-white px-5 py-3.5 flex items-center justify-between shrink-0 select-none border-b border-slate-700/60 font-sans">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-brand-cyan/20 flex items-center justify-center text-brand-cyan border border-brand-cyan/35 animate-in zoom-in duration-300">
-                    <Stethoscope className="w-4.5 h-4.5 animate-pulse" />
-                  </div>
-                  <div className="text-left">
-                    <h2 className="text-sm font-black text-white leading-none uppercase tracking-wider">
-                      {activePage === 'Estoque' ? 'Estoque & Suprimentos' : activePage}
-                    </h2>
-                    <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">{clinicName}</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setActivePage('Dashboard'); setSubPage(null); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 hover:text-white transition-all text-xs font-black rounded-lg border border-slate-600 cursor-pointer shadow-sm active:scale-95"
-                >
-                  <X className="w-3.5 h-3.5 text-brand-cyan font-black" />
-                  <span>Fechar Janela</span>
-                </button>
-              </div>
-            )}
-
-            {/* Smart Search Filters, Date/Time and Booking Copier directly inside the top in a fixed/sticky way */}
-            {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && (
-              <div className="bg-slate-100 border-b border-slate-200 px-4 md:px-6 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 shrink-0 shadow-sm z-30 font-sans">
-                <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-6 flex-1">
+            {/* Smart Search Filters, Date/Time and Booking Copier neatly integrated within the workspace layout */}
+            {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && subPage === null && (
+              <div className="bg-white border border-slate-200/80 rounded-2xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-sm z-30 font-sans">
+                <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-5 flex-1">
                   <div className="flex items-center gap-2">
-                    <div className="relative group flex-1 md:flex-none">
+                    <div className="relative group w-full lg:w-auto">
                       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
                       <input 
                         type="text" 
                         placeholder="Buscar paciente..."
-                        className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full md:w-48 shadow-sm"
+                        className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full lg:w-48 shadow-sm"
                         value={searchPatient}
                         onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
                       />
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 md:gap-4">
-                    <div className="flex items-center gap-2 flex-1 md:flex-none">
-                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Período:</span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-slate-600">
+                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Período:</span>
                       <select 
                         className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
                         value={filterDateRange}
@@ -3274,10 +3635,10 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2 flex-1 md:flex-none">
-                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Proc:</span>
+                    <div className="flex items-center gap-1.5 text-slate-600">
+                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Proc:</span>
                       <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
                         value={filterProcedure}
                         onChange={(e) => setFilterProcedure(e.target.value)}
                       >
@@ -3285,10 +3646,10 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-1 md:flex-none">
-                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Status:</span>
+                    <div className="flex items-center gap-1.5 text-slate-600">
+                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Status:</span>
                       <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
                         value={filterStatus}
                         onChange={(e) => setFilterStatus(e.target.value)}
                       >
@@ -3296,10 +3657,10 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-1 md:flex-none">
-                      <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Fin:</span>
+                    <div className="flex items-center gap-1.5 text-slate-600">
+                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Fin:</span>
                       <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
                         value={filterPayment}
                         onChange={(e) => setFilterPayment(e.target.value)}
                       >
@@ -3308,10 +3669,10 @@ export default function App() {
                     </div>
 
                     {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-                      <div className="flex items-center gap-2 flex-1 md:flex-none">
-                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider hidden xs:inline">Médico:</span>
+                      <div className="flex items-center gap-1.5 text-slate-600">
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Médico:</span>
                         <select 
-                          className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none flex-1 md:min-w-[120px] cursor-pointer shadow-sm"
+                          className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
                           value={filterDentista}
                           onChange={(e) => setFilterDentista(e.target.value)}
                         >
@@ -3322,10 +3683,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Relógio e Ícone */}
-                <div className="flex items-center gap-3 shrink-0 self-end md:self-auto pl-4 md:border-l md:border-slate-200/60 ml-2">
-                  <RealTimeClock />
-                  
+                <div className="flex items-center gap-2 shrink-0 self-start xl:self-auto xl:border-l xl:border-slate-200/60 xl:pl-4">
                   <button 
                     onClick={() => {
                       const url = window.location.origin + window.location.pathname + '?booking=true';
@@ -3333,25 +3691,28 @@ export default function App() {
                       alert('Link de agendamento online copiado!');
                       setIsPublicBooking(true);
                     }}
-                    className="p-1.5 bg-white border border-slate-200 rounded-lg text-brand-cyan hover:bg-brand-cyan hover:text-white transition-all flex items-center justify-center group shrink-0 shadow-sm cursor-pointer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-cyan text-white rounded-lg hover:bg-brand-cyan/90 text-xs font-bold transition-all shadow-sm active:scale-95"
                     title="Copiar Link de Agendamento"
                   >
-                    <Monitor className="w-3.5 h-3.5 transition-transform group-hover:scale-110" />
+                    <Monitor className="w-3.5 h-3.5" />
+                    <span>Agendamento Online</span>
                   </button>
                 </div>
               </div>
             )}
-            <div className={cn(
-              "flex-1 overflow-y-auto",
-              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin'
-                ? "p-0 space-y-0 h-full flex flex-col overflow-hidden"
-                : "p-4 sm:p-6 lg:p-8 space-y-6"
-            )}>
-              {renderContent()}
-            </div>
-          </div>
-        </div>
-      )}
+
+            {renderContent()}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      <Footer 
+        onPrivacyPolicy={() => setShowPrivacyPolicy(true)} 
+        onTerms={() => setShowTermsOfUse(true)} 
+        footerText={footerText}
+      />
+
+      {renderLegal()}
       </div>
     </div>
   );
@@ -9389,7 +9750,9 @@ function AdminView({
   data,
   patients,
   documents,
-  onRestore
+  onRestore,
+  adminTab,
+  setAdminTab
 }: { 
   users: any[]; 
   onAddUser: (u: any) => Promise<boolean>; 
@@ -9409,6 +9772,8 @@ function AdminView({
   patients: any[];
   documents: any[];
   onRestore: (data: any) => Promise<void>;
+  adminTab?: 'users' | 'settings' | 'backup';
+  setAdminTab?: (tab: 'users' | 'settings' | 'backup') => void;
 }) {
   const [showAddUser, setShowAddUser] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -9424,7 +9789,9 @@ function AdminView({
   const [newUserModules, setNewUserModules] = useState<string[]>(['Dashboard', 'Agenda', 'Pacientes']);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'backup'>('users');
+  const [internalTab, setInternalTab] = useState<'users' | 'settings' | 'backup'>('users');
+  const activeTab = adminTab || internalTab;
+  const setActiveTab = setAdminTab || setInternalTab;
 
   const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Administração', 'Documentos'];
 
