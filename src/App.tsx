@@ -137,6 +137,11 @@ import {
 import SaaSAssinaturaView from './components/SaaSAssinaturaView';
 import SaaSLockedFeatureView from './components/SaaSLockedFeatureView';
 import SuperAdminView from './components/SuperAdminView';
+import CustomDashboardView from './components/DashboardView';
+import Sidebar from './components/Sidebar';
+import TopBar from './components/TopBar';
+import AppointmentsView from './components/AppointmentsView';
+import ScheduleView from './components/ScheduleView';
 
 const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
@@ -2510,6 +2515,7 @@ export default function App() {
               canSeeFinancials={canSeeFinancials}
               users={users}
               onNavigate={(page, subP = null) => { setActivePage(page); setSubPage(subP); }}
+              clinicName={clinicName}
             />
           </div>
         );
@@ -2586,16 +2592,19 @@ export default function App() {
           />
         );
       case 'Agenda':
-        return <AgendaView 
-          data={filteredData} 
-          fullData={data} 
+        return <ScheduleView 
+          data={data} 
           onAdd={() => setSubPage('NovoAgendamento')} 
-          onStart={handleStartConsultation} 
-          onFinish={handleFinishConsultation} 
-          onCancel={handleCancelAppointment} 
-          onSendReminder={handleSendManualReminder}
+          onCancel={handleCancelAppointment}
+          onStart={handleStartConsultation}
+          onFinish={handleFinishConsultation}
+        />;
+      case 'Consultas':
+        return <AppointmentsView 
+          data={data} 
+          onAdd={() => setSubPage('NovoAgendamento')} 
+          onCancel={handleCancelAppointment}
           onSendWhatsApp={handleWhatsAppReminder}
-          onEditEmail={(record) => setEditingPatientEmail({ patientName: record.paciente, appointmentId: record.id })}
         />;
       case 'Financeiro':
         return canAccessFinance ? <FinanceView data={filteredData} patients={patientsForUser} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
@@ -2658,6 +2667,7 @@ export default function App() {
             onSendReminder={handleSendManualReminder} 
             users={users} 
             onNavigate={(page, subP = null) => { setActivePage(page); setSubPage(subP); }}
+            clinicName={clinicName}
           />
         );
     }
@@ -2681,13 +2691,77 @@ export default function App() {
           canSeeFinancials={canSeeFinancials}
           users={users}
           onNavigate={(page, subP = null) => { setActivePage(page); setSubPage(subP); }}
+          clinicName={clinicName}
         />
       </div>
     );
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 pt-14">
+    <div className="min-h-screen bg-[#f4f7fa] flex font-sans text-slate-900 overflow-x-hidden">
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:block w-20 shrink-0">
+        <Sidebar 
+          activePage={activePage}
+          adminTab={adminTab}
+          currentUser={currentUser}
+          hasModule={hasModule}
+          isModuleLockedBySaaS={isModuleLockedBySaaS}
+          onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); }}
+          onLogout={handleLogout}
+          clinicName={clinicName}
+        />
+      </div>
+
+      {/* Mobile Slide-out Menu Overlay */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMenuOpen(false)}
+              className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-50 lg:hidden"
+            />
+            <motion.div 
+              initial={{ x: -80 }}
+              animate={{ x: 0 }}
+              exit={{ x: -80 }}
+              transition={{ type: 'tween', duration: 0.2 }}
+              className="fixed top-0 left-0 bottom-0 w-20 bg-white shadow-2xl z-55 lg:hidden"
+            >
+              <Sidebar 
+                activePage={activePage}
+                adminTab={adminTab}
+                currentUser={currentUser}
+                hasModule={hasModule}
+                isModuleLockedBySaaS={isModuleLockedBySaaS}
+                onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); setIsMenuOpen(false); }}
+                onLogout={() => { handleLogout(); setIsMenuOpen(false); }}
+                clinicName={clinicName}
+              />
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Main Workspace Area */}
+      <div className="flex-1 flex flex-col min-h-screen min-w-0 pt-16">
+        {/* Top Navbar */}
+        <TopBar 
+          onMenuToggle={() => setIsMenuOpen(true)}
+          currentUser={currentUser}
+          notifications={notifications}
+          onNotificationClick={() => setShowNotifications(!showNotifications)}
+          showNotifications={showNotifications}
+          setShowNotifications={setShowNotifications}
+          clinicName={clinicName}
+          onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); }}
+          onLogout={handleLogout}
+        />
+
+    <div className="hidden">
       {/* Unified Fixed Top Navbar */}
       <header className="fixed top-0 left-0 right-0 h-14 bg-slate-900 border-b border-slate-800 text-white z-[110] select-none flex items-center justify-between px-4 font-sans">
         {/* Logo / Branding */}
@@ -3048,9 +3122,10 @@ export default function App() {
           </button>
         </div>
       </header>
+    </div> {/* Close first hidden block */}
 
       {/* Conteúdo Principal (Central) */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative">
         <AnimatePresence>
         {quotaExceeded && (
           <motion.div 
@@ -3106,7 +3181,9 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+    </div> {/* Close relative container */}
 
+    <div className="hidden">
       {/* Header (apenas Mobile) */}
       <header className="hidden bg-white border-b border-slate-200 px-3 md:px-4 py-2 flex items-center justify-between sticky top-0 z-50 shrink-0 select-none">
           <div className="flex items-center gap-2 md:gap-3 shrink-0">
@@ -3248,7 +3325,6 @@ export default function App() {
                 <Monitor className="w-5 h-5 transition-transform group-hover:scale-110" />
               </button>
             </div>
-          </div>
 
           <button 
               onClick={handleLogout}
@@ -3258,6 +3334,7 @@ export default function App() {
               <LogOut className="w-4 h-4 group-hover:scale-110 transition-transform" />
               <span className="text-[8px] uppercase font-black tracking-widest mt-1">Sair</span>
             </button>
+          </div>
         </header>
 
       {/* Mobile Menu Overlay */}
@@ -3516,6 +3593,8 @@ export default function App() {
           </>
         )}
       </AnimatePresence>
+    </div> {/* Closing hidden old container wrapper */}
+
 
       {/* Filters removed from main background area because they are now placed permanently inside the active modal windows */}
 
@@ -3529,8 +3608,8 @@ export default function App() {
             transition={{ duration: 0.15 }}
             className={cn(
               "w-full mx-auto flex-1 flex flex-col",
-              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin'
-                ? "p-0"
+              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin' || activePage === 'Dashboard'
+                ? "p-0 h-[calc(100vh-3.5rem)] overflow-hidden bg-[#f4f7fa]"
                 : "p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl)"
             )}
           >
@@ -5036,6 +5115,39 @@ function RibbonItem({ icon, label, active = false, onClick, isLocked = false }: 
 }
 
 function DashboardView({ 
+  filteredData,
+  upcomingAppointments = [],
+  onSendWhatsApp,
+  onSendReminder,
+  canSeeFinancials = true,
+  users = [],
+  onNavigate,
+  clinicName = 'DentalSoft'
+}: { 
+  filteredData: DentalRecord[];
+  upcomingAppointments?: DentalRecord[];
+  onSendWhatsApp: (record: DentalRecord) => void;
+  onSendReminder: (record: DentalRecord) => void;
+  canSeeFinancials?: boolean;
+  users?: any[];
+  onNavigate?: (page: string, subPage?: string | null) => void;
+  clinicName?: string;
+}) {
+  return (
+    <CustomDashboardView 
+      filteredData={filteredData}
+      upcomingAppointments={upcomingAppointments}
+      onSendWhatsApp={onSendWhatsApp}
+      onSendReminder={onSendReminder}
+      canSeeFinancials={canSeeFinancials}
+      users={users}
+      onNavigate={onNavigate}
+      clinicName={clinicName}
+    />
+  );
+}
+
+function OldDashboardView_Unused({ 
   filteredData,
   upcomingAppointments = [],
   onSendWhatsApp,
@@ -10125,20 +10237,23 @@ function AdminView({
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-left-2 duration-300">
-      <div className="bg-slate-900 text-white p-6 md:p-8 border border-slate-800 flex flex-col md:flex-row justify-between items-center shadow-lg gap-6">
+    <div className="space-y-6 animate-in fade-in slide-in-from-left-2 duration-300">
+      
+      {/* Redesigned Admin Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200/80">
         <div>
-          <h2 className="text-xl font-bold tracking-tight mb-2 uppercase italic font-serif text-brand-cyan text-center md:text-left">Gestão Estratégica</h2>
-          <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase text-center md:text-left">Controle de usuários, permissões e infraestrutura.</p>
+          <span className="text-[10px] font-black text-sky-500 uppercase tracking-widest block mb-1">Área de Administração</span>
+          <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Gestão Estratégica</h2>
+          <p className="text-slate-500 text-xs font-medium">Controle de acessos, parâmetros globais da clínica, segurança e cópias de segurança.</p>
         </div>
         
-        <div className="flex bg-slate-800 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar w-full md:w-auto">
+        <div className="flex bg-slate-200/50 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar w-full sm:w-auto self-start sm:self-center gap-1">
           <button 
             type="button"
             onClick={() => setActiveTab('users')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
-              activeTab === 'users' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
+              activeTab === 'users' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
             )}
           >
             Usuários
@@ -10147,8 +10262,8 @@ function AdminView({
             type="button"
             onClick={() => setActiveTab('settings')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
-              activeTab === 'settings' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
+              activeTab === 'settings' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
             )}
           >
             Configurações
@@ -10157,8 +10272,8 @@ function AdminView({
             type="button"
             onClick={() => setActiveTab('backup')}
             className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0",
-              activeTab === 'backup' ? "bg-brand-cyan text-white shadow-lg" : "text-slate-500 hover:text-slate-300"
+              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
+              activeTab === 'backup' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
             )}
           >
             Backup
