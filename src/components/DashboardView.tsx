@@ -14,7 +14,8 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  CheckCircle
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -56,35 +57,76 @@ export default function CustomDashboardView({
   }, []);
   const doctorName = loggedInUser?.name || 'Dr. Daniel Smith';
 
-  // Dynamic values based on original analytics to match the design metrics
-  const totalPatientsMetrics = useMemo(() => {
-    const unique = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size || 12;
-    return {
-      lastMonth: unique * 3 + 4,
-      thisWeek: unique + 9,
-      today: Math.max(1, Math.round(unique / 4))
-    };
+  const isTrialUser = useMemo(() => {
+    return !!(loggedInUser?.isTrial || loggedInUser?.parentTrialId);
+  }, [loggedInUser]);
+
+  // Get active days from actual appointments
+  const appointmentDays = useMemo(() => {
+    const days = new Set<number>();
+    const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
+    filteredData.forEach(appt => {
+      if (appt.data) {
+        try {
+          const date = parseISO(appt.data);
+          if (date.getMonth() === currentMonth && date.getFullYear() === currentYear) {
+            days.add(date.getDate());
+          }
+        } catch (e) {}
+      }
+    });
+    return days;
   }, [filteredData]);
 
+  // Dynamic values based on original analytics to match the design metrics
+  const totalPatientsMetrics = useMemo(() => {
+    const unique = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size;
+    if (isTrialUser) {
+      return {
+        lastMonth: unique,
+        thisWeek: Math.min(unique, filteredData.length),
+        today: filteredData.filter(r => r.data === format(new Date(), 'yyyy-MM-dd')).length
+      };
+    }
+    const fallbackUnique = unique || 12;
+    return {
+      lastMonth: fallbackUnique * 3 + 4,
+      thisWeek: fallbackUnique + 9,
+      today: Math.max(1, Math.round(fallbackUnique / 4))
+    };
+  }, [filteredData, isTrialUser]);
+
   const reportMetrics = useMemo(() => {
-    const unique = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size || 12;
-    const completed = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído').length || 11;
-    const scheduled = filteredData.filter(r => r.status === 'Agendado').length || 23;
+    const unique = new Set(filteredData.map(r => r.paciente).filter(Boolean)).size;
+    const completed = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído').length;
+    const scheduled = filteredData.filter(r => r.status === 'Agendado').length;
     const surgeries = filteredData.filter(r => {
       const proc = (r.procedimento || '').toLowerCase();
       return proc.includes('cirurg') || proc.includes('implante') || proc.includes('extra') || proc.includes('canal');
-    }).length || 4;
+    }).length;
+
+    if (isTrialUser) {
+      return {
+        patients: unique,
+        consultations: scheduled,
+        treatments: completed,
+        surgeries: surgeries
+      };
+    }
+
     return {
-      patients: unique,
-      consultations: scheduled,
-      treatments: completed,
-      surgeries: surgeries
+      patients: unique || 12,
+      consultations: scheduled || 23,
+      treatments: completed || 11,
+      surgeries: surgeries || 4
     };
-  }, [filteredData]);
+  }, [filteredData, isTrialUser]);
 
   const waitingRoomCount = useMemo(() => {
+    if (isTrialUser) return upcomingAppointments.length;
     return upcomingAppointments.length || 5;
-  }, [upcomingAppointments]);
+  }, [upcomingAppointments, isTrialUser]);
 
   // Notifications (dynamic + fallback)
   const notifications = useMemo(() => {
@@ -101,6 +143,10 @@ export default function CustomDashboardView({
         colorClass: colors[idx % colors.length]
       });
     });
+
+    if (isTrialUser) {
+      return items;
+    }
 
     if (items.length < 4) {
       const fallbacks = [
@@ -120,12 +166,27 @@ export default function CustomDashboardView({
       });
     }
     return items;
-  }, [upcomingAppointments]);
+  }, [upcomingAppointments, isTrialUser]);
 
   // Frequent Patients (dynamic + fallback)
   const frequentPatients = useMemo(() => {
     const list = [];
     const names = Array.from(new Set(filteredData.map(r => r.paciente).filter(Boolean)));
+    
+    if (isTrialUser) {
+      names.slice(0, 4).forEach((name, i) => {
+        const initial = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+        list.push({
+          id: `freq-${i}`,
+          name,
+          time: "Ativo",
+          initial,
+          colorClass: "bg-teal-50 text-teal-700 border-teal-100"
+        });
+      });
+      return list;
+    }
+
     const defaultPatients = [
       { name: "Isabel Horvat", time: "5 hours ago", initial: "IH", color: "bg-teal-50 text-teal-700 border-teal-100" },
       { name: "Alena Steves", time: "15 hours ago", initial: "AS", color: "bg-indigo-50 text-indigo-700 border-indigo-100" },
@@ -145,13 +206,29 @@ export default function CustomDashboardView({
       });
     }
     return list;
-  }, [filteredData]);
+  }, [filteredData, isTrialUser]);
 
   // Waiting Room patients (dynamic + fallback)
   const waitingRoomPatients = useMemo(() => {
     const list = [];
     const realAppts = upcomingAppointments.slice(0, 5);
-    const times = ["1 Hour", "45 Minutes", "30 Minutes", "15 Minutes", "12 Minutes"];
+    const times = ["1 Hora", "45 Minutos", "30 Minutos", "15 Minutos", "12 Minutos"];
+    
+    if (isTrialUser) {
+      realAppts.forEach((appt, i) => {
+        list.push({
+          id: appt.id,
+          name: appt.paciente,
+          type: appt.procedimento,
+          time: times[i % times.length],
+          initial: appt.paciente.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2),
+          colorClass: "bg-sky-50 text-sky-700",
+          record: appt
+        });
+      });
+      return list;
+    }
+
     const defaultPatients = [
       { name: "Isabel Horvat", type: "Consultation", initial: "IH", color: "bg-[#f3f4f6]" },
       { name: "Ivan Drake", type: "Cleaning", initial: "ID", color: "bg-[#f3f4f6]" },
@@ -185,12 +262,26 @@ export default function CustomDashboardView({
       }
     }
     return list;
-  }, [upcomingAppointments]);
+  }, [upcomingAppointments, isTrialUser]);
 
   // Recent Patients (dynamic + fallback)
   const recentPatients = useMemo(() => {
     const list = [];
     const uniqueNames = Array.from(new Set(filteredData.map(r => r.paciente).filter(Boolean)));
+    
+    if (isTrialUser) {
+      uniqueNames.forEach((name, idx) => {
+        const initial = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+        list.push({
+          id: `recent-${idx}`,
+          name,
+          time: "Recente",
+          initial
+        });
+      });
+      return list;
+    }
+
     const defaultRecent = [
       { name: "Alena Steves", time: "15 hours ago", initial: "AS" },
       { name: "Ivan Drake", time: "29 minutes ago", initial: "ID" },
@@ -210,7 +301,7 @@ export default function CustomDashboardView({
       });
     }
     return list;
-  }, [filteredData]);
+  }, [filteredData, isTrialUser]);
 
   // Calendar Day generation
   const calendarDays = useMemo(() => {
@@ -265,7 +356,7 @@ export default function CustomDashboardView({
   };
 
   return (
-    <div className="flex h-full w-full bg-[#f4f7fa] text-slate-800 font-sans select-none overflow-hidden text-left relative">
+    <div className="flex w-full bg-[#f4f7fa] text-slate-800 font-sans select-none text-left relative">
       
       {/* Toast Overlay for voice calling */}
       {callingToast && (
@@ -276,7 +367,7 @@ export default function CustomDashboardView({
       )}
 
       {/* MAIN WORKSPACE PANEL */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden p-6 gap-6">
+      <div className="flex-1 flex flex-col p-6 gap-6">
         
         {/* PAGE TITLE & SUBTITLE */}
         <div className="flex flex-col text-left shrink-0">
@@ -287,141 +378,67 @@ export default function CustomDashboardView({
         </div>
 
         {/* MAIN CONTENTS GRID SYSTEM */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-0 overflow-y-auto pb-6 pr-1">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pb-6">
           
           {/* LEFT 9 COLUMNS FOR MAIN WIDGETS */}
-          <div className="col-span-12 lg:col-span-9 flex flex-col gap-5 min-h-0">
-            
-            {/* ROW 1: Notifications & Frequent Patients */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 shrink-0">
+          <div className="col-span-12 lg:col-span-9 flex flex-col gap-5">
+                    {/* ROW 1: Key Performance Indicators */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
               
-              {/* Notifications Card */}
-              <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col justify-between h-[180px]">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Notificações</h3>
-                  <button onClick={() => onNavigate?.('Agenda')} className="text-[10px] font-bold text-[#f97316] hover:underline">Ver Todos</button>
+              {/* Card 1: Total Patients */}
+              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
+                <div className="space-y-1 text-left min-w-0">
+                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Total de Pacientes</span>
+                  <h3 className="text-xl font-black text-slate-800 tracking-tight leading-none">{reportMetrics.patients}</h3>
+                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Pacientes cadastrados</p>
                 </div>
-                
-                <div className="flex-1 overflow-y-auto mt-3 pr-1 space-y-2.5">
-                  {notifications.map((noti) => (
-                    <div key={noti.id} className="flex items-center justify-between text-[11px]">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${noti.colorClass} shrink-0`} />
-                        <span className="font-bold text-slate-700 truncate max-w-[200px]">{noti.title}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-slate-400 font-medium shrink-0 font-mono text-[9.5px]">
-                        <span>{noti.time}</span>
-                        <span>•</span>
-                        <span>{noti.date}</span>
-                      </div>
-                    </div>
-                  ))}
+                <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center shrink-0">
+                  <Users className="w-5 h-5" />
                 </div>
               </div>
 
-              {/* Frequent Patients Card */}
-              <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col justify-between h-[180px]">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Pacientes Frequentes</h3>
+              {/* Card 2: Scheduled Appointments */}
+              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
+                <div className="space-y-1 text-left min-w-0">
+                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Consultas Agendadas</span>
+                  <h3 className="text-xl font-black text-sky-500 tracking-tight leading-none">{reportMetrics.consultations}</h3>
+                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Agendamentos futuros</p>
                 </div>
-
-                <div className="grid grid-cols-4 gap-2 mt-4 flex-1 items-center">
-                  {frequentPatients.map((item) => (
-                    <div key={item.id} className="flex flex-col items-center text-center">
-                      <div className={`w-11 h-11 rounded-full ${item.colorClass} border flex items-center justify-center font-bold text-xs shadow-sm mb-2 uppercase`}>
-                        {item.initial}
-                      </div>
-                      <span className="text-[10px] font-bold text-slate-800 leading-tight truncate w-full max-w-[70px]">{item.name}</span>
-                      <span className="text-[8.5px] text-slate-400 font-medium mt-0.5 leading-none">{item.time}</span>
-                    </div>
-                  ))}
+                <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-500 flex items-center justify-center shrink-0">
+                  <Calendar className="w-5 h-5" />
                 </div>
               </div>
 
-            </div>
-
-            {/* ROW 2: Total Patients & Report Card & Waiting Room Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 shrink-0">
-              
-              {/* Total Patients Card */}
-              <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col justify-between h-[150px]">
-                <div>
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Total de Pacientes</h3>
-                  <p className="text-[9px] text-slate-400 font-medium mt-1 leading-tight">Número total de pacientes atendidos neste período...</p>
+              {/* Card 3: Completed Treatments */}
+              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
+                <div className="space-y-1 text-left min-w-0">
+                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Tratamentos Concluídos</span>
+                  <h3 className="text-xl font-black text-emerald-500 tracking-tight leading-none">{reportMetrics.treatments}</h3>
+                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Procedimentos finalizados</p>
                 </div>
-                
-                <div className="grid grid-cols-3 gap-1 mt-3 text-center border-t border-slate-50 pt-2.5">
-                  <div className="flex flex-col">
-                    <span className="text-[8px] text-slate-400 font-bold uppercase">Mês Passado</span>
-                    <span className="text-lg font-black text-sky-500 mt-1">{totalPatientsMetrics.lastMonth}</span>
-                  </div>
-                  <div className="flex flex-col border-x border-slate-50">
-                    <span className="text-[8px] text-slate-400 font-bold uppercase">Esta Semana</span>
-                    <span className="text-lg font-black text-orange-500 mt-1">{totalPatientsMetrics.thisWeek}</span>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-[8px] text-slate-400 font-bold uppercase">Hoje</span>
-                    <span className="text-lg font-black text-emerald-500 mt-1">0{totalPatientsMetrics.today}</span>
-                  </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-500 flex items-center justify-center shrink-0">
+                  <CheckCircle className="w-5 h-5" />
                 </div>
               </div>
 
-              {/* Report Card */}
-              <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col justify-between h-[150px]">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Relatório</h3>
-                  <span className="text-[9px] text-slate-400 font-bold uppercase">Duas semanas</span>
+              {/* Card 4: Surgeries & Procedures */}
+              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
+                <div className="space-y-1 text-left min-w-0">
+                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Cirurgias & Implantes</span>
+                  <h3 className="text-xl font-black text-red-500 tracking-tight leading-none">{reportMetrics.surgeries}</h3>
+                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Procedimentos complexos</p>
                 </div>
-                
-                <div className="grid grid-cols-4 gap-2 mt-3 text-center">
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-xl bg-orange-500 text-white flex items-center justify-center font-bold text-xs shadow-md shadow-orange-500/10">
-                      👥
-                    </div>
-                    <span className="text-[8px] text-slate-400 font-bold mt-1 leading-none">Pacientes</span>
-                    <span className="text-xs font-black text-slate-800 mt-1">{reportMetrics.patients}</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-xl bg-sky-500 text-white flex items-center justify-center font-bold text-xs shadow-md shadow-sky-500/10">
-                      📅
-                    </div>
-                    <span className="text-[8px] text-slate-400 font-bold mt-1 leading-none">Consultas</span>
-                    <span className="text-xs font-black text-slate-800 mt-1">{reportMetrics.consultations}</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-bold text-xs shadow-md shadow-emerald-500/10">
-                      💉
-                    </div>
-                    <span className="text-[8px] text-slate-400 font-bold mt-1 leading-none">Tratamentos</span>
-                    <span className="text-xs font-black text-slate-800 mt-1">{reportMetrics.treatments}</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className="w-8 h-8 rounded-xl bg-red-500 text-white flex items-center justify-center font-bold text-xs shadow-md shadow-red-500/10">
-                      ✂️
-                    </div>
-                    <span className="text-[8px] text-slate-400 font-bold mt-1 leading-none">Cirurgias</span>
-                    <span className="text-xs font-black text-slate-800 mt-1">{reportMetrics.surgeries}</span>
-                  </div>
+                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
+                  <Stethoscope className="w-5 h-5" />
                 </div>
               </div>
-
-              {/* Patients in Waiting room Card */}
-              <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col justify-between h-[150px]">
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Sala de Espera</h3>
-                
-                <div className="flex flex-col items-center justify-center flex-1 mt-1">
-                  <span className="text-3xl font-black text-amber-500 leading-none">{waitingRoomCount}</span>
-                  <p className="text-[9.5px] text-slate-400 font-bold uppercase tracking-wider mt-1.5 leading-none">Aguardando</p>
-                </div>
-              </div>
-
             </div>
 
             {/* ROW 3: Calendar & Recent Patients */}
-            <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-5 min-h-0">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
               
               {/* Appointments Calendar Card */}
-              <div className="md:col-span-7 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col min-h-[280px] lg:min-h-0 overflow-hidden">
+              <div className="md:col-span-7 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
                 <div className="flex items-center justify-between shrink-0 mb-3">
                   <div className="flex items-center gap-2">
                     <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Agendamentos</h3>
@@ -467,17 +484,25 @@ export default function CustomDashboardView({
                       >
                         {cell.day}
                         {/* Highlight colored blocks similar to image */}
-                        {cell.day === 10 && (
-                          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-sky-500 rounded-full animate-pulse" title="Consulta" />
-                        )}
-                        {cell.day === 15 && (
-                          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-orange-500 rounded-full animate-pulse" title="Limpeza" />
-                        )}
-                        {cell.day === 20 && (
-                          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-red-500 rounded-full animate-pulse" title="Cirurgia" />
-                        )}
-                        {cell.day === 25 && (
-                          <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-emerald-500 rounded-full animate-pulse" title="Aparelho" />
+                        {isTrialUser ? (
+                          cell.day && appointmentDays.has(cell.day) && (
+                            <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-orange-500 rounded-full animate-pulse" title="Consulta Agendada" />
+                          )
+                        ) : (
+                          <>
+                            {cell.day === 10 && (
+                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-sky-500 rounded-full animate-pulse" title="Consulta" />
+                            )}
+                            {cell.day === 15 && (
+                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-orange-500 rounded-full animate-pulse" title="Limpeza" />
+                            )}
+                            {cell.day === 20 && (
+                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-red-500 rounded-full animate-pulse" title="Cirurgia" />
+                            )}
+                            {cell.day === 25 && (
+                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-emerald-500 rounded-full animate-pulse" title="Aparelho" />
+                            )}
+                          </>
                         )}
                       </div>
                     ))}
@@ -486,24 +511,31 @@ export default function CustomDashboardView({
               </div>
 
               {/* Recent Patients Card */}
-              <div className="md:col-span-5 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col min-h-[280px] lg:min-h-0 overflow-hidden">
+              <div className="md:col-span-5 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
                 <div className="flex items-center justify-between shrink-0 mb-3">
                   <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Pacientes Recentes</h3>
                   <button onClick={() => onNavigate?.('Pacientes')} className="text-[10px] font-bold text-[#f97316] hover:underline">Ver Todos</button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto pr-1 space-y-3.5">
-                  {recentPatients.map((patient) => (
-                    <div key={patient.id} className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 border flex items-center justify-center font-bold text-xs uppercase shadow-sm">
-                        {patient.initial}
-                      </div>
-                      <div className="min-w-0 flex-1 text-left">
-                        <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">{patient.name}</p>
-                        <p className="text-[9.5px] text-slate-400 font-medium leading-tight truncate mt-0.5">{patient.time}</p>
-                      </div>
+                  {recentPatients.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 py-4">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Nenhum paciente</span>
+                      <span className="text-[9px] text-slate-400 mt-0.5 font-medium">Sua lista de pacientes recentes está limpa.</span>
                     </div>
-                  ))}
+                  ) : (
+                    recentPatients.map((patient) => (
+                      <div key={patient.id} className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 border flex items-center justify-center font-bold text-xs uppercase shadow-sm">
+                          {patient.initial}
+                        </div>
+                        <div className="min-w-0 flex-1 text-left">
+                          <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">{patient.name}</p>
+                          <p className="text-[9.5px] text-slate-400 font-medium leading-tight truncate mt-0.5">{patient.time}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -512,10 +544,10 @@ export default function CustomDashboardView({
           </div>
 
           {/* RIGHT 3 COLUMNS FOR WAITING ROOM & SERVING NOW */}
-          <div className="col-span-12 lg:col-span-3 flex flex-col gap-5 min-h-0">
+          <div className="col-span-12 lg:col-span-3 flex flex-col gap-5">
             
             {/* Waiting Room Panel */}
-            <div className="flex-1 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col min-h-[300px] overflow-hidden">
+            <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
               <div className="flex items-center justify-between shrink-0 mb-4">
                 <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Sala de Espera</h3>
               </div>
@@ -529,42 +561,49 @@ export default function CustomDashboardView({
                 </div>
 
                 {/* Rows matching image style perfectly */}
-                <div className="space-y-3.5">
-                  {waitingRoomPatients.map((p) => (
-                    <div key={p.id} className="grid grid-cols-12 items-center gap-1">
-                      <div className="col-span-7 flex items-center gap-2 min-w-0">
-                        <div className="w-7 h-7 rounded-full bg-orange-50 border border-orange-100 text-[#f97316] flex items-center justify-center font-extrabold text-[10px] shrink-0 uppercase">
-                          {p.initial}
+                {waitingRoomPatients.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-[180px] text-slate-400">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Fila vazia</span>
+                    <span className="text-[9px] text-slate-400 mt-0.5 font-medium">Nenhum paciente aguardando atendimento.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-3.5">
+                    {waitingRoomPatients.map((p) => (
+                      <div key={p.id} className="grid grid-cols-12 items-center gap-1">
+                        <div className="col-span-7 flex items-center gap-2 min-w-0">
+                          <div className="w-7 h-7 rounded-full bg-orange-50 border border-orange-100 text-[#f97316] flex items-center justify-center font-extrabold text-[10px] shrink-0 uppercase">
+                            {p.initial}
+                          </div>
+                          <div className="min-w-0 flex-1 text-left">
+                            <p className="text-[10px] font-bold text-slate-800 truncate leading-tight">{p.name}</p>
+                            <p className="text-[8.5px] text-[#f97316] font-semibold truncate mt-0.5 leading-none">{p.type}</p>
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1 text-left">
-                          <p className="text-[10px] font-bold text-slate-800 truncate leading-tight">{p.name}</p>
-                          <p className="text-[8.5px] text-[#f97316] font-semibold truncate mt-0.5 leading-none">{p.type}</p>
+                        
+                        <div className="col-span-3 text-center">
+                          <span className="text-[9px] font-bold text-slate-400 font-mono leading-none whitespace-nowrap">{p.time}</span>
                         </div>
-                      </div>
-                      
-                      <div className="col-span-3 text-center">
-                        <span className="text-[9px] font-bold text-slate-400 font-mono leading-none whitespace-nowrap">{p.time}</span>
-                      </div>
 
-                      <div className="col-span-2 text-right">
-                        <button 
-                          onClick={() => {
-                            if (p.record) {
-                              onSendWhatsApp?.(p.record);
-                            } else {
-                              setCallingToast(`Ação rápida para ${p.name}`);
-                              setTimeout(() => setCallingToast(null), 2000);
-                            }
-                          }}
-                          className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-50 font-bold"
-                          title="Chamar / Opções"
-                        >
-                          •••
-                        </button>
+                        <div className="col-span-2 text-right">
+                          <button 
+                            onClick={() => {
+                              if (p.record) {
+                                onSendWhatsApp?.(p.record);
+                              } else {
+                                setCallingToast(`Ação rápida para ${p.name}`);
+                                setTimeout(() => setCallingToast(null), 2000);
+                              }
+                            }}
+                            className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-50 font-bold"
+                            title="Chamar / Opções"
+                          >
+                            •••
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

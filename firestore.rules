@@ -109,6 +109,13 @@ service cloud.firestore {
         && la.blocked is bool;
     }
 
+    function isValidDeviceAttempt(da) {
+      return da.deviceId is string && da.deviceId.size() <= 128
+        && (da.attempts is number || da.attempts is int)
+        && (da.lastAttempt is number || da.lastAttempt is int)
+        && (da.lockoutUntil is number || da.lockoutUntil is int);
+    }
+
     function isValidOdontogram(odo) {
       return odo.patientName is string && odo.patientName.size() <= 150
         && odo.teethData is map
@@ -197,6 +204,13 @@ service cloud.firestore {
     match /login_attempts/{username} {
       allow read: if true;
       allow create, update: if isValidLoginAttempt(incoming());
+      allow delete: if true;
+    }
+
+    // Device Attempts (Lockouts per device/browser ID)
+    match /device_attempts/{deviceId} {
+      allow read: if true;
+      allow create, update: if isValidId(deviceId) && isValidDeviceAttempt(incoming());
       allow delete: if true;
     }
 

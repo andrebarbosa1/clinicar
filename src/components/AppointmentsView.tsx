@@ -94,6 +94,11 @@ export default function AppointmentsView({
   const filteredAppointments = useMemo(() => {
     return data
       .filter(item => {
+        // Exclude quick events (Compromissos) from the patient appointments list
+        if (item.procedimento === 'Compromisso' || (item as any).isQuickEvent) {
+          return false;
+        }
+
         const matchesSearch = 
           item.paciente.toLowerCase().includes(searchTerm.toLowerCase()) ||
           item.procedimento.toLowerCase().includes(searchTerm.toLowerCase()) ||

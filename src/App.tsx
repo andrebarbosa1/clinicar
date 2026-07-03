@@ -1142,6 +1142,9 @@ export default function App() {
         if (!r.data || !isValid(parseISO(r.data))) return false;
         if (r.status !== 'Agendado' && r.status !== 'Pendente') return false;
         
+        // Exclude quick events (Compromissos) from upcoming patient queue
+        if (r.procedimento === 'Compromisso' || (r as any).isQuickEvent) return false;
+        
         // Match dentist filter if set
         if (filterDentista !== 'Todos' && r.dentista !== filterDentista) return false;
         
@@ -1473,7 +1476,10 @@ export default function App() {
       status: 'Agendado',
       statusPagamento: 'Pendente',
       valor: Number(newAppt.valor) || 0,
-    };
+      observacao: newAppt.observacao || '',
+      isQuickEvent: newAppt.isQuickEvent || false,
+      createdBy: newAppt.createdBy || ''
+    } as any;
 
     if (trialId) {
       (record as any).trialOwnerId = trialId;
@@ -2485,7 +2491,7 @@ export default function App() {
     if (subPage === 'Editar' && activePage === 'Pacientes' && selectedPatientId) {
       return <PatientFormView isEdit patientId={selectedPatientId} patients={patientsForUser} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
-    if (subPage === 'NovoAgendamento' && activePage === 'Agenda') {
+    if (subPage === 'NovoAgendamento' && (activePage === 'Agenda' || activePage === 'Consultas')) {
       return <AppointmentFormView patients={patientsForUser} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
     }
 
@@ -2598,6 +2604,9 @@ export default function App() {
           onCancel={handleCancelAppointment}
           onStart={handleStartConsultation}
           onFinish={handleFinishConsultation}
+          onCreateAppointment={handleCreateAppointment}
+          users={users}
+          currentUser={currentUser}
         />;
       case 'Consultas':
         return <AppointmentsView 
@@ -3608,8 +3617,10 @@ export default function App() {
             transition={{ duration: 0.15 }}
             className={cn(
               "w-full mx-auto flex-1 flex flex-col",
-              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin' || activePage === 'Dashboard'
+              (activePage === 'Pacientes' && subPage === 'Prontuario') || activePage === 'SuperAdmin'
                 ? "p-0 h-[calc(100vh-3.5rem)] overflow-hidden bg-[#f4f7fa]"
+                : activePage === 'Dashboard'
+                ? "p-0 min-h-[calc(100vh-4rem)] bg-[#f4f7fa]"
                 : "p-4 md:p-6 lg:p-8 space-y-6 max-w-(--breakpoint-xl)"
             )}
           >
@@ -11135,96 +11146,142 @@ function LoginView({
   const restWords = (clinicName.split(' ').slice(1).join(' ') || 'dash').toLowerCase();
 
   return (
-    <div className="h-screen w-screen bg-[#f4f6f9] flex flex-col items-center justify-center relative font-sans overflow-hidden select-none p-4">
+    <div className="h-screen w-screen bg-[#f3f7fa] flex flex-col items-center justify-center relative font-sans md:overflow-hidden select-none p-4 md:p-0">
       {/* subtle clean background grid */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#cbd5e125_1px,transparent_1px),linear-gradient(to_bottom,#cbd5e125_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none z-0 opacity-40" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#cbd5e115_1px,transparent_1px),linear-gradient(to_bottom,#cbd5e115_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none z-0 opacity-40" />
       
-      <div className="w-full max-w-[400px] relative z-10 flex flex-col items-center justify-center">
-        {/* Authentic Compact Card Frame */}
+      <div className="w-full max-w-[850px] relative z-10 flex flex-col items-center justify-center px-4">
+        {/* Authentic Compact Card Frame - Two Column Layout */}
         <motion.div 
-          initial={{ opacity: 0, scale: 0.98, y: 10 }}
+          initial={{ opacity: 0, scale: 0.98, y: 15 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="w-full bg-white rounded-[6px] shadow-[0_4px_12px_rgba(0,0,0,0.08)] border border-[#cbd5e1] overflow-hidden"
+          transition={{ duration: 0.35 }}
+          className="w-full bg-white rounded-[24px] shadow-[0_20px_50px_rgba(0,0,0,0.08)] border border-slate-100/50 overflow-hidden flex flex-col md:flex-row min-h-[520px] md:h-[540px]"
         >
-          {/* Elegant Clinic Branding Header */}
-          <div className="flex flex-col items-center py-4 px-6 bg-white border-b border-slate-100">
-            <div className="flex items-center gap-2.5">
+          {/* LEFT COLUMN: Welcome Banner & Dentist Illustration */}
+          <div className="w-full md:w-1/2 flex flex-col overflow-hidden relative h-full shrink-0">
+            {/* Elegant Clinic Branding Header */}
+            <div className="bg-[#4a8cd4] p-8 md:p-10 text-white flex flex-col justify-center h-[40%] shrink-0">
+              <h1 className="text-2xl md:text-3xl font-normal tracking-tight leading-snug">
+                Bem-vindo ao <br />
+                <span className="font-bold">Sistema {clinicName || 'OdontoPro'}</span>
+              </h1>
+              <p className="text-xs md:text-sm text-blue-100/90 mt-2 font-light leading-relaxed">
+                Gestão completa para sua clínica odontológica
+              </p>
+            </div>
+
+            {/* Dentist Image Container */}
+            <div className="relative flex-1 w-full overflow-hidden bg-slate-100">
+              <img 
+                src="https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&q=80&w=600" 
+                alt={`Dentista ${clinicName || 'OdontoPro'}`} 
+                className="w-full h-full object-cover object-top"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Interactive Login Form */}
+          <form onSubmit={handleSubmit} className="w-full md:w-1/2 p-8 md:p-10 flex flex-col justify-center bg-white space-y-4 text-left font-sans h-full">
+            
+            {/* Logo Tooth icon or Clinic Logo & Clinic Name title */}
+            <div className="flex items-center gap-3 justify-center mb-1">
               {clinicLogo ? (
                 <img 
                   src={clinicLogo} 
-                  alt={clinicName} 
+                  alt={clinicName || 'OdontoPro'} 
                   referrerPolicy="no-referrer" 
-                  className="h-9 max-h-9 object-contain" 
+                  className="h-11 max-h-11 object-contain" 
                 />
               ) : (
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center border border-teal-200">
-                    <Stethoscope className="w-4.5 h-4.5 text-[#2a4f72]" />
-                  </div>
-                  <span className="text-lg font-black text-slate-800 tracking-tight uppercase">
-                    {clinicName}
-                  </span>
-                </div>
+                <svg className="w-11 h-11 shrink-0" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="toothGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#7dd3fc" />
+                      <stop offset="50%" stopColor="#0ea5e9" />
+                      <stop offset="100%" stopColor="#1d4ed8" />
+                    </linearGradient>
+                  </defs>
+                  <path 
+                    d="M12 2C8.5 2 6 4 5.5 8C5.2 10.5 5.8 12.5 6.5 14.5C7.2 16.5 8 19 8 21C8 21.6 8.4 22 9 22C9.6 22 10 21.5 10.5 20C11 18.5 11.5 17.5 12 17.5C12.5 17.5 13 18.5 13.5 20C14 21.5 14.4 22 15 22C15.6 22 16 21.6 16 21C16 19 16.8 16.5 17.5 14.5C18.2 12.5 18.8 10.5 18.5 8C18 4 15.5 2 12 2Z" 
+                    fill="url(#toothGrad)"
+                    style={{ filter: "drop-shadow(0px 3px 6px rgba(2, 132, 199, 0.25))" }}
+                  />
+                </svg>
               )}
-            </div>
-            <p className="text-[9px] text-[#64748b] font-black tracking-widest uppercase mt-1">SISTEMA CLÍNICO INTEGRADO</p>
-          </div>
-
-          {/* Form Content */}
-          <form onSubmit={handleSubmit} className="p-5 md:p-6 space-y-4 bg-white text-left font-sans">
-            <div className="text-left select-none">
-              <h2 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-0.5">Acesso ao Sistema</h2>
-              <p className="text-[10px] text-slate-400 font-medium">Insira suas credenciais cadastradas na clínica.</p>
+              <span className="text-2xl font-bold text-slate-800 tracking-tight">
+                {clinicName || 'OdontoPro'}
+              </span>
             </div>
 
-            {/* Username/Login Input */}
-            <div className="space-y-1 text-left">
-              <label className="text-[9px] font-extrabold text-[#475569] uppercase tracking-widest ml-0.5">Nome de Usuário (Login)</label>
+            {/* Header titles */}
+            <div className="text-center select-none">
+              <h2 className="text-xl font-bold text-slate-800">Entrar</h2>
+              <p className="text-xs text-slate-400 font-medium mt-0.5">Entre com suas credenciais</p>
+            </div>
+
+            <div className="space-y-3.5">
+              {/* Username/Email Input */}
               <div className="relative group/input">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#2a4f72] transition-colors">
-                  <User className="w-3.5 h-3.5" />
+                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#4a8cd4] transition-colors">
+                  <Mail className="w-4 h-4" />
                 </div>
                 <input 
                   type="text" 
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={isLoading}
-                  className="w-full text-xs pl-9 pr-3 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-[4px] font-bold text-slate-850 outline-none focus:border-[#2a4f72] focus:ring-2 focus:ring-[#2a4f72]/10 focus:bg-white transition-all placeholder:text-slate-400 shadow-inner"
-                  placeholder="exemplo: ana.admin"
+                  className="w-full text-xs pl-11 pr-4 py-3 bg-white border border-slate-200 rounded-[10px] text-slate-800 outline-none focus:border-[#4a8cd4] focus:ring-1 focus:ring-[#4a8cd4] transition-all placeholder:text-slate-400 placeholder:font-medium shadow-xs"
+                  placeholder="Email"
                   autoFocus
                 />
               </div>
-            </div>
 
-            {/* Password Input */}
-            <div className="space-y-1 text-left">
-              <label className="text-[9px] font-extrabold text-[#475569] uppercase tracking-widest ml-0.5">Senha (Palavra-passe)</label>
+              {/* Password Input */}
               <div className="relative group/input">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#2a4f72] transition-colors">
-                  <Lock className="w-3.5 h-3.5" />
+                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#4a8cd4] transition-colors">
+                  <Lock className="w-4 h-4" />
                 </div>
                 <input 
                   type={showPassword ? "text" : "password"} 
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
-                  className="w-full text-xs pl-9 pr-9 py-2.5 bg-[#f8fafc] border border-slate-200 rounded-[4px] font-bold text-slate-850 outline-none focus:border-[#2a4f72] focus:ring-2 focus:ring-[#2a4f72]/10 focus:bg-white transition-all placeholder:text-slate-400 shadow-inner"
-                  placeholder="sua senha"
+                  className="w-full text-xs pl-11 pr-11 py-3 bg-white border border-slate-200 rounded-[10px] text-slate-800 outline-none focus:border-[#4a8cd4] focus:ring-1 focus:ring-[#4a8cd4] transition-all placeholder:text-slate-400 placeholder:font-medium shadow-xs"
+                  placeholder="Password"
                 />
                 <button
                   type="button"
                   tabIndex={-1}
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors cursor-pointer"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors cursor-pointer"
                 >
                   {showPassword ? (
-                    <EyeOff className="w-3.5 h-3.5" />
+                    <EyeOff className="w-4 h-4" />
                   ) : (
-                    <Eye className="w-3.5 h-3.5" />
+                    <Eye className="w-4 h-4" />
                   )}
                 </button>
               </div>
+            </div>
+
+            {/* Remember Me and Forgot Password row */}
+            <div className="flex items-center justify-between text-xs font-bold text-slate-500 px-0.5">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input 
+                  type="checkbox" 
+                  className="rounded border-slate-300 text-[#4a8cd4] focus:ring-[#4a8cd4] h-3.5 w-3.5 cursor-pointer" 
+                />
+                <span>Lembrar-me</span>
+              </label>
+              <button 
+                type="button" 
+                onClick={() => alert("Para redefinir sua senha, solicite suporte ao administrador ou utilize o usuário padrão 'ana.admin' com a senha '123'.")} 
+                className="text-[#4a8cd4] hover:underline cursor-pointer"
+              >
+                Esqueceu a senha?
+              </button>
             </div>
 
             {/* Error Message Area */}
@@ -11234,7 +11291,7 @@ function LoginView({
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -5 }}
-                  className="bg-rose-50 border border-rose-200 text-rose-755 text-[10px] p-2.5 rounded-[4px] font-bold leading-relaxed w-full flex items-start gap-2 shadow-sm"
+                  className="bg-rose-50 border border-rose-200 text-rose-700 text-[10px] p-2.5 rounded-lg font-bold leading-relaxed w-full flex items-start gap-2 shadow-xs mt-1"
                 >
                   <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
                   <span>{error}</span>
@@ -11242,47 +11299,63 @@ function LoginView({
               )}
             </AnimatePresence>
 
-            {/* Submit Button & Clear */}
-            <div className="pt-1 flex items-center gap-2">
-              <button 
-                type="submit"
-                disabled={isLoading}
-                className="flex-1 bg-[#2a4f72] hover:bg-[#1e3a54] text-white border-0 rounded-[4px] py-2.5 px-4 text-[11px] font-black uppercase tracking-widest cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow hover:shadow-md disabled:opacity-45 select-none text-center"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-3 h-3 animate-spin text-white" />
-                    <span>Conectando...</span>
-                  </>
-                ) : (
-                  <span>Acessar o Painel</span>
-                )}
-              </button>
+            {/* Submit Button */}
+            <button 
+              type="submit"
+              disabled={isLoading}
+              className="w-full bg-[#4a8cd4] hover:bg-[#3d7cc4] text-white border-0 rounded-[10px] py-3 px-4 text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-[0_4px_12px_rgba(74,140,212,0.25)] hover:shadow-[0_6px_16px_rgba(74,140,212,0.35)] disabled:opacity-45 select-none text-center"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                  <span>Conectando...</span>
+                </>
+              ) : (
+                <span>Entrar</span>
+              )}
+            </button>
 
-              <button 
-                type="button"
-                onClick={() => { setUsername(''); setPassword(''); setError(null); }}
-                className="px-3 py-2.5 bg-[#e4e4e7] hover:bg-[#d4d4d8] text-slate-600 rounded-[4px] text-[11px] font-bold transition-all cursor-pointer select-none"
-              >
-                Limpar
-              </button>
+            {/* Divider */}
+            <div className="relative my-1">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-100"></div>
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase">
+                <span className="bg-white px-2.5 text-slate-400 font-extrabold tracking-wider">ou continue com</span>
+              </div>
             </div>
 
-            {/* Compact system info footer inside the card */}
-            <div className="border-t border-slate-100 pt-3 mt-3 flex items-center justify-between text-[8px] font-bold text-slate-450 select-none uppercase tracking-wide">
-              <div className="flex items-center gap-1">
-                <span className="h-1 w-1 rounded-full bg-[#10b981] animate-pulse"></span>
-                <span>Conectado</span>
+            {/* Social Login: Microsoft (Google removed) */}
+            <button 
+              type="button"
+              onClick={() => alert("O login com Microsoft está em processo de homologação pela TI.")}
+              className="w-full bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 rounded-[10px] py-2.5 px-4 text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2.5 shadow-xs"
+            >
+              <div className="grid grid-cols-2 gap-[2px] w-3.5 h-3.5">
+                <div className="bg-[#f25022] w-1.5 h-1.5"></div>
+                <div className="bg-[#7fba00] w-1.5 h-1.5"></div>
+                <div className="bg-[#00a4ef] w-1.5 h-1.5"></div>
+                <div className="bg-[#ffb900] w-1.5 h-1.5"></div>
               </div>
-              <div>
-                VERSÃO CLÍNICA 19.3
-              </div>
+              <span>Microsoft</span>
+            </button>
+
+            {/* Bottom registration link */}
+            <div className="text-center text-[11px] font-bold text-slate-500 pt-1">
+              <span>Não tem conta? </span>
+              <button 
+                type="button" 
+                onClick={onOpenFreeTrial} 
+                className="text-[#4a8cd4] hover:underline font-extrabold cursor-pointer"
+              >
+                Cadastre-se
+              </button>
             </div>
           </form>
         </motion.div>
 
         {/* Compact Portal Shortcuts */}
-        <div className="flex flex-wrap justify-center items-center gap-4 mt-4 text-[9px] font-extrabold text-[#2a4f72] tracking-wider uppercase select-none">
+        <div className="flex flex-wrap justify-center items-center gap-4 mt-6 text-[9px] font-extrabold text-[#2a4f72] tracking-wider uppercase select-none">
           {onOpenFreeTrial && (
             <button 
               type="button" 

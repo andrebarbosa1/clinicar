@@ -140,6 +140,18 @@
         "blocked": { "type": "boolean" }
       },
       "required": ["username", "attempts", "lastAttempt", "blocked"]
+    },
+    "DeviceAttempt": {
+      "title": "DeviceAttempt",
+      "description": "A record of failed login attempts per device/browser ID to prevent brute force",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string" },
+        "attempts": { "type": "number" },
+        "lastAttempt": { "type": "number" },
+        "lockoutUntil": { "type": "number" }
+      },
+      "required": ["deviceId", "attempts", "lastAttempt", "lockoutUntil"]
     }
   },
   "firestore": {
@@ -182,6 +194,10 @@
     "/login_attempts/{username}": {
       "schema": "LoginAttempt",
       "description": "Track failed attempts"
+    },
+    "/device_attempts/{deviceId}": {
+      "schema": "DeviceAttempt",
+      "description": "Track failed login attempts per device ID to prevent brute force"
     }
   }
 }
