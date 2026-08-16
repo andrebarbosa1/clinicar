@@ -1,14 +1,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Global safety net (Default Deny)
+    // Default deny: every collection must opt in explicitly.
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // --- Helper Functions ---
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function incoming() {
@@ -19,13 +22,18 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Prevent ID injection / poisoning attack
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    // The profile bridge is intentionally scoped to the authenticated UID.
+    // It must not expose another user's mapping.
+    function isOwnUid(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
 
-    // --- Enterprise Entities Validation Helpers ---
-    
+    function isOwnUserDoc(userId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users_by_uid/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users_by_uid/$(request.auth.uid)).data.userDocId == userId;
+    }
+
     function isValidClinicalRecord(rec) {
       return (rec.id == null || rec.id is string && rec.id.size() <= 128)
         && (rec.data == null || rec.data is string && rec.data.size() <= 50)
@@ -45,7 +53,8 @@ service cloud.firestore {
         && (u.role == null || u.role is string && u.role.size() <= 50)
         && (u.modules == null || u.modules is string && u.modules.size() <= 1000)
         && (u.username == null || u.username is string && u.username.size() <= 100)
-        && (u.password == null || u.password is string && u.password.size() <= 256);
+        // Passwords are intentionally rejected from new/updated profiles.
+        && !('password' in u);
     }
 
     function isValidPatient(p) {
@@ -130,102 +139,89 @@ service cloud.firestore {
         && u.updatedAt is string && u.updatedAt.size() <= 50;
     }
 
-    // --- Path Rules Match Statements ---
-
-    // Connection Test
+    // Health check can remain public because it contains no patient/account data.
     match /test/connection {
       allow read: if true;
     }
 
-    // Records
+    // Authentication migration: all application data requires Firebase Auth.
+    // Tenant-level ownership still needs to be added to each document before
+    // this policy is considered the final multi-tenant policy.
     match /records/{recordId} {
-      allow read: if true;
-      allow create, update: if isValidId(recordId) && isValidClinicalRecord(incoming());
-      allow delete: if isValidId(recordId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(recordId) && isValidClinicalRecord(incoming());
+      allow delete: if isSignedIn() && isValidId(recordId);
     }
 
-    // Users
     match /users/{userId} {
-      allow read: if true;
-      allow create, update: if isValidId(userId) && isValidAppUser(incoming());
-      allow delete: if isValidId(userId);
+      allow read: if isOwnUserDoc(userId);
+      allow create: if isSignedIn() && isValidId(userId) && isValidAppUser(incoming());
+      allow update: if isOwnUserDoc(userId) && isValidAppUser(incoming());
+      allow delete: if isOwnUserDoc(userId);
     }
 
-    // Users UID Mapping
     match /users_by_uid/{uid} {
-      allow read: if true;
-      allow create, update: if isValidId(uid) && isValidUserByUid(incoming());
-      allow delete: if isValidId(uid);
+      allow read: if isOwnUid(uid);
+      allow create, update: if isOwnUid(uid) && isValidUserByUid(incoming());
+      allow delete: if isOwnUid(uid);
     }
 
-    // Notifications
     match /notifications/{notificationId} {
-      allow read: if true;
-      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
-      allow delete: if isValidId(notificationId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(notificationId) && isValidNotification(incoming());
+      allow delete: if isSignedIn() && isValidId(notificationId);
     }
 
-    // Support Tickets
     match /support_tickets/{ticketId} {
-      allow read: if true;
-      allow create, update: if isValidId(ticketId) && isValidSupportTicket(incoming());
-      allow delete: if isValidId(ticketId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(ticketId) && isValidSupportTicket(incoming());
+      allow delete: if isSignedIn() && isValidId(ticketId);
     }
 
-    // Patients
     match /patients/{patientId} {
-      allow read: if true;
-      allow create, update: if isValidId(patientId) && isValidPatient(incoming());
-      allow delete: if isValidId(patientId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(patientId) && isValidPatient(incoming());
+      allow delete: if isSignedIn() && isValidId(patientId);
     }
 
-    // Documents
     match /documents/{docId} {
-      allow read: if true;
-      allow create, update: if isValidId(docId) && isValidDocument(incoming());
-      allow delete: if isValidId(docId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(docId) && isValidDocument(incoming());
+      allow delete: if isSignedIn() && isValidId(docId);
     }
 
-    // Odontograms
     match /odontograms/{odoId} {
-      allow read: if true;
-      allow create, update: if isValidId(odoId) && isValidOdontogram(incoming());
-      allow delete: if isValidId(odoId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(odoId) && isValidOdontogram(incoming());
+      allow delete: if isSignedIn() && isValidId(odoId);
     }
 
-    // Clinic Settings
     match /settings/{settingId} {
-      allow read: if true;
-      allow create, update: if isValidId(settingId) && isValidClinicSetting(incoming());
-      allow delete: if isValidId(settingId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(settingId) && isValidClinicSetting(incoming());
+      allow delete: if isSignedIn() && isValidId(settingId);
     }
 
-    // Login Attempts (Lockouts)
+    // Login/device lockout records are not an authentication mechanism anymore.
+    // They must not be publicly readable or writable.
     match /login_attempts/{username} {
-      allow read: if true;
-      allow create, update: if isValidLoginAttempt(incoming());
-      allow delete: if true;
+      allow read, create, update, delete: if false;
     }
 
-    // Device Attempts (Lockouts per device/browser ID)
     match /device_attempts/{deviceId} {
-      allow read: if true;
-      allow create, update: if isValidId(deviceId) && isValidDeviceAttempt(incoming());
-      allow delete: if true;
+      allow read, create, update, delete: if false;
     }
 
-    // System Announcements
     match /system_announcements/{announcementId} {
-      allow read: if true;
-      allow create, update: if isValidId(announcementId) && isValidSystemAnnouncement(incoming());
-      allow delete: if isValidId(announcementId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(announcementId) && isValidSystemAnnouncement(incoming());
+      allow delete: if isSignedIn() && isValidId(announcementId);
     }
 
-    // SaaS promotion coupons
     match /saas_coupons/{couponId} {
-      allow read: if true;
-      allow create, update: if isValidId(couponId) && isValidSaasCoupon(incoming());
-      allow delete: if isValidId(couponId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(couponId) && isValidSaasCoupon(incoming());
+      allow delete: if isSignedIn() && isValidId(couponId);
     }
   }
 }
