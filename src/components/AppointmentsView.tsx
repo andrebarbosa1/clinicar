@@ -11,50 +11,36 @@ import {
   ChevronRight, 
   Trash2, 
   MessageCircle,
-  MoreVertical,
   SlidersHorizontal,
-  CalendarDays
+  CalendarDays,
+  Clock,
+  User,
+  CheckCircle2,
+  AlertCircle,
+  Stethoscope,
+  ArrowRight,
+  Filter,
+  Layers,
+  Phone,
+  Check,
+  XCircle,
+  PlayCircle
 } from 'lucide-react';
-import { format, isToday, isYesterday, isTomorrow, parseISO, isValid } from 'date-fns';
+import { format, isToday, isYesterday, isTomorrow, parseISO, isValid, isThisWeek, isThisMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn } from '../lib/utils';
 import { DentalRecord } from '../types';
 
 interface AppointmentsViewProps {
   data: DentalRecord[];
+  patients?: any[];
   onAdd: () => void;
   onCancel: (id: string) => void;
   onSendWhatsApp: (record: DentalRecord) => void;
+  onOpenChart?: (patientId: string) => void;
+  onStart?: (id: string) => void;
+  onFinish?: (id: string) => void;
 }
-
-// Deterministic helper to get age and gender for aesthetic completeness
-const getGenderAndAge = (name: string) => {
-  if (!name) return { gender: 'Masculino', age: 32 };
-  
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  hash = Math.abs(hash);
-  
-  const age = 19 + (hash % 42); // age 19 to 60
-  
-  const lowercase = name.toLowerCase().trim();
-  const femaleEndings = ['a', 'ela', 'ine', 'ara', 'ris', 'eia', 'ete', 'ina', 'ria', 'na', 'ia', 'ca', 'da'];
-  const firstWord = lowercase.split(' ')[0];
-  let isFemale = false;
-  
-  if (femaleEndings.some(ending => firstWord.endsWith(ending))) {
-    isFemale = true;
-  } else {
-    isFemale = hash % 2 === 0;
-  }
-  
-  return {
-    gender: isFemale ? 'Feminino' : 'Masculino',
-    age
-  };
-};
 
 const formatAppointmentTime = (dateStr: string, timeStr?: string) => {
   if (!dateStr) return 'Sem data';
@@ -73,7 +59,7 @@ const formatAppointmentTime = (dateStr: string, timeStr?: string) => {
       label = format(d, "dd 'de' MMM", { locale: ptBR });
     }
     
-    return timeStr ? `${label}, ${timeStr}` : label;
+    return timeStr ? `${label}, às ${timeStr}` : label;
   } catch (e) {
     return dateStr;
   }
@@ -81,20 +67,58 @@ const formatAppointmentTime = (dateStr: string, timeStr?: string) => {
 
 export default function AppointmentsView({ 
   data, 
+  patients = [],
   onAdd, 
   onCancel,
-  onSendWhatsApp 
+  onSendWhatsApp,
+  onOpenChart,
+  onStart,
+  onFinish
 }: AppointmentsViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>('todos');
+  const [dateFilter, setDateFilter] = useState<'todos' | 'hoje' | 'amanha' | 'semana' | 'mes'>('todos');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+
+  // Stats calculation
+  const stats = useMemo(() => {
+    const validAppointments = data.filter(item => item.procedimento !== 'Compromisso' && !(item as any).isQuickEvent);
+    
+    let hojeCount = 0;
+    let agendadosCount = 0;
+    let realizadosCount = 0;
+    let canceladosCount = 0;
+
+    validAppointments.forEach(a => {
+      const d = a.data ? parseISO(a.data) : null;
+      if (d && isValid(d) && isToday(d)) {
+        hojeCount++;
+      }
+      if (a.status === 'Agendado' || a.status === 'Em Atendimento') {
+        agendadosCount++;
+      } else if (a.status === 'Realizado' || a.status === 'Concluído') {
+        realizadosCount++;
+      } else if (a.status === 'Cancelado') {
+        canceladosCount++;
+      }
+    });
+
+    return {
+      total: validAppointments.length,
+      hoje: hojeCount,
+      agendados: agendadosCount,
+      realizados: realizadosCount,
+      cancelados: canceladosCount
+    };
+  }, [data]);
 
   // Filter & Search appointments
   const filteredAppointments = useMemo(() => {
     return data
       .filter(item => {
-        // Exclude quick events (Compromissos) from the patient appointments list
+        // Exclude quick events (Compromissos)
         if (item.procedimento === 'Compromisso' || (item as any).isQuickEvent) {
           return false;
         }
@@ -106,17 +130,30 @@ export default function AppointmentsView({
         
         const matchesStatus = 
           statusFilter === 'todos' || 
-          item.status.toLowerCase() === statusFilter.toLowerCase();
+          (statusFilter === 'agendado' && (item.status === 'Agendado' || (item.status as string) === 'Agendada' || item.status === 'Pendente')) ||
+          (statusFilter === 'em_atendimento' && item.status === 'Em Atendimento') ||
+          (statusFilter === 'realizado' && (item.status === 'Realizado' || item.status === 'Concluído')) ||
+          (statusFilter === 'cancelado' && item.status === 'Cancelado');
+
+        let matchesDate = true;
+        if (dateFilter !== 'todos' && item.data) {
+          const d = parseISO(item.data);
+          if (isValid(d)) {
+            if (dateFilter === 'hoje') matchesDate = isToday(d);
+            else if (dateFilter === 'amanha') matchesDate = isTomorrow(d);
+            else if (dateFilter === 'semana') matchesDate = isThisWeek(d, { weekStartsOn: 0 });
+            else if (dateFilter === 'mes') matchesDate = isThisMonth(d);
+          }
+        }
           
-        return matchesSearch && matchesStatus;
+        return matchesSearch && matchesStatus && matchesDate;
       })
       .sort((a, b) => {
-        // Sort from newest date/time to oldest
         const dateA = new Date(`${a.data}T${a.horario || '00:00'}`).getTime();
         const dateB = new Date(`${b.data}T${b.horario || '00:00'}`).getTime();
         return dateB - dateA;
       });
-  }, [data, searchTerm, statusFilter]);
+  }, [data, searchTerm, statusFilter, dateFilter]);
 
   // Pagination bounds
   const totalPages = Math.ceil(filteredAppointments.length / pageSize) || 1;
@@ -136,188 +173,425 @@ export default function AppointmentsView({
   const endIndex = Math.min(currentPage * pageSize, filteredAppointments.length);
 
   return (
-    <div className="space-y-6">
-      {/* Title Header */}
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Header & Quick Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 id="appointments-title" className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <CalendarDays className="w-6 h-6 text-sky-500" />
-            <span>Consultas</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-black uppercase tracking-widest text-brand-cyan bg-brand-cyan/10 px-2.5 py-0.5 rounded-full border border-brand-cyan/20">
+              Gestão Clínica
+            </span>
+            <span className="text-[10px] font-bold text-slate-400">
+              {filteredAppointments.length} consulta(s) encontradas
+            </span>
+          </div>
+          <h1 id="appointments-title" className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2 mt-1">
+            <CalendarDays className="w-6 h-6 text-brand-cyan" />
+            <span>Consultas e Atendimentos</span>
           </h1>
-          <p className="text-xs text-slate-500 font-medium mt-1">Gerencie, acompanhe e filtre todos os agendamentos cadastrados</p>
+          <p className="text-xs text-slate-500 font-medium mt-0.5">
+            Acompanhe, filtre e gerencie as consultas agendadas, em andamento e realizadas
+          </p>
         </div>
 
-        <button 
-          onClick={onAdd}
-          className="flex items-center justify-center gap-2 bg-[#0ea5e9] hover:bg-sky-600 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Nova Consulta</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={onAdd}
+            className="flex items-center justify-center gap-2 bg-brand-cyan hover:bg-cyan-500 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm shadow-brand-cyan/20 transition-all active:scale-95 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Nova Consulta</span>
+          </button>
+        </div>
       </div>
 
-      {/* Main Table Card */}
-      <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div 
+          onClick={() => { setDateFilter('hoje'); setStatusFilter('todos'); setCurrentPage(1); }}
+          className={cn(
+            "p-4 rounded-2xl border transition-all cursor-pointer bg-white shadow-xs",
+            dateFilter === 'hoje' ? "border-brand-cyan ring-2 ring-brand-cyan/20" : "border-slate-200/80 hover:border-slate-300"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Hoje</span>
+            <div className="w-7 h-7 rounded-lg bg-cyan-50 text-brand-cyan flex items-center justify-center">
+              <Clock className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl font-black text-slate-800 mt-1">{stats.hoje}</div>
+          <p className="text-[10px] text-slate-400 mt-0.5">Agendadas para a data atual</p>
+        </div>
+
+        <div 
+          onClick={() => { setStatusFilter('agendado'); setDateFilter('todos'); setCurrentPage(1); }}
+          className={cn(
+            "p-4 rounded-2xl border transition-all cursor-pointer bg-white shadow-xs",
+            statusFilter === 'agendado' ? "border-amber-500 ring-2 ring-amber-500/20" : "border-slate-200/80 hover:border-slate-300"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Agendadas</span>
+            <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <CalendarDays className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl font-black text-amber-600 mt-1">{stats.agendados}</div>
+          <p className="text-[10px] text-slate-400 mt-0.5">Aguardando atendimento</p>
+        </div>
+
+        <div 
+          onClick={() => { setStatusFilter('realizado'); setDateFilter('todos'); setCurrentPage(1); }}
+          className={cn(
+            "p-4 rounded-2xl border transition-all cursor-pointer bg-white shadow-xs",
+            statusFilter === 'realizado' ? "border-emerald-500 ring-2 ring-emerald-500/20" : "border-slate-200/80 hover:border-slate-300"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Realizadas</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl font-black text-emerald-600 mt-1">{stats.realizados}</div>
+          <p className="text-[10px] text-slate-400 mt-0.5">Consultas finalizadas</p>
+        </div>
+
+        <div 
+          onClick={() => { setStatusFilter('cancelado'); setDateFilter('todos'); setCurrentPage(1); }}
+          className={cn(
+            "p-4 rounded-2xl border transition-all cursor-pointer bg-white shadow-xs",
+            statusFilter === 'cancelado' ? "border-rose-500 ring-2 ring-rose-500/20" : "border-slate-200/80 hover:border-slate-300"
+          )}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Canceladas</span>
+            <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+              <XCircle className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="text-2xl font-black text-rose-600 mt-1">{stats.cancelados}</div>
+          <p className="text-[10px] text-slate-400 mt-0.5">Faltas ou cancelamentos</p>
+        </div>
+      </div>
+
+      {/* Main Table & Filters Card */}
+      <div className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
         
         {/* Table Filters Top Bar */}
-        <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-50/50">
+        <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 bg-slate-50/60">
           
-          {/* Entries per page select */}
-          <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
-            <span>Mostrar</span>
-            <select 
-              value={pageSize} 
-              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-              className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-bold"
-            >
-              <option value={5}>5</option>
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
-            <span>registros</span>
+          {/* Quick Date Tabs */}
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1 lg:pb-0">
+            {[
+              { id: 'todos', label: 'Todas as Datas' },
+              { id: 'hoje', label: 'Hoje' },
+              { id: 'amanha', label: 'Amanhã' },
+              { id: 'semana', label: 'Esta Semana' },
+              { id: 'mes', label: 'Este Mês' }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => { setDateFilter(tab.id as any); setCurrentPage(1); }}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                  dateFilter === tab.id
+                    ? "bg-slate-900 text-white shadow-xs"
+                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          {/* Search bar & status filter */}
-          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-            
+          {/* Search, Status & Layout Controls */}
+          <div className="flex flex-wrap items-center gap-2">
             {/* Status Select Filter */}
-            <div className="relative w-full sm:w-40 shrink-0">
+            <div className="relative">
               <select 
                 value={statusFilter}
                 onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-sky-500 appearance-none pr-8 cursor-pointer"
+                className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-cyan appearance-none pr-8 cursor-pointer"
               >
-                <option value="todos">Todos Status</option>
+                <option value="todos">Todos os Status</option>
                 <option value="agendado">Agendado</option>
-                <option value="em atendimento">Em Atendimento</option>
-                <option value="realizado">Realizado</option>
-                <option value="concluido">Concluído</option>
+                <option value="em_atendimento">Em Atendimento</option>
+                <option value="realizado">Realizado / Concluído</option>
                 <option value="cancelado">Cancelado</option>
               </select>
-              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
+              <SlidersHorizontal className="w-3 h-3 text-slate-400 absolute right-2.5 top-2.5 pointer-events-none" />
             </div>
 
             {/* General Search Input */}
-            <div className="relative w-full sm:w-64">
+            <div className="relative min-w-[200px] flex-1 sm:flex-initial">
               <input 
                 type="text"
-                placeholder="Buscar paciente ou procedimento..."
+                placeholder="Buscar paciente, procedimento ou Dr(a)..."
                 value={searchTerm}
                 onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
-                className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-1.5 text-xs font-medium text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs font-medium text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-cyan"
               />
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 pointer-events-none" />
             </div>
 
+            {/* View Mode Toggle */}
+            <div className="flex items-center bg-slate-200/60 p-0.5 rounded-lg border border-slate-200">
+              <button
+                onClick={() => setViewMode('table')}
+                className={cn(
+                  "px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer",
+                  viewMode === 'table' ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                )}
+                title="Modo Tabela"
+              >
+                Tabela
+              </button>
+              <button
+                onClick={() => setViewMode('cards')}
+                className={cn(
+                  "px-2 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer",
+                  viewMode === 'cards' ? "bg-white text-slate-800 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                )}
+                title="Modo Cards"
+              >
+                Cards
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* The Data Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[700px]">
-            <thead>
-              <tr className="border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-wider bg-slate-50/20">
-                <th className="px-6 py-4 font-bold">Paciente</th>
-                <th className="px-6 py-4 font-bold">Gênero</th>
-                <th className="px-6 py-4 font-bold">Idade</th>
-                <th className="px-6 py-4 font-bold">Horário</th>
-                <th className="px-6 py-4 font-bold">Diagnóstico / Procedimento</th>
-                <th className="px-6 py-4 font-bold">Status</th>
-                <th className="px-6 py-4 font-bold text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {paginatedAppointments.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-12 text-slate-400 text-xs font-medium">
-                    Nenhuma consulta encontrada com os filtros informados.
-                  </td>
+        {/* Content View: Table or Cards */}
+        {viewMode === 'table' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[760px]">
+              <thead>
+                <tr className="border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-wider bg-slate-50/40">
+                  <th className="px-5 py-3.5 font-bold">Paciente</th>
+                  <th className="px-5 py-3.5 font-bold">Data & Horário</th>
+                  <th className="px-5 py-3.5 font-bold">Procedimento</th>
+                  <th className="px-5 py-3.5 font-bold">Profissional</th>
+                  <th className="px-5 py-3.5 font-bold">Status</th>
+                  <th className="px-5 py-3.5 font-bold text-right">Ações Rápidas</th>
                 </tr>
-              ) : (
-                paginatedAppointments.map((record) => {
-                  const { gender, age } = getGenderAndAge(record.paciente);
-                  
-                  return (
-                    <tr key={record.id} className="hover:bg-slate-50/50 transition-colors group">
-                      {/* Name / Doctor info */}
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <span className="text-xs font-bold text-slate-800 leading-snug">{record.paciente}</span>
-                          <span className="text-[10px] text-slate-450 mt-0.5 font-medium">Com {record.dentista}</span>
-                        </div>
-                      </td>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {paginatedAppointments.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="text-center py-12 text-slate-400 text-xs font-medium">
+                      Nenhuma consulta encontrada com os filtros selecionados.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedAppointments.map((record) => {
+                    const isCompleted = record.status === 'Realizado' || record.status === 'Concluído';
+                    const isCancelled = record.status === 'Cancelado';
+                    const isInProgress = record.status === 'Em Atendimento';
 
-                      {/* Gender */}
-                      <td className="px-6 py-4">
-                        <span className="text-xs text-slate-500 font-semibold">{gender}</span>
-                      </td>
+                    return (
+                      <tr key={record.id} className="hover:bg-slate-50/70 transition-colors group">
+                        {/* Patient info */}
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-cyan/20 to-cyan-500/20 text-brand-cyan flex items-center justify-center font-black text-xs shrink-0 border border-brand-cyan/30">
+                              {record.paciente.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <span 
+                                onClick={() => onOpenChart && onOpenChart(record.paciente)}
+                                className="text-xs font-bold text-slate-800 hover:text-brand-cyan transition-colors cursor-pointer block truncate max-w-[200px]"
+                                title="Abrir Prontuário"
+                              >
+                                {record.paciente}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">ID: {String(record.id).slice(-4)}</span>
+                            </div>
+                          </div>
+                        </td>
 
-                      {/* Age */}
-                      <td className="px-6 py-4">
-                        <span className="text-xs text-slate-500 font-bold">{age}</span>
-                      </td>
+                        {/* Date & Time */}
+                        <td className="px-5 py-3.5">
+                          <div className="flex items-center gap-1.5 text-xs text-slate-700 font-bold">
+                            <Clock className="w-3.5 h-3.5 text-brand-cyan shrink-0" />
+                            <span>{formatAppointmentTime(record.data, record.horario)}</span>
+                          </div>
+                        </td>
 
-                      {/* Time */}
-                      <td className="px-6 py-4">
-                        <span className="text-xs text-slate-600 font-bold">{formatAppointmentTime(record.data, record.horario)}</span>
-                      </td>
+                        {/* Procedure */}
+                        <td className="px-5 py-3.5">
+                          <span className="text-xs text-slate-600 font-medium truncate max-w-[180px] inline-block">
+                            {record.procedimento}
+                          </span>
+                        </td>
 
-                      {/* Procedure */}
-                      <td className="px-6 py-4">
-                        <span className="text-xs text-slate-500 font-medium truncate max-w-[200px] inline-block">{record.procedimento}</span>
-                      </td>
+                        {/* Professional */}
+                        <td className="px-5 py-3.5">
+                          <span className="text-xs text-slate-500 font-medium">
+                            Dr(a). {record.dentista || 'Não informado'}
+                          </span>
+                        </td>
 
-                      {/* Status */}
-                      <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider inline-block border",
-                          record.status === 'Realizado' || record.status === 'Concluído'
-                            ? "text-emerald-600 bg-emerald-50 border-emerald-100"
-                            : record.status === 'Cancelado'
-                            ? "text-rose-600 bg-rose-50 border-rose-100"
-                            : record.status === 'Em Atendimento'
-                            ? "text-sky-600 bg-sky-50 border-sky-100 animate-pulse"
-                            : "text-amber-600 bg-amber-50 border-amber-100"
-                        )}>
-                          {record.status === 'Concluído' ? 'Confirmado' : record.status}
-                        </span>
-                      </td>
+                        {/* Status badge */}
+                        <td className="px-5 py-3.5">
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider inline-flex items-center gap-1 border",
+                            isCompleted
+                              ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                              : isCancelled
+                              ? "text-rose-700 bg-rose-50 border-rose-200"
+                              : isInProgress
+                              ? "text-sky-700 bg-sky-50 border-sky-200 animate-pulse"
+                              : "text-amber-700 bg-amber-50 border-amber-200"
+                          )}>
+                            {isCompleted && <Check className="w-3 h-3" />}
+                            {isInProgress && <PlayCircle className="w-3 h-3" />}
+                            {isCancelled && <XCircle className="w-3 h-3" />}
+                            {!isCompleted && !isInProgress && !isCancelled && <Clock className="w-3 h-3" />}
+                            {record.status === 'Concluído' ? 'Realizado' : record.status}
+                          </span>
+                        </td>
 
-                      {/* Actions */}
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button 
-                            onClick={() => onSendWhatsApp(record)}
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-                            title="Enviar WhatsApp"
-                          >
-                            <MessageCircle className="w-4 h-4" />
-                          </button>
-                          
-                          {record.status !== 'Cancelado' && (
+                        {/* Quick Actions */}
+                        <td className="px-5 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {onOpenChart && (
+                              <button 
+                                onClick={() => onOpenChart(record.paciente)}
+                                className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                                title="Abrir Prontuário do Paciente"
+                              >
+                                <Stethoscope className="w-3 h-3 text-brand-cyan" />
+                                <span className="hidden sm:inline">Prontuário</span>
+                              </button>
+                            )}
+
                             <button 
-                              onClick={() => onCancel(record.id)}
-                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="Cancelar Consulta"
+                              onClick={() => onSendWhatsApp(record)}
+                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                              title="Enviar Lembrete WhatsApp"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <MessageCircle className="w-4 h-4" />
                             </button>
-                          )}
+                            
+                            {!isCancelled && !isCompleted && (
+                              <button 
+                                onClick={() => onCancel(record.id)}
+                                className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Cancelar Consulta"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {paginatedAppointments.length === 0 ? (
+              <div className="col-span-full text-center py-12 text-slate-400 text-xs font-medium">
+                Nenhuma consulta encontrada com os filtros selecionados.
+              </div>
+            ) : (
+              paginatedAppointments.map((record) => {
+                const isCompleted = record.status === 'Realizado' || record.status === 'Concluído';
+                const isCancelled = record.status === 'Cancelado';
+                const isInProgress = record.status === 'Em Atendimento';
+
+                return (
+                  <div 
+                    key={record.id}
+                    className="p-4 rounded-xl border border-slate-200/80 bg-white hover:border-brand-cyan/40 hover:shadow-sm transition-all flex flex-col justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-cyan/20 to-cyan-500/20 text-brand-cyan flex items-center justify-center font-black text-xs shrink-0 border border-brand-cyan/30">
+                            {record.paciente.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <h3 
+                              onClick={() => onOpenChart && onOpenChart(record.paciente)}
+                              className="text-xs font-bold text-slate-800 hover:text-brand-cyan cursor-pointer truncate max-w-[150px]"
+                            >
+                              {record.paciente}
+                            </h3>
+                            <p className="text-[10px] text-slate-400">Dr(a). {record.dentista || 'Geral'}</p>
+                          </div>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+
+                        <span className={cn(
+                          "px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider border",
+                          isCompleted
+                            ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                            : isCancelled
+                            ? "text-rose-700 bg-rose-50 border-rose-200"
+                            : isInProgress
+                            ? "text-sky-700 bg-sky-50 border-sky-200"
+                            : "text-amber-700 bg-amber-50 border-amber-200"
+                        )}>
+                          {record.status}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 text-xs text-slate-600">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                          <Clock className="w-3.5 h-3.5 text-brand-cyan" />
+                          <span>{formatAppointmentTime(record.data, record.horario)}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          <strong>Procedimento:</strong> {record.procedimento}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <button 
+                        onClick={() => onSendWhatsApp(record)}
+                        className="px-2.5 py-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        <MessageCircle className="w-3 h-3" />
+                        <span>WhatsApp</span>
+                      </button>
+
+                      <div className="flex items-center gap-1">
+                        {onOpenChart && (
+                          <button 
+                            onClick={() => onOpenChart(record.paciente)}
+                            className="px-2.5 py-1 text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Prontuário</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
+                        {!isCancelled && !isCompleted && (
+                          <button 
+                            onClick={() => onCancel(record.id)}
+                            className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Cancelar Consulta"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
 
         {/* Table Footer Pagination */}
         {filteredAppointments.length > 0 && (
-          <div className="p-5 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-50/50">
-            <div className="text-xs text-slate-500 font-semibold">
+          <div className="p-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-50/60">
+            <div className="text-xs text-slate-500 font-medium">
               Exibindo <span className="text-slate-800 font-bold">{startIndex}</span> a{' '}
               <span className="text-slate-800 font-bold">{endIndex}</span> de{' '}
               <span className="text-slate-800 font-bold">{filteredAppointments.length}</span> registros
@@ -327,19 +601,20 @@ export default function AppointmentsView({
               <button
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:hover:bg-white cursor-pointer"
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors disabled:opacity-40 cursor-pointer"
+                title="Página anterior"
               >
                 <ChevronLeft className="w-4 h-4 text-slate-600" />
               </button>
 
-              {Array.from({ length: totalPages }).map((_, idx) => (
+              {Array.from({ length: Math.min(totalPages, 5) }).map((_, idx) => (
                 <button
                   key={idx}
                   onClick={() => setCurrentPage(idx + 1)}
                   className={cn(
-                    "w-8 h-8 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                    "w-7 h-7 rounded-lg text-xs font-bold transition-all cursor-pointer",
                     currentPage === idx + 1
-                      ? "bg-[#0ea5e9] text-white shadow-sm shadow-sky-500/10"
+                      ? "bg-slate-900 text-white shadow-xs"
                       : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
                   )}
                 >
@@ -350,7 +625,8 @@ export default function AppointmentsView({
               <button
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors disabled:opacity-50 disabled:hover:bg-white cursor-pointer"
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-colors disabled:opacity-40 cursor-pointer"
+                title="Próxima página"
               >
                 <ChevronRight className="w-4 h-4 text-slate-600" />
               </button>

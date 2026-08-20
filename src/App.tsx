@@ -138,10 +138,16 @@ import SaaSAssinaturaView from './components/SaaSAssinaturaView';
 import SaaSLockedFeatureView from './components/SaaSLockedFeatureView';
 import SuperAdminView from './components/SuperAdminView';
 import CustomDashboardView from './components/DashboardView';
+import PatientRecordView from './components/PatientRecordView';
+import CustomAdminView from './components/AdminView';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import AppointmentsView from './components/AppointmentsView';
 import ScheduleView from './components/ScheduleView';
+import CustomPatientsView from './components/PatientsView';
+import CustomPatientFormView from './components/PatientFormView';
+import CustomAppointmentFormView from './components/AppointmentFormView';
+import CustomMessagesView from './components/MessagesView';
 
 const OPENING_HOUR = "08:00";
 const CLOSING_HOUR = "17:00";
@@ -379,6 +385,20 @@ const SecurityUtils = {
         });
         localStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, payload);
         sessionStorage.setItem(SecurityUtils.BRUTE_FORCE_KEY, payload);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  resetBruteForce: (identifier?: string) => {
+    try {
+      const win = window as any;
+      localStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      sessionStorage.removeItem(SecurityUtils.BRUTE_FORCE_KEY);
+      win.__bruteMemoryAttempts = 0;
+      if (identifier) {
+        localStorage.removeItem(`_brute_${identifier}`);
       }
     } catch (e) {
       console.error(e);
@@ -1776,6 +1796,28 @@ export default function App() {
     }
   };
 
+  const handleUnlockUser = async (userId: string, username: string) => {
+    try {
+      if (username) {
+        SecurityUtils.resetBruteForce(username);
+      }
+      const userRef = doc(db, 'users', userId);
+      await setDoc(userRef, { isLocked: false, loginAttempts: 0 }, { merge: true });
+      try {
+        if (username) {
+          const attemptRef = doc(db, 'login_attempts', username.toLowerCase().trim());
+          await setDoc(attemptRef, { count: 0, lockedUntil: null }, { merge: true });
+        }
+      } catch (e) {
+        console.warn("Could not reset firestore attempt doc:", e);
+      }
+      alert(`Usuário ${username || userId} desbloqueado com sucesso!`);
+    } catch (err: any) {
+      console.error("Erro ao desbloquear usuário:", err);
+      alert("Erro ao desbloquear usuário: " + (err.message || "Erro desconhecido"));
+    }
+  };
+
   const handleUpdatePaymentStatus = async (id: string, newStatus: any) => {
     try {
       await setDoc(doc(db, 'records', id), { statusPagamento: newStatus }, { merge: true });
@@ -2406,7 +2448,7 @@ export default function App() {
   const renderContent = () => {
     if (subPage === 'Prontuario' && activePage === 'Pacientes' && selectedPatientId) {
       return (
-        <MedicalChartView 
+        <PatientRecordView 
           patientName={patientsForUser.find(p => p.id === selectedPatientId)?.name || selectedPatientId} 
           patientId={selectedPatientId}
           data={filteredRecords} 
@@ -2486,13 +2528,23 @@ export default function App() {
       );
     }
     if (subPage === 'Cadastrar' && activePage === 'Pacientes') {
-      return <PatientFormView patients={patientsForUser} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <CustomPatientFormView patients={patientsForUser} users={users} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
     if (subPage === 'Editar' && activePage === 'Pacientes' && selectedPatientId) {
-      return <PatientFormView isEdit patientId={selectedPatientId} patients={patientsForUser} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
+      return <CustomPatientFormView isEdit patientId={selectedPatientId} patients={patientsForUser} users={users} onSave={handleCreatePatient} onBack={() => setSubPage(null)} />;
     }
-    if (subPage === 'NovoAgendamento' && (activePage === 'Agenda' || activePage === 'Consultas')) {
-      return <AppointmentFormView patients={patientsForUser} data={filteredRecords} users={users} onSave={handleCreateAppointment} onBack={() => setSubPage(null)} />;
+    if (subPage === 'NovoAgendamento' && (activePage === 'Agenda' || activePage === 'Consultas' || activePage === 'Pacientes')) {
+      return (
+        <CustomAppointmentFormView 
+          patients={patientsForUser} 
+          data={filteredRecords} 
+          users={users} 
+          onSave={handleCreateAppointment} 
+          onBack={() => setSubPage(null)} 
+          presetPatient={selectedPatientId}
+          clinicName={clinicName}
+        />
+      );
     }
 
     // Permission Guard for module rendering
@@ -2540,7 +2592,7 @@ export default function App() {
           );
         }
         return (
-          <MessagesView 
+          <CustomMessagesView 
             data={data} 
             patients={patientsForUser} 
             clinicName={clinicName} 
@@ -2559,7 +2611,7 @@ export default function App() {
         />;
       case 'Pacientes':
         return (
-          <PatientsView 
+          <CustomPatientsView 
             data={filteredData} 
             patients={patientsForUser}
             onOpenChart={(id) => { setSelectedPatientId(id); setSubPage('Prontuario'); }}
@@ -2571,6 +2623,13 @@ export default function App() {
             currentUserRole={currentUser?.role}
             canSeeFinancials={canSeeFinancials}
             onAdd={() => setSubPage('Cadastrar')}
+            onQuickBook={(patientIdOrName) => {
+              const p = patientsForUser.find(pat => pat.id === patientIdOrName || pat.name === patientIdOrName);
+              setSelectedPatientId(p ? p.id : patientIdOrName);
+              setActivePage('Agenda');
+              setSubPage('NovoAgendamento');
+            }}
+            clinicName={clinicName}
             onViewDetail={(p) => {
               const fullInfo = patientsForUser.find(pat => pat.name === p.name);
               const patientRecords = data.filter(r => r.paciente === p.name);
@@ -2605,41 +2664,54 @@ export default function App() {
           onStart={handleStartConsultation}
           onFinish={handleFinishConsultation}
           onCreateAppointment={handleCreateAppointment}
+          onOpenChart={(patientIdOrName) => {
+            const p = patientsForUser.find(pat => pat.id === patientIdOrName || pat.name === patientIdOrName);
+            setSelectedPatientId(p ? p.id : patientIdOrName);
+            setActivePage('Pacientes');
+            setSubPage('Prontuario');
+          }}
           users={users}
           currentUser={currentUser}
         />;
       case 'Consultas':
         return <AppointmentsView 
           data={data} 
+          patients={patientsForUser}
           onAdd={() => setSubPage('NovoAgendamento')} 
           onCancel={handleCancelAppointment}
           onSendWhatsApp={handleWhatsAppReminder}
+          onStart={handleStartConsultation}
+          onFinish={handleFinishConsultation}
+          onOpenChart={(patientIdOrName) => {
+            const p = patientsForUser.find(pat => pat.id === patientIdOrName || pat.name === patientIdOrName);
+            setSelectedPatientId(p ? p.id : patientIdOrName);
+            setActivePage('Pacientes');
+            setSubPage('Prontuario');
+          }}
         />;
       case 'Financeiro':
         return canAccessFinance ? <FinanceView data={filteredData} patients={patientsForUser} onUpdatePayment={handleUpdatePaymentStatus} /> : <div className="p-8 text-slate-400">Acesso restrito ao Financeiro.</div>;
       case 'Administração':
         return canAccessAdmin ? (
-          <AdminView 
+          <CustomAdminView 
             users={users} 
+            data={data}
+            patients={patientsForUser}
+            documents={documents}
+            currentUser={currentUser}
             onAddUser={handleCreateUser} 
             onUpdateUser={handleUpdateUser} 
             onDeleteUser={handleDeleteUser}
-            currentUser={currentUser}
+            onUnlockUser={handleUnlockUser}
+            onRestoreBackup={handleRestoreData}
             clinicName={clinicName}
             clinicLogo={clinicLogo}
             footerText={footerText}
             providerPhone={providerPhone}
             providerName={providerName}
             onUpdateSettings={handleUpdateSettings}
-            onResetDatabase={handleResetDatabase}
             deferredPrompt={deferredPrompt}
             onInstallPWA={handleInstallPWA}
-            data={data}
-            patients={patientsForUser}
-            documents={documents}
-            onRestore={handleRestoreData}
-            adminTab={adminTab}
-            setAdminTab={setAdminTab}
           />
         ) : (
           <div className="p-8 text-slate-400">Acesso restrito à Administração.</div>
@@ -2719,6 +2791,8 @@ export default function App() {
           onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); }}
           onLogout={handleLogout}
           clinicName={clinicName}
+          appointmentsCount={upcomingAppointments.length}
+          patientsCount={patientsForUser.length}
         />
       </div>
 
@@ -2749,6 +2823,8 @@ export default function App() {
                 onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); setIsMenuOpen(false); }}
                 onLogout={() => { handleLogout(); setIsMenuOpen(false); }}
                 clinicName={clinicName}
+                appointmentsCount={upcomingAppointments.length}
+                patientsCount={patientsForUser.length}
               />
             </motion.div>
           </>
@@ -2768,6 +2844,33 @@ export default function App() {
           clinicName={clinicName}
           onNavigate={(page, subPage = null) => { setActivePage(page); setSubPage(subPage); }}
           onLogout={handleLogout}
+          activePage={activePage}
+          searchPatient={searchPatient}
+          setSearchPatient={setSearchPatient}
+          filterDateRange={filterDateRange}
+          setFilterDateRange={setFilterDateRange}
+          filterStartDate={filterStartDate}
+          setFilterStartDate={setFilterStartDate}
+          filterEndDate={filterEndDate}
+          setFilterEndDate={setFilterEndDate}
+          filterProcedure={filterProcedure}
+          setFilterProcedure={setFilterProcedure}
+          filterStatus={filterStatus}
+          setFilterStatus={setFilterStatus}
+          filterPayment={filterPayment}
+          setFilterPayment={setFilterPayment}
+          filterDentista={filterDentista}
+          setFilterDentista={setFilterDentista}
+          procedures={procedures}
+          statuses={statuses}
+          paymentStatuses={paymentStatuses}
+          doctorsList={doctorsList}
+          onOnlineBookingClick={() => {
+            const url = window.location.origin + window.location.pathname + '?booking=true';
+            navigator.clipboard.writeText(url);
+            alert('Link de agendamento online copiado para o seu clipboard!');
+            setIsPublicBooking(true);
+          }}
         />
 
     <div className="hidden">
@@ -3674,135 +3777,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Smart Search Filters, Date/Time and Booking Copier neatly integrated within the workspace layout */}
-            {['Agenda', 'Pacientes', 'Financeiro'].includes(activePage) && subPage === null && (
-              <div className="bg-white border border-slate-200/80 rounded-2xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4 shadow-sm z-30 font-sans">
-                <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-5 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="relative group w-full lg:w-auto">
-                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-                      <input 
-                        type="text" 
-                        placeholder="Buscar paciente..."
-                        className="pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded text-xs focus:ring-1 focus:ring-brand-cyan outline-none w-full lg:w-48 shadow-sm"
-                        value={searchPatient}
-                        onChange={(e) => setSearchPatient(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100))}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Período:</span>
-                      <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                        value={filterDateRange}
-                        onChange={(e) => {
-                          const val = e.target.value as any;
-                          setFilterDateRange(val);
-                          if (val === 'today') {
-                            setFilterStartDate(format(new Date(), 'yyyy-MM-dd'));
-                            setFilterEndDate(format(new Date(), 'yyyy-MM-dd'));
-                          } else if (val === 'month') {
-                            setFilterStartDate(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
-                            setFilterEndDate(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
-                          } else if (val === 'last_month') {
-                            const lastMonth = subMonths(new Date(), 1);
-                            setFilterStartDate(format(startOfMonth(lastMonth), 'yyyy-MM-dd'));
-                            setFilterEndDate(format(endOfMonth(lastMonth), 'yyyy-MM-dd'));
-                          }
-                        }}
-                      >
-                        <option value="month">Este Mês</option>
-                        <option value="last_month">Mês Passado</option>
-                        <option value="today">Hoje</option>
-                        <option value="custom">Customizado</option>
-                      </select>
-
-                      {filterDateRange === 'custom' && (
-                        <div className="flex items-center gap-1 animate-in fade-in slide-in-from-left-2 duration-200">
-                          <input 
-                            type="date"
-                            className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                            value={filterStartDate}
-                            onChange={(e) => setFilterStartDate(e.target.value)}
-                          />
-                          <span className="text-[10px] text-slate-400">até</span>
-                          <input 
-                            type="date"
-                            className="text-[10px] border border-slate-200 rounded px-1 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none shadow-inner"
-                            value={filterEndDate}
-                            onChange={(e) => setFilterEndDate(e.target.value)}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Proc:</span>
-                      <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                        value={filterProcedure}
-                        onChange={(e) => setFilterProcedure(e.target.value)}
-                      >
-                        {procedures.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Status:</span>
-                      <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                        value={filterStatus}
-                        onChange={(e) => setFilterStatus(e.target.value)}
-                      >
-                        {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Fin:</span>
-                      <select 
-                        className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                        value={filterPayment}
-                        onChange={(e) => setFilterPayment(e.target.value)}
-                      >
-                        {paymentStatuses.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-
-                    {(currentUser?.role === 'Admin' || hasModule('Agenda') || hasModule('Pacientes')) && (
-                      <div className="flex items-center gap-1.5 text-slate-600">
-                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-450">Médico:</span>
-                        <select 
-                          className="text-xs border border-slate-200 rounded px-2 py-1 bg-white focus:ring-1 focus:ring-brand-cyan outline-none cursor-pointer shadow-sm"
-                          value={filterDentista}
-                          onChange={(e) => setFilterDentista(e.target.value)}
-                        >
-                          {doctorsList.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0 self-start xl:self-auto xl:border-l xl:border-slate-200/60 xl:pl-4">
-                  <button 
-                    onClick={() => {
-                      const url = window.location.origin + window.location.pathname + '?booking=true';
-                      navigator.clipboard.writeText(url);
-                      alert('Link de agendamento online copiado!');
-                      setIsPublicBooking(true);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-cyan text-white rounded-lg hover:bg-brand-cyan/90 text-xs font-bold transition-all shadow-sm active:scale-95"
-                    title="Copiar Link de Agendamento"
-                  >
-                    <Monitor className="w-3.5 h-3.5" />
-                    <span>Agendamento Online</span>
-                  </button>
-                </div>
-              </div>
-            )}
             {renderContent()}
           </motion.div>
         </AnimatePresence>

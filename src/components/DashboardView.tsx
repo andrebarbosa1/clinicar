@@ -8,14 +8,30 @@ import {
   Users, 
   TrendingUp, 
   Clock, 
-  Calendar,
-  Stethoscope,
-  LayoutDashboard,
-  Bell,
-  ChevronLeft,
-  ChevronRight,
-  Sparkles,
-  CheckCircle
+  Calendar, 
+  Stethoscope, 
+  LayoutDashboard, 
+  Bell, 
+  ChevronLeft, 
+  ChevronRight, 
+  Sparkles, 
+  CheckCircle,
+  CheckCircle2,
+  Volume2,
+  PhoneCall,
+  MessageSquare,
+  Plus,
+  ArrowUpRight,
+  Activity,
+  UserCheck,
+  ShieldCheck,
+  AlertCircle,
+  DollarSign,
+  CalendarDays,
+  MoreHorizontal,
+  Send,
+  User,
+  HeartPulse
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -41,7 +57,7 @@ export default function CustomDashboardView({
   onNavigate?: (page: string, subPage?: string | null) => void;
   clinicName?: string;
 }) {
-  // States for custom interactive widgets
+  // States for interactive widgets & consultation calling
   const [isServingActive, setIsServingActive] = useState(false);
   const [currentServingPatient, setCurrentServingPatient] = useState<string | null>(null);
   const [activeCalendarDay, setActiveCalendarDay] = useState<number | null>(new Date().getDate());
@@ -60,6 +76,14 @@ export default function CustomDashboardView({
   const isTrialUser = useMemo(() => {
     return !!(loggedInUser?.isTrial || loggedInUser?.parentTrialId);
   }, [loggedInUser]);
+
+  // Greeting based on current hour
+  const greeting = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Bom dia';
+    if (hour < 18) return 'Boa tarde';
+    return 'Boa noite';
+  }, []);
 
   // Get active days from actual appointments
   const appointmentDays = useMemo(() => {
@@ -123,15 +147,27 @@ export default function CustomDashboardView({
     };
   }, [filteredData, isTrialUser]);
 
-  const waitingRoomCount = useMemo(() => {
-    if (isTrialUser) return upcomingAppointments.length;
-    return upcomingAppointments.length || 5;
-  }, [upcomingAppointments, isTrialUser]);
+  // Financial summary when permitted
+  const financialSummary = useMemo(() => {
+    if (!canSeeFinancials) return null;
+    const activeRecords = filteredData.filter(r => r.status !== 'Cancelado');
+    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
+    const totalReceived = realizedRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const totalPending = activeRecords.filter(r => r.status === 'Agendado').reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const avgTicket = realizedRecords.length > 0 ? totalReceived / realizedRecords.length : 0;
+    
+    return {
+      totalReceived,
+      totalPending,
+      avgTicket,
+      completedCount: realizedRecords.length
+    };
+  }, [filteredData, canSeeFinancials]);
 
   // Notifications (dynamic + fallback)
   const notifications = useMemo(() => {
     const items = [];
-    const colors = ['bg-[#0ea5e9]', 'bg-[#06b6d4]', 'bg-[#10b981]', 'bg-[#f59e0b]'];
+    const colors = ['bg-sky-500', 'bg-cyan-500', 'bg-emerald-500', 'bg-amber-500'];
     
     const realAppts = upcomingAppointments.slice(0, 4);
     realAppts.forEach((appt, idx) => {
@@ -140,7 +176,8 @@ export default function CustomDashboardView({
         title: `${appt.procedimento} - ${appt.paciente}`,
         time: appt.horario || '08:30 AM',
         date: appt.data ? format(parseISO(appt.data), 'dd MMM yyyy') : 'Hoje',
-        colorClass: colors[idx % colors.length]
+        colorClass: colors[idx % colors.length],
+        record: appt
       });
     });
 
@@ -150,18 +187,19 @@ export default function CustomDashboardView({
 
     if (items.length < 4) {
       const fallbacks = [
-        { title: "New appointment created", time: "8:30 AM", date: "July 25, 2021", colorClass: "bg-[#0ea5e9]" },
-        { title: "Dental surgery scheduled", time: "9:00 AM", date: "July 25, 2021", colorClass: "bg-[#06b6d4]" },
-        { title: "Online consultation", time: "9:30 AM", date: "July 25, 2021", colorClass: "bg-[#10b981]" },
-        { title: "Reminder", time: "9:30 AM", date: "July 25, 2021", colorClass: "bg-[#f59e0b]" }
+        { title: "Novo agendamento confirmado", time: "08:30", date: format(new Date(), 'dd MMM yyyy'), colorClass: "bg-sky-500" },
+        { title: "Cirurgia de Implante agendada", time: "10:00", date: format(new Date(), 'dd MMM yyyy'), colorClass: "bg-cyan-500" },
+        { title: "Consulta de Avaliação clínica", time: "14:30", date: format(new Date(), 'dd MMM yyyy'), colorClass: "bg-emerald-500" },
+        { title: "Lembrete de retorno preventivo", time: "16:00", date: format(new Date(), 'dd MMM yyyy'), colorClass: "bg-amber-500" }
       ];
-      fallbacks.slice(0, 4 - items.length).forEach((fb) => {
+      fallbacks.slice(0, 4 - items.length).forEach((fb, idx) => {
         items.push({
-          id: `noti-fallback-${fb.title}-${Math.random()}`,
+          id: `noti-fallback-${idx}`,
           title: fb.title,
           time: fb.time,
           date: fb.date,
-          colorClass: fb.colorClass
+          colorClass: fb.colorClass,
+          record: null
         });
       });
     }
@@ -181,17 +219,17 @@ export default function CustomDashboardView({
           name,
           time: "Ativo",
           initial,
-          colorClass: "bg-teal-50 text-teal-700 border-teal-100"
+          colorClass: "bg-teal-50 text-teal-700 border-teal-200"
         });
       });
       return list;
     }
 
     const defaultPatients = [
-      { name: "Isabel Horvat", time: "5 hours ago", initial: "IH", color: "bg-teal-50 text-teal-700 border-teal-100" },
-      { name: "Alena Steves", time: "15 hours ago", initial: "AS", color: "bg-indigo-50 text-indigo-700 border-indigo-100" },
-      { name: "Ivan Drake", time: "1 day ago", initial: "ID", color: "bg-blue-50 text-blue-700 border-blue-100" },
-      { name: "Maggie Fletcher", time: "1 day ago", initial: "MF", color: "bg-purple-50 text-purple-700 border-purple-100" }
+      { name: "Isabel Horvat", time: "Há 2 horas", initial: "IH", color: "bg-teal-50 text-teal-700 border-teal-200" },
+      { name: "Alena Steves", time: "Há 4 horas", initial: "AS", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+      { name: "Ivan Drake", time: "Ontem", initial: "ID", color: "bg-sky-50 text-sky-700 border-sky-200" },
+      { name: "Maggie Fletcher", time: "Há 2 dias", initial: "MF", color: "bg-purple-50 text-purple-700 border-purple-200" }
     ];
 
     for (let i = 0; i < 4; i++) {
@@ -212,17 +250,17 @@ export default function CustomDashboardView({
   const waitingRoomPatients = useMemo(() => {
     const list = [];
     const realAppts = upcomingAppointments.slice(0, 5);
-    const times = ["1 Hora", "45 Minutos", "30 Minutos", "15 Minutos", "12 Minutos"];
+    const times = ["10 Min", "20 Min", "35 Min", "45 Min", "60 Min"];
     
     if (isTrialUser) {
       realAppts.forEach((appt, i) => {
         list.push({
           id: appt.id,
           name: appt.paciente,
-          type: appt.procedimento,
+          type: appt.procedimento || 'Consulta Odontológica',
           time: times[i % times.length],
           initial: appt.paciente.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2),
-          colorClass: "bg-sky-50 text-sky-700",
+          colorClass: "bg-sky-50 text-sky-700 border-sky-200",
           record: appt
         });
       });
@@ -230,11 +268,11 @@ export default function CustomDashboardView({
     }
 
     const defaultPatients = [
-      { name: "Isabel Horvat", type: "Consultation", initial: "IH", color: "bg-[#f3f4f6]" },
-      { name: "Ivan Drake", type: "Cleaning", initial: "ID", color: "bg-[#f3f4f6]" },
-      { name: "Joshua Holcombe", type: "Consultation", initial: "JH", color: "bg-[#f3f4f6]" },
-      { name: "Maggie Fletcher", type: "Braces", initial: "MF", color: "bg-[#f3f4f6]" },
-      { name: "Valerie Burke", type: "Dental surgery", initial: "VB", color: "bg-[#f3f4f6]" }
+      { name: "Isabel Horvat", type: "Avaliação Geral", initial: "IH", color: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+      { name: "Ivan Drake", type: "Limpeza & Profilaxia", initial: "ID", color: "bg-indigo-50 text-indigo-700 border-indigo-200" },
+      { name: "Joshua Holcombe", type: "Restauração", initial: "JH", color: "bg-amber-50 text-amber-700 border-amber-200" },
+      { name: "Maggie Fletcher", type: "Manutenção Aparelho", initial: "MF", color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+      { name: "Valerie Burke", type: "Cirurgia Implante", initial: "VB", color: "bg-rose-50 text-rose-700 border-rose-200" }
     ];
 
     for (let i = 0; i < 5; i++) {
@@ -243,10 +281,10 @@ export default function CustomDashboardView({
         list.push({
           id: appt.id,
           name: appt.paciente,
-          type: appt.procedimento,
+          type: appt.procedimento || 'Consulta',
           time: times[i % times.length],
           initial: appt.paciente.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2),
-          colorClass: "bg-sky-50 text-sky-700",
+          colorClass: "bg-sky-50 text-sky-700 border-sky-200",
           record: appt
         });
       } else {
@@ -270,7 +308,7 @@ export default function CustomDashboardView({
     const uniqueNames = Array.from(new Set(filteredData.map(r => r.paciente).filter(Boolean)));
     
     if (isTrialUser) {
-      uniqueNames.forEach((name, idx) => {
+      uniqueNames.slice(0, 5).forEach((name, idx) => {
         const initial = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
         list.push({
           id: `recent-${idx}`,
@@ -283,11 +321,11 @@ export default function CustomDashboardView({
     }
 
     const defaultRecent = [
-      { name: "Alena Steves", time: "15 hours ago", initial: "AS" },
-      { name: "Ivan Drake", time: "29 minutes ago", initial: "ID" },
-      { name: "Joshua Holcombe", time: "44 minutes ago", initial: "JH" },
-      { name: "Maggie Fletcher", time: "3 hours ago", initial: "MF" },
-      { name: "Valerie Burke", time: "5 hours ago", initial: "VB" }
+      { name: "Alena Steves", time: "Há 15 minutos", initial: "AS" },
+      { name: "Ivan Drake", time: "Há 30 minutos", initial: "ID" },
+      { name: "Joshua Holcombe", time: "Há 1 hora", initial: "JH" },
+      { name: "Maggie Fletcher", time: "Há 3 horas", initial: "MF" },
+      { name: "Valerie Burke", time: "Há 5 horas", initial: "VB" }
     ];
 
     for (let i = 0; i < 5; i++) {
@@ -327,26 +365,26 @@ export default function CustomDashboardView({
   // Voice calling synthesis function
   const handleCallNextPatient = () => {
     if (!isServingActive) {
-      setCallingToast("Por favor, ative a chave de atendimento primeiro!");
-      setTimeout(() => setCallingToast(null), 3000);
+      setCallingToast("Ative o interruptor de atendimento primeiro!");
+      setTimeout(() => setCallingToast(null), 3500);
       return;
     }
 
-    // Pick first patient in the waiting room who is not yet called
+    // Pick first patient in the waiting room
     const nextPatient = waitingRoomPatients[0];
     if (nextPatient) {
       setCurrentServingPatient(nextPatient.name);
-      setCallingToast(`Chamando paciente: ${nextPatient.name}!`);
+      setCallingToast(`Chamando paciente: ${nextPatient.name}`);
       setTimeout(() => setCallingToast(null), 5000);
 
-      // Play voice synthesis call
+      // Play voice synthesis call in Portuguese
       try {
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
-          const speech = new SpeechSynthesisUtterance(`Atenção, paciente ${nextPatient.name}. Favor dirigir-se ao consultório médico.`);
+          const speech = new SpeechSynthesisUtterance(`Atenção, paciente ${nextPatient.name}. Favor dirigir-se ao consultório odontológico.`);
           speech.lang = 'pt-BR';
-          speech.rate = 1.0;
-          speech.pitch = 1.0;
+          speech.rate = 0.95;
+          speech.pitch = 1.05;
           window.speechSynthesis.speak(speech);
         }
       } catch (err) {
@@ -356,304 +394,490 @@ export default function CustomDashboardView({
   };
 
   return (
-    <div className="flex w-full bg-[#f4f7fa] text-slate-800 font-sans select-none text-left relative">
+    <div className="flex w-full bg-[#f8fafc] text-slate-900 font-sans select-none text-left relative min-h-full">
       
-      {/* Toast Overlay for voice calling */}
+      {/* Toast Overlay for voice calling & actions */}
       {callingToast && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[200] bg-orange-500 text-white px-6 py-3 rounded-2xl shadow-xl font-bold flex items-center gap-3 border border-orange-400 animate-bounce">
-          <Sparkles className="w-5 h-5 text-amber-200 animate-spin" />
-          <span>{callingToast}</span>
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[250] bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-2xl font-bold flex items-center gap-3 border border-slate-700/80 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+            <Volume2 className="w-4 h-4 animate-pulse" />
+          </div>
+          <div className="text-left">
+            <p className="text-[10px] font-black uppercase tracking-wider text-cyan-400">Chamada em Andamento</p>
+            <p className="text-xs font-semibold text-slate-100">{callingToast}</p>
+          </div>
         </div>
       )}
 
       {/* MAIN WORKSPACE PANEL */}
-      <div className="flex-1 flex flex-col p-6 gap-6">
+      <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 gap-6 max-w-7xl mx-auto w-full">
         
-        {/* PAGE TITLE & SUBTITLE */}
-        <div className="flex flex-col text-left shrink-0">
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight leading-none">Painel de Controle</h1>
-          <p className="text-xs text-slate-400 font-bold mt-1 uppercase tracking-wider">
-            {format(new Date(), "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
-          </p>
+        {/* HEADER SECTION: MODERN GREETING & QUICK ACTIONS */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-cyan-50 text-cyan-700 border border-cyan-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                {clinicName}
+              </span>
+              <span className="text-xs text-slate-400 font-semibold">•</span>
+              <span className="text-xs text-slate-500 font-medium capitalize">
+                {format(new Date(), "EEEE, dd 'de' MMMM", { locale: ptBR })}
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+              {greeting}, <span className="text-cyan-700">{doctorName.split(' ')[0]}</span> 👋
+            </h1>
+            <p className="text-xs text-slate-500 font-medium">
+              Aqui está o resumo operacional e a movimentação da clínica para hoje.
+            </p>
+          </div>
+
+          {/* Quick Action Navigation Buttons */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button 
+              onClick={() => onNavigate?.('Agenda', 'NovoAgendamento')}
+              className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-2xl text-xs font-bold transition-all shadow-sm hover:shadow flex items-center gap-2 cursor-pointer active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Novo Agendamento</span>
+            </button>
+            <button 
+              onClick={() => onNavigate?.('Pacientes', 'Cadastrar')}
+              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-2xl text-xs font-bold transition-all border border-slate-200 flex items-center gap-2 cursor-pointer active:scale-95"
+            >
+              <User className="w-4 h-4 text-slate-500" />
+              <span>Novo Paciente</span>
+            </button>
+            <button 
+              onClick={() => onNavigate?.('Agenda')}
+              className="p-2.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-2xl text-xs font-bold transition-all border border-slate-200 flex items-center justify-center cursor-pointer"
+              title="Abrir Agenda Completa"
+            >
+              <Calendar className="w-4 h-4 text-slate-600" />
+            </button>
+          </div>
         </div>
 
-        {/* MAIN CONTENTS GRID SYSTEM */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pb-6">
-          
-          {/* LEFT 9 COLUMNS FOR MAIN WIDGETS */}
-          <div className="col-span-12 lg:col-span-9 flex flex-col gap-5">
-                    {/* ROW 1: Key Performance Indicators */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-              
-              {/* Card 1: Total Patients */}
-              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
-                <div className="space-y-1 text-left min-w-0">
-                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Total de Pacientes</span>
-                  <h3 className="text-xl font-black text-slate-800 tracking-tight leading-none">{reportMetrics.patients}</h3>
-                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Pacientes cadastrados</p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-500 flex items-center justify-center shrink-0">
-                  <Users className="w-5 h-5" />
-                </div>
+        {/* FINANCIAL SUMMARY BANNER (IF ALLOWED) */}
+        {canSeeFinancials && financialSummary && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-gradient-to-r from-slate-900 to-slate-800 rounded-3xl p-5 text-white shadow-sm border border-slate-800">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                <DollarSign className="w-6 h-6" />
               </div>
-
-              {/* Card 2: Scheduled Appointments */}
-              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
-                <div className="space-y-1 text-left min-w-0">
-                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Consultas Agendadas</span>
-                  <h3 className="text-xl font-black text-sky-500 tracking-tight leading-none">{reportMetrics.consultations}</h3>
-                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Agendamentos futuros</p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-500 flex items-center justify-center shrink-0">
-                  <Calendar className="w-5 h-5" />
-                </div>
-              </div>
-
-              {/* Card 3: Completed Treatments */}
-              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
-                <div className="space-y-1 text-left min-w-0">
-                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Tratamentos Concluídos</span>
-                  <h3 className="text-xl font-black text-emerald-500 tracking-tight leading-none">{reportMetrics.treatments}</h3>
-                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Procedimentos finalizados</p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-500 flex items-center justify-center shrink-0">
-                  <CheckCircle className="w-5 h-5" />
-                </div>
-              </div>
-
-              {/* Card 4: Surgeries & Procedures */}
-              <div className="bg-white border border-slate-100 rounded-[24px] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex items-center justify-between h-[105px]">
-                <div className="space-y-1 text-left min-w-0">
-                  <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 block">Cirurgias & Implantes</span>
-                  <h3 className="text-xl font-black text-red-500 tracking-tight leading-none">{reportMetrics.surgeries}</h3>
-                  <p className="text-[9px] text-slate-400 font-medium leading-none truncate mt-1">Procedimentos complexos</p>
-                </div>
-                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
-                  <Stethoscope className="w-5 h-5" />
-                </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Faturado</p>
+                <h4 className="text-xl font-black text-emerald-400 tracking-tight truncate">
+                  {formatCurrency(financialSummary.totalReceived)}
+                </h4>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">{financialSummary.completedCount} procedimentos</p>
               </div>
             </div>
 
-            {/* ROW 3: Calendar & Recent Patients */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
-              
-              {/* Appointments Calendar Card */}
-              <div className="md:col-span-7 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
-                <div className="flex items-center justify-between shrink-0 mb-3">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Agendamentos</h3>
-                  </div>
-                  <button onClick={() => onNavigate?.('Agenda')} className="text-[10px] font-bold text-[#f97316] hover:underline">Ver Todos</button>
-                </div>
+            <div className="flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-slate-700/60 pt-3 sm:pt-0 sm:pl-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                <Clock className="w-6 h-6" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Previsto em Aberto</p>
+                <h4 className="text-xl font-black text-amber-400 tracking-tight truncate">
+                  {formatCurrency(financialSummary.totalPending)}
+                </h4>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">Consultas agendadas</p>
+              </div>
+            </div>
 
-                {/* Styled August header inside card */}
-                <div className="flex items-center justify-between shrink-0 mb-3 px-1">
-                  <button className="text-slate-400 hover:text-slate-600">
+            <div className="flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-slate-700/60 pt-3 sm:pt-0 sm:pl-4">
+              <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+                <TrendingUp className="w-6 h-6" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Ticket Médio</p>
+                <h4 className="text-xl font-black text-cyan-400 tracking-tight truncate">
+                  {formatCurrency(financialSummary.avgTicket)}
+                </h4>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">Por atendimento</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ROW 1: KEY PERFORMANCE INDICATORS */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          
+          {/* Card 1: Total Patients */}
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Total de Pacientes</span>
+              <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center">
+                <Users className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <h3 className="text-2xl font-black text-slate-900 tracking-tight leading-none">{reportMetrics.patients}</h3>
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold text-emerald-700">
+                <TrendingUp className="w-3 h-3" />
+                <span>Base ativa da clínica</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Scheduled Appointments */}
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Consultas Agendadas</span>
+              <div className="w-9 h-9 rounded-2xl bg-sky-50 text-sky-600 border border-sky-100 flex items-center justify-center">
+                <Calendar className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <h3 className="text-2xl font-black text-sky-600 tracking-tight leading-none">{reportMetrics.consultations}</h3>
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold text-sky-700">
+                <Clock className="w-3 h-3" />
+                <span>Próximos horários</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 3: Completed Treatments */}
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Tratamentos Concluídos</span>
+              <div className="w-9 h-9 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <h3 className="text-2xl font-black text-emerald-600 tracking-tight leading-none">{reportMetrics.treatments}</h3>
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold text-emerald-700">
+                <CheckCircle className="w-3 h-3" />
+                <span>Finalizados com sucesso</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Surgeries & Procedures */}
+          <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cirurgias & Procedimentos</span>
+              <div className="w-9 h-9 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center">
+                <Stethoscope className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <h3 className="text-2xl font-black text-rose-600 tracking-tight leading-none">{reportMetrics.surgeries}</h3>
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold text-rose-700">
+                <HeartPulse className="w-3 h-3" />
+                <span>Casos cirúrgicos e implantes</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* MAIN CONTENTS GRID: 2 COLUMNS (8 COLS FOR CALENDAR & PATIENTS, 4 COLS FOR QUEUE & CONSOLE) */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* LEFT 8 COLUMNS: INTERACTIVE CALENDAR & RECENT PATIENTS */}
+          <div className="lg:col-span-8 flex flex-col gap-6">
+            
+            {/* Calendar Widget */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-50 text-cyan-700 border border-cyan-100 flex items-center justify-center">
+                    <CalendarDays className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Calendário de Atendimentos</h3>
+                    <p className="text-[10px] text-slate-400 font-semibold">Visualize a ocupação diária do consultório</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => onNavigate?.('Agenda')}
+                  className="text-xs font-bold text-cyan-700 hover:text-cyan-800 flex items-center gap-1 hover:underline cursor-pointer"
+                >
+                  <span>Ver Agenda</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Month Selector Bar */}
+              <div className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-2xl px-4 py-2.5 mb-4">
+                <span className="text-xs font-black text-slate-800 uppercase tracking-widest font-mono">
+                  {format(new Date(), 'MMMM yyyy', { locale: ptBR })}
+                </span>
+                <div className="flex items-center gap-2 text-slate-400">
+                  <button className="p-1 hover:text-slate-700 hover:bg-slate-200/50 rounded-lg transition-colors cursor-pointer">
                     <ChevronLeft className="w-4 h-4" />
                   </button>
-                  <span className="text-xs font-black text-slate-700 uppercase tracking-widest font-mono">
-                    {format(new Date(), 'MMMM yyyy', { locale: ptBR })}
-                  </span>
-                  <button className="text-slate-400 hover:text-slate-600">
+                  <button className="p-1 hover:text-slate-700 hover:bg-slate-200/50 rounded-lg transition-colors cursor-pointer">
                     <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
-
-                {/* Calendar Days grid */}
-                <div className="flex-1 flex flex-col justify-between min-h-0 overflow-y-auto">
-                  <div className="grid grid-cols-7 text-center text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">
-                    <span>Dom</span>
-                    <span>Seg</span>
-                    <span>Ter</span>
-                    <span>Qua</span>
-                    <span>Qui</span>
-                    <span>Sex</span>
-                    <span>Sáb</span>
-                  </div>
-
-                  <div className="grid grid-cols-7 grid-rows-5 gap-1 text-center flex-1 items-center font-mono">
-                    {calendarDays.map((cell, idx) => (
-                      <div 
-                        key={idx} 
-                        onClick={() => cell.day && setActiveCalendarDay(cell.day)}
-                        className={cn(
-                           "h-6 w-6 rounded-lg flex flex-col items-center justify-center text-[10px] font-extrabold relative cursor-pointer mx-auto",
-                           !cell.day ? "opacity-0" : "hover:bg-slate-50",
-                           cell.day === activeCalendarDay ? "bg-orange-100 text-[#f97316] border border-orange-200" : (cell.isToday ? "bg-slate-100 text-slate-800 font-black border border-slate-200/50" : "text-slate-600")
-                        )}
-                      >
-                        {cell.day}
-                        {/* Highlight colored blocks similar to image */}
-                        {isTrialUser ? (
-                          cell.day && appointmentDays.has(cell.day) && (
-                            <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-orange-500 rounded-full animate-pulse" title="Consulta Agendada" />
-                          )
-                        ) : (
-                          <>
-                            {cell.day === 10 && (
-                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-sky-500 rounded-full animate-pulse" title="Consulta" />
-                            )}
-                            {cell.day === 15 && (
-                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-orange-500 rounded-full animate-pulse" title="Limpeza" />
-                            )}
-                            {cell.day === 20 && (
-                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-red-500 rounded-full animate-pulse" title="Cirurgia" />
-                            )}
-                            {cell.day === 25 && (
-                              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3.5 h-1 bg-emerald-500 rounded-full animate-pulse" title="Aparelho" />
-                            )}
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
 
-              {/* Recent Patients Card */}
-              <div className="md:col-span-5 bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
-                <div className="flex items-center justify-between shrink-0 mb-3">
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Pacientes Recentes</h3>
-                  <button onClick={() => onNavigate?.('Pacientes')} className="text-[10px] font-bold text-[#f97316] hover:underline">Ver Todos</button>
+              {/* Calendar Grid */}
+              <div className="flex flex-col">
+                <div className="grid grid-cols-7 text-center text-[9px] font-black text-slate-400 uppercase tracking-widest pb-2 border-b border-slate-100">
+                  <span>Dom</span>
+                  <span>Seg</span>
+                  <span>Ter</span>
+                  <span>Qua</span>
+                  <span>Qui</span>
+                  <span>Sex</span>
+                  <span>Sáb</span>
                 </div>
 
-                <div className="flex-1 overflow-y-auto pr-1 space-y-3.5">
-                  {recentPatients.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 py-4">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Nenhum paciente</span>
-                      <span className="text-[9px] text-slate-400 mt-0.5 font-medium">Sua lista de pacientes recentes está limpa.</span>
+                <div className="grid grid-cols-7 gap-2 pt-3 font-mono">
+                  {calendarDays.map((cell, idx) => (
+                    <div 
+                      key={idx} 
+                      onClick={() => cell.day && setActiveCalendarDay(cell.day)}
+                      className={cn(
+                        "h-10 rounded-2xl flex flex-col items-center justify-center text-xs font-bold relative transition-all",
+                        !cell.day ? "opacity-0 pointer-events-none" : "cursor-pointer",
+                        cell.day === activeCalendarDay 
+                          ? "bg-cyan-600 text-white shadow-sm font-extrabold" 
+                          : cell.isToday 
+                            ? "bg-cyan-50 text-cyan-800 font-extrabold border border-cyan-200" 
+                            : "hover:bg-slate-100 text-slate-700"
+                      )}
+                    >
+                      <span>{cell.day}</span>
+                      
+                      {/* Appointment Highlight Indicators */}
+                      {isTrialUser ? (
+                        cell.day && appointmentDays.has(cell.day) && (
+                          <span className={cn(
+                            "absolute bottom-1 w-1.5 h-1.5 rounded-full",
+                            cell.day === activeCalendarDay ? "bg-white" : "bg-cyan-500"
+                          )} />
+                        )
+                      ) : (
+                        cell.day && (
+                          <div className="flex gap-0.5 absolute bottom-1">
+                            {cell.day % 4 === 0 && (
+                              <span className={cn("w-1 h-1 rounded-full", cell.day === activeCalendarDay ? "bg-white" : "bg-sky-500")} />
+                            )}
+                            {cell.day % 7 === 0 && (
+                              <span className={cn("w-1 h-1 rounded-full", cell.day === activeCalendarDay ? "bg-white" : "bg-emerald-500")} />
+                            )}
+                          </div>
+                        )
+                      )}
                     </div>
-                  ) : (
-                    recentPatients.map((patient) => (
-                      <div key={patient.id} className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 border flex items-center justify-center font-bold text-xs uppercase shadow-sm">
-                          {patient.initial}
-                        </div>
-                        <div className="min-w-0 flex-1 text-left">
-                          <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">{patient.name}</p>
-                          <p className="text-[9.5px] text-slate-400 font-medium leading-tight truncate mt-0.5">{patient.time}</p>
-                        </div>
-                      </div>
-                    ))
-                  )}
+                  ))}
                 </div>
               </div>
-
             </div>
 
-          </div>
-
-          {/* RIGHT 3 COLUMNS FOR WAITING ROOM & SERVING NOW */}
-          <div className="col-span-12 lg:col-span-3 flex flex-col gap-5">
-            
-            {/* Waiting Room Panel */}
-            <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] flex flex-col h-[320px] overflow-hidden">
-              <div className="flex items-center justify-between shrink-0 mb-4">
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Sala de Espera</h3>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto pr-1">
-                {/* Headers */}
-                <div className="grid grid-cols-12 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2 mb-2">
-                  <span className="col-span-7 text-left">Paciente</span>
-                  <span className="col-span-3 text-center">Fila</span>
-                  <span className="col-span-2 text-right">Ações</span>
+            {/* Recent Patients List */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 flex items-center justify-center">
+                    <UserCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Pacientes Recentes</h3>
+                    <p className="text-[10px] text-slate-400 font-semibold">Histórico recente de interações e consultas</p>
+                  </div>
                 </div>
+                <button 
+                  onClick={() => onNavigate?.('Pacientes')}
+                  className="text-xs font-bold text-cyan-700 hover:text-cyan-800 flex items-center gap-1 hover:underline cursor-pointer"
+                >
+                  <span>Ver Todos</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
-                {/* Rows matching image style perfectly */}
-                {waitingRoomPatients.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-[180px] text-slate-400">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Fila vazia</span>
-                    <span className="text-[9px] text-slate-400 mt-0.5 font-medium">Nenhum paciente aguardando atendimento.</span>
+              <div className="divide-y divide-slate-100">
+                {recentPatients.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 text-xs">
+                    Nenhum paciente recente registrado.
                   </div>
                 ) : (
-                  <div className="space-y-3.5">
-                    {waitingRoomPatients.map((p) => (
-                      <div key={p.id} className="grid grid-cols-12 items-center gap-1">
-                        <div className="col-span-7 flex items-center gap-2 min-w-0">
-                          <div className="w-7 h-7 rounded-full bg-orange-50 border border-orange-100 text-[#f97316] flex items-center justify-center font-extrabold text-[10px] shrink-0 uppercase">
-                            {p.initial}
-                          </div>
-                          <div className="min-w-0 flex-1 text-left">
-                            <p className="text-[10px] font-bold text-slate-800 truncate leading-tight">{p.name}</p>
-                            <p className="text-[8.5px] text-[#f97316] font-semibold truncate mt-0.5 leading-none">{p.type}</p>
-                          </div>
+                  recentPatients.map((patient) => (
+                    <div 
+                      key={patient.id} 
+                      onClick={() => onNavigate?.('Pacientes')}
+                      className="py-3 flex items-center justify-between hover:bg-slate-50 px-2 rounded-2xl transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-10 h-10 rounded-2xl bg-cyan-50 text-cyan-700 border border-cyan-100 flex items-center justify-center font-extrabold text-xs shrink-0">
+                          {patient.initial}
                         </div>
-                        
-                        <div className="col-span-3 text-center">
-                          <span className="text-[9px] font-bold text-slate-400 font-mono leading-none whitespace-nowrap">{p.time}</span>
-                        </div>
-
-                        <div className="col-span-2 text-right">
-                          <button 
-                            onClick={() => {
-                              if (p.record) {
-                                onSendWhatsApp?.(p.record);
-                              } else {
-                                setCallingToast(`Ação rápida para ${p.name}`);
-                                setTimeout(() => setCallingToast(null), 2000);
-                              }
-                            }}
-                            className="p-1 text-slate-400 hover:text-slate-600 rounded hover:bg-slate-50 font-bold"
-                            title="Chamar / Opções"
-                          >
-                            •••
-                          </button>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900 truncate">{patient.name}</p>
+                          <p className="text-[11px] text-slate-400 font-medium">{patient.time}</p>
                         </div>
                       </div>
-                    ))}
-                  </div>
+                      <span className="text-[10px] font-bold text-slate-400 px-2.5 py-1 bg-slate-100 rounded-full">
+                        Ver Prontuário
+                      </span>
+                    </div>
+                  ))
                 )}
               </div>
             </div>
 
-            {/* Serving Now Panel */}
-            <div className="bg-white border border-slate-100 rounded-[28px] p-5 shadow-[0_4px_24px_rgba(0,0,0,0.01)] shrink-0 flex flex-col justify-between h-[150px]">
+          </div>
+
+          {/* RIGHT 4 COLUMNS: WAITING ROOM & SERVING CONSOLE */}
+          <div className="lg:col-span-4 flex flex-col gap-6">
+            
+            {/* SERVING NOW & VOICE CALLING CONSOLE */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col justify-between">
               <div>
-                <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">Atendimento Atual</h3>
-                <p className="text-[9.5px] text-slate-400 font-medium leading-normal mt-1 text-left">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className={cn(
+                      "w-2.5 h-2.5 rounded-full",
+                      isServingActive ? "bg-emerald-500 animate-ping" : "bg-slate-300"
+                    )} />
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Atendimento Atual</h3>
+                  </div>
+                  <span className={cn(
+                    "text-[10px] font-black uppercase px-2 py-0.5 rounded-full border",
+                    isServingActive 
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                      : "bg-slate-100 text-slate-500 border-slate-200"
+                  )}>
+                    {isServingActive ? "Painel Aberto" : "Fechado"}
+                  </span>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl mb-4">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Paciente em Atendimento</p>
                   {currentServingPatient ? (
-                    <span>Chamando agora: <strong className="text-orange-500 font-black">{currentServingPatient}</strong></span>
+                    <p className="text-sm font-extrabold text-cyan-800 truncate">
+                      {currentServingPatient}
+                    </p>
                   ) : (
-                    "Ative o interruptor ao lado para chamar os pacientes"
+                    <p className="text-xs text-slate-500 font-medium">
+                      Nenhum paciente chamado no momento.
+                    </p>
                   )}
-                </p>
+                </div>
               </div>
 
-              <div className="flex items-center justify-between mt-3 gap-3">
-                {/* Custom Toggle Switch */}
-                <div className="flex items-center gap-2">
+              {/* Call Controls */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                  <span className="text-xs font-bold text-slate-600">Chave de Atendimento:</span>
                   <button 
                     onClick={() => setIsServingActive(!isServingActive)}
                     className={cn(
-                      "w-10 h-5 rounded-full p-0.5 transition-colors duration-300 focus:outline-none relative",
-                      isServingActive ? "bg-orange-500" : "bg-slate-300"
+                      "w-12 h-6 rounded-full p-0.5 transition-colors duration-300 focus:outline-none relative cursor-pointer",
+                      isServingActive ? "bg-cyan-600" : "bg-slate-300"
                     )}
                   >
                     <div 
                       className={cn(
-                        "w-4 h-4 rounded-full bg-white shadow-md transform duration-300",
-                        isServingActive ? "translate-x-5" : "translate-x-0"
+                        "w-5 h-5 rounded-full bg-white shadow-md transform transition-transform duration-300",
+                        isServingActive ? "translate-x-6" : "translate-x-0"
                       )}
                     />
                   </button>
-                  <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-wide">
-                    {isServingActive ? "Ativo" : "Ativar"}
-                  </span>
                 </div>
 
-                {/* Call Next Button matches the image style */}
                 <button 
                   onClick={handleCallNextPatient}
                   className={cn(
-                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-sm shrink-0 active:scale-95 cursor-pointer",
+                    "w-full py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 shadow-sm",
                     isServingActive 
-                      ? "bg-orange-500 text-white hover:bg-orange-600 shadow-orange-500/10" 
+                      ? "bg-cyan-600 hover:bg-cyan-700 text-white shadow-cyan-600/20" 
                       : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed"
                   )}
                 >
-                  Chamar Próximo
+                  <Volume2 className="w-4 h-4" />
+                  <span>Chamar Próximo Paciente</span>
                 </button>
+              </div>
+            </div>
+
+            {/* WAITING ROOM QUEUE */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col flex-1">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Fila de Espera</h3>
+                  <span className="w-5 h-5 rounded-full bg-cyan-100 text-cyan-800 font-extrabold text-[10px] flex items-center justify-center">
+                    {waitingRoomPatients.length}
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-slate-400">Tempo Estimado</span>
+              </div>
+
+              <div className="divide-y divide-slate-100 flex-1 overflow-y-auto">
+                {waitingRoomPatients.length === 0 ? (
+                  <div className="py-8 text-center text-slate-400 text-xs">
+                    Nenhum paciente aguardando na recepção.
+                  </div>
+                ) : (
+                  waitingRoomPatients.map((p, idx) => (
+                    <div key={p.id} className="py-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 border border-slate-200 flex items-center justify-center font-extrabold text-[10px] shrink-0">
+                          {p.initial}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900 truncate">{p.name}</p>
+                          <p className="text-[10px] text-cyan-700 font-semibold truncate">{p.type}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                          {p.time}
+                        </span>
+                        {p.record ? (
+                          <button 
+                            onClick={() => onSendWhatsApp(p.record!)}
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg transition-colors cursor-pointer"
+                            title="Enviar WhatsApp"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={() => {
+                              setCallingToast(`Ação rápida para ${p.name}`);
+                              setTimeout(() => setCallingToast(null), 2000);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                            title="Opções"
+                          >
+                            <MoreHorizontal className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* QUICK NOTIFICATIONS & ALERTS */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-slate-600" />
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Avisos & Lembretes</h3>
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                {notifications.map((noti) => (
+                  <div key={noti.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl flex items-start gap-2.5">
+                    <span className={cn("w-2 h-2 rounded-full mt-1.5 shrink-0", noti.colorClass)} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-800 leading-snug truncate">{noti.title}</p>
+                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">{noti.time} • {noti.date}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
