@@ -437,38 +437,34 @@ export default function MessagesView({
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
       
       {/* Top Header */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] font-black uppercase text-emerald-600 tracking-widest bg-emerald-50 border border-emerald-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
-              <Zap className="w-3 h-3 text-emerald-600" /> Automação de WhatsApp Direta
-            </span>
-            <span className="text-xs text-slate-400 font-bold">• Sistema Ativo</span>
-          </div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">
-            Central de Mensagens & Automações
+      <div className="bg-white px-4 py-2.5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
+            <MessageSquare className="w-5 h-5 text-emerald-600" />
+            <span>Central de Mensagens & Automações</span>
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Dispare confirmações automáticas, lembretes de consultas, felicitações e acompanhe o retorno dos pacientes.
-          </p>
+          <span className="text-xs text-slate-300 font-semibold">•</span>
+          <span className="text-xs text-emerald-600 font-bold flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> WhatsApp Conectado
+          </span>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex bg-slate-100 p-1 border border-slate-200/60 rounded-2xl w-full md:w-auto overflow-x-auto">
+        <div className="flex bg-slate-100 p-0.5 border border-slate-200/60 rounded-xl w-full md:w-auto overflow-x-auto">
           <button
             onClick={() => setActiveTab('fila')}
             className={cn(
-              "px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shrink-0",
-              activeTab === 'fila' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+              activeTab === 'fila' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <Clock className="w-4 h-4 text-brand-cyan" />
-            <span>Fila Automática</span>
+            <Clock className="w-3.5 h-3.5 text-brand-cyan" />
+            <span>Fila</span>
             {automatedQueue.length > 0 && (
-              <span className="w-5 h-5 rounded-full bg-brand-cyan text-white text-[10px] flex items-center justify-center font-black">
+              <span className="w-4 h-4 rounded-full bg-brand-cyan text-white text-[9px] flex items-center justify-center font-black">
                 {automatedQueue.length}
               </span>
             )}
@@ -477,34 +473,45 @@ export default function MessagesView({
           <button
             onClick={() => setActiveTab('chat')}
             className={cn(
-              "px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shrink-0",
-              activeTab === 'chat' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+              activeTab === 'chat' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <MessageSquare className="w-4 h-4 text-indigo-600" />
-            <span>Chat Direto</span>
+            <MessageSquare className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Chat</span>
           </button>
 
           <button
             onClick={() => setActiveTab('gatilhos')}
             className={cn(
-              "px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shrink-0",
-              activeTab === 'gatilhos' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+              activeTab === 'gatilhos' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <Bot className="w-4 h-4 text-emerald-600" />
-            <span>Regras & Gatilhos</span>
+            <Bot className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Gatilhos</span>
           </button>
 
           <button
             onClick={() => setActiveTab('modelos')}
             className={cn(
-              "px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer shrink-0",
-              activeTab === 'modelos' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+              activeTab === 'modelos' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
             )}
           >
-            <FileText className="w-4 h-4 text-amber-600" />
-            <span>Modelos (Templates)</span>
+            <FileText className="w-3.5 h-3.5 text-amber-600" />
+            <span>Modelos</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('historico')}
+            className={cn(
+              "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0",
+              activeTab === 'historico' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            <History className="w-3.5 h-3.5 text-slate-600" />
+            <span>Histórico</span>
           </button>
         </div>
       </div>

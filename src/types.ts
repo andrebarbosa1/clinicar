@@ -21,6 +21,11 @@ export interface DentalRecord {
   observacao?: string;
   reminderSent?: boolean;
   reminderSentAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  servingSince?: string;
+  isQuickEvent?: boolean;
+  createdBy?: string;
 }
 
 export interface MetricCard {

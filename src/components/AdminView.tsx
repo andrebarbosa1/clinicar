@@ -264,18 +264,23 @@ export default function AdminView({
                           </td>
 
                           <td className="px-6 py-4">
-                            <span
-                              className={cn(
-                                'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider',
-                                u.role === 'Admin'
-                                  ? 'bg-purple-100 text-purple-800'
-                                  : u.role === 'Dentista'
-                                  ? 'bg-cyan-100 text-cyan-800'
-                                  : 'bg-slate-100 text-slate-700'
-                              )}
-                            >
-                              {u.role || 'Usuário'}
-                            </span>
+                            <div className="space-y-1">
+                              <span
+                                className={cn(
+                                  'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider inline-block',
+                                  u.role === 'Admin'
+                                    ? 'bg-purple-100 text-purple-800'
+                                    : u.role === 'Dentista'
+                                    ? 'bg-cyan-100 text-cyan-800'
+                                    : 'bg-slate-100 text-slate-700'
+                                )}
+                              >
+                                {u.role || 'Usuário'}
+                              </span>
+                              <div className="text-[10px] text-slate-400 font-medium">
+                                {u.modules === 'Todos' || !u.modules ? 'Todos os módulos' : `${u.modules.split(',').length} módulo(s) liberado(s)`}
+                              </div>
+                            </div>
                           </td>
 
                           <td className="px-6 py-4">
@@ -374,12 +379,13 @@ export default function AdminView({
         {(isAddUserOpen || editingUser) && (
           <UserFormModal
             user={editingUser}
+            currentUser={currentUser}
             isOpen={isAddUserOpen || !!editingUser}
             onClose={() => {
               setIsAddUserOpen(false);
               setEditingUser(null);
             }}
-            onSave={async (userData) => {
+            onSave={async (userData: any) => {
               if (editingUser) {
                 const ok = await onUpdateUser(editingUser.id, userData);
                 if (ok) setEditingUser(null);
@@ -836,146 +842,341 @@ function BackupSection({
 }
 
 // Subcomponent: User Form Modal (Create / Edit)
-function UserFormModal({ user, isOpen, onClose, onSave }: any) {
+function UserFormModal({ user, currentUser, isOpen, onClose, onSave }: any) {
   const isEdit = !!user;
+  const isMasterAdmin = currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador');
+  
+  const ALL_SYSTEM_MODULES = [
+    { id: 'Dashboard', label: 'Dashboard / Início', desc: 'Métricas e resumo operacional' },
+    { id: 'Agenda', label: 'Agenda & Consultas', desc: 'Agendamentos e atendimento do dia' },
+    { id: 'Pacientes', label: 'Gestão de Pacientes', desc: 'Fichas cadastrais e histórico' },
+    { id: 'Documentos', label: 'Documentos & Prontuários', desc: 'Receitas, atestados e termos' },
+    { id: 'IAClinica', label: 'IA Clínica & Raio-X', desc: 'Análise de imagens e assistente clínico' },
+    { id: 'PortalPaciente', label: 'Portal do Paciente', desc: 'Link de autoatendimento web' },
+    { id: 'Retorno', label: 'Retornos Preventivos', desc: 'Avisos e reconvocação preventiva' },
+    { id: 'ChatbotIA', label: 'Chatbot IA WhatsApp', desc: 'Atendente automático 24/7' },
+    { id: 'Mensagens', label: 'Mensagens & Avisos', desc: 'Automações e disparos via WhatsApp' },
+    { id: 'Estoque', label: 'Controle de Estoque', desc: 'Insumos, alertas e reposição' },
+    { id: 'Financeiro', label: 'Financeiro & Fluxo', desc: 'Caixa, procedimentos e DRE' },
+    { id: 'Administração', label: 'Administração & Equipe', desc: 'Controle de usuários e clínicas' }
+  ];
+
+  // Helper to parse modules from user
+  const initialModules = (): string[] => {
+    if (!user) return ['Dashboard', 'Agenda', 'Pacientes', 'Documentos'];
+    if (user.modules === 'Todos' || !user.modules) {
+      if (user.role === 'Admin' || user.role === 'SuperAdmin') {
+        return ALL_SYSTEM_MODULES.map(m => m.id);
+      }
+      if (user.role === 'Recepcionista') {
+        return ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens'];
+      }
+      return ['Dashboard', 'Agenda', 'Pacientes', 'Documentos', 'IAClinica'];
+    }
+    if (typeof user.modules === 'string') {
+      return user.modules.split(',').map((m: string) => m.trim()).filter(Boolean);
+    }
+    if (Array.isArray(user.modules)) {
+      return user.modules;
+    }
+    return ['Dashboard', 'Agenda', 'Pacientes'];
+  };
+
   const [name, setName] = useState(user?.name || '');
   const [username, setUsername] = useState(user?.username || '');
   const [email, setEmail] = useState(user?.email || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [role, setRole] = useState(user?.role || 'Dentista');
   const [password, setPassword] = useState('');
+  const [selectedModules, setSelectedModules] = useState<string[]>(initialModules);
+  const [isActiveStatus, setIsActiveStatus] = useState<boolean>(!user?.isLocked);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
+  const toggleModule = (modId: string) => {
+    if (selectedModules.includes(modId)) {
+      setSelectedModules(selectedModules.filter(m => m !== modId));
+    } else {
+      setSelectedModules([...selectedModules, modId]);
+    }
+  };
+
+  const handleSelectAllModules = () => {
+    setSelectedModules(ALL_SYSTEM_MODULES.map(m => m.id));
+  };
+
+  const handleApplyRolePreset = (newRole: string) => {
+    setRole(newRole);
+    if (newRole === 'Admin' || newRole === 'SuperAdmin') {
+      setSelectedModules(ALL_SYSTEM_MODULES.map(m => m.id));
+    } else if (newRole === 'Recepcionista') {
+      setSelectedModules(['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens']);
+    } else {
+      setSelectedModules(['Dashboard', 'Agenda', 'Pacientes', 'Documentos', 'IAClinica']);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-lg w-full space-y-6 shadow-2xl border border-slate-200">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div>
-            <span className="text-[10px] font-black uppercase tracking-wider text-brand-cyan">Gestão de Equipe</span>
-            <h3 className="text-lg font-black text-slate-900">
-              {isEdit ? `Editar Profissional: ${user.name}` : 'Cadastrar Novo Profissional'}
-            </h3>
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl p-5 sm:p-7 max-w-xl w-full space-y-5 shadow-2xl border border-slate-200 my-auto animate-in fade-in zoom-in-95 duration-200">
+        
+        {/* Modal Header */}
+        <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-brand-cyan/20 text-brand-cyan flex items-center justify-center font-bold">
+              <Shield className="w-5 h-5 text-slate-900" />
+            </div>
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-wider text-brand-cyan">
+                Permissões & Controle de Acesso
+              </span>
+              <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
+                {isEdit ? `Editar Usuário: ${user.name || user.username}` : 'Cadastrar Novo Usuário'}
+              </h3>
+            </div>
           </div>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 rounded-lg">
+          <button 
+            onClick={onClose} 
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
+        {/* Modal Body Fields */}
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1 no-scrollbar">
+          
+          {/* Basic Info: Name */}
+          <div className="space-y-1">
             <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Nome Completo</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(SecurityUtils.sanitizeLettersOnly(e.target.value))}
               placeholder="Ex: Dra. Ana Paula Costa"
-              className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Login / Usuário</label>
+          {/* Login & Role */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Usuário / Login</label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_.]/g, ''))}
                 placeholder="anapaula"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-brand-cyan"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-brand-cyan"
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cargo / Função</label>
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Cargo / Nível</label>
               <select
                 value={role}
-                onChange={(e) => setRole(e.target.value)}
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan cursor-pointer"
+                onChange={(e) => handleApplyRolePreset(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan cursor-pointer"
               >
                 <option value="Dentista">Dentista / Clínico</option>
-                <option value="Admin">Administrador</option>
-                <option value="Recepcionista">Recepcionista</option>
+                <option value="Admin">Administrador da Clínica</option>
+                <option value="Recepcionista">Recepcionista / Atendimento</option>
+                {isMasterAdmin && <option value="SuperAdmin">Super Admin (Master)</option>}
               </select>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">E-mail</label>
+          {/* Email & Phone */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">E-mail Corporativo</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(SecurityUtils.sanitizeEmail(e.target.value))}
-                placeholder="ana@clinica.com"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-brand-cyan"
+                placeholder="usuario@clinica.com"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-brand-cyan"
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">WhatsApp / Celular</label>
               <input
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(SecurityUtils.maskPhone(e.target.value))}
                 placeholder="(11) 99999-9999"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-brand-cyan"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-brand-cyan"
               />
             </div>
           </div>
 
-          {!isEdit && (
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Senha Provisória</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Mínimo 6 caracteres"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
-              />
+          {/* Password field (Can edit on existing user or create) */}
+          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-brand-cyan" />
+                <span>{isEdit ? 'Alterar Senha de Acesso' : 'Senha de Acesso'}</span>
+              </label>
+              {isEdit && (
+                <span className="text-[10px] text-slate-400 font-medium">Deixe em branco para manter a atual</span>
+              )}
             </div>
-          )}
+            <input
+              type="text"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={isEdit ? "Digite uma nova senha (ex: 123)" : "Defina a senha (mínimo 3 caracteres)"}
+              className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none focus:border-brand-cyan"
+            />
+          </div>
+
+          {/* User Status / Unlock */}
+          <div className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-200/80">
+            <div className="flex items-center gap-2.5">
+              <div className={cn(
+                "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold",
+                isActiveStatus ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+              )}>
+                {isActiveStatus ? <UserCheck className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-800">
+                  {isActiveStatus ? "Conta Ativa & Desbloqueada" : "Conta Bloqueada / Restrita"}
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  {isActiveStatus ? "O usuário pode se autenticar normalmente" : "Acesso impedido temporariamente"}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsActiveStatus(!isActiveStatus)}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer",
+                isActiveStatus 
+                  ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-xs" 
+                  : "bg-slate-200 hover:bg-emerald-500 hover:text-white text-slate-700"
+              )}
+            >
+              {isActiveStatus ? "Liberado" : "Desbloquear"}
+            </button>
+          </div>
+
+          {/* Granular Module Permissions */}
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-brand-cyan" />
+                  <span>Permissões de Módulos & Acesso</span>
+                </label>
+                <p className="text-[10px] text-slate-400">Selecione quais áreas do sistema este usuário pode visualizar</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSelectAllModules}
+                className="text-[10px] font-black text-brand-cyan hover:underline cursor-pointer uppercase tracking-wider"
+              >
+                Liberar Todos
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {ALL_SYSTEM_MODULES.map((mod) => {
+                const isSelected = selectedModules.includes(mod.id);
+                return (
+                  <button
+                    type="button"
+                    key={mod.id}
+                    onClick={() => toggleModule(mod.id)}
+                    className={cn(
+                      "p-2.5 rounded-xl border text-left flex items-start gap-2.5 transition-all cursor-pointer",
+                      isSelected 
+                        ? "bg-cyan-50/60 border-cyan-300/80 shadow-xs" 
+                        : "bg-slate-50/70 border-slate-200/80 opacity-70 hover:opacity-100 hover:bg-slate-100/70"
+                    )}
+                  >
+                    <div className={cn(
+                      "w-4 h-4 rounded-md mt-0.5 flex items-center justify-center shrink-0 border transition-all",
+                      isSelected 
+                        ? "bg-brand-cyan border-brand-cyan text-slate-950" 
+                        : "border-slate-300 bg-white"
+                    )}>
+                      {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className={cn(
+                        "text-xs font-bold truncate leading-tight",
+                        isSelected ? "text-slate-900" : "text-slate-600"
+                      )}>
+                        {mod.label}
+                      </div>
+                      <div className="text-[9.5px] text-slate-400 truncate leading-tight mt-0.5">
+                        {mod.desc}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
         </div>
 
-        <div className="flex gap-3 pt-4 border-t border-slate-100">
+        {/* Modal Footer Buttons */}
+        <div className="flex gap-2.5 pt-3 border-t border-slate-100">
           <button
+            type="button"
             onClick={onClose}
-            className="flex-1 py-3 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl"
+            className="flex-1 py-2.5 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
           >
             Cancelar
           </button>
           <button
+            type="button"
             disabled={isSubmitting}
             onClick={async () => {
               if (!name.trim() || !username.trim() || !email.trim()) {
                 alert('Preencha os campos obrigatórios (Nome, Usuário e Email).');
                 return;
               }
-              if (!isEdit && (!password || password.length < 6)) {
-                alert('A senha provisória deve ter pelo menos 6 caracteres.');
+              if (!isEdit && (!password || password.length < 3)) {
+                alert('Defina uma senha com pelo menos 3 caracteres.');
                 return;
               }
 
               setIsSubmitting(true);
               try {
-                await onSave({
+                const modulesString = selectedModules.length === ALL_SYSTEM_MODULES.length 
+                  ? 'Todos' 
+                  : selectedModules.join(',');
+
+                const payload: any = {
                   name: name.trim(),
                   username: username.trim(),
                   email: email.trim(),
                   phone: phone.trim(),
                   role,
-                  password: password || undefined,
-                });
+                  modules: modulesString,
+                  isLocked: !isActiveStatus,
+                  loginAttempts: isActiveStatus ? 0 : (user?.loginAttempts || 0),
+                };
+
+                if (password && password.trim().length > 0) {
+                  payload.password = password.trim();
+                }
+
+                await onSave(payload);
               } finally {
                 setIsSubmitting(false);
               }
             }}
-            className="flex-1 py-3 text-xs font-black uppercase tracking-wider text-slate-950 bg-brand-cyan hover:bg-cyan-400 rounded-xl shadow-md shadow-brand-cyan/20 transition-all flex items-center justify-center gap-2"
+            className="flex-1 py-2.5 text-xs font-black uppercase tracking-wider text-slate-950 bg-brand-cyan hover:bg-cyan-400 rounded-xl shadow-md shadow-brand-cyan/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-            <span>{isEdit ? 'Salvar Alterações' : 'Concluir Cadastro'}</span>
+            <span>{isEdit ? 'Salvar Acesso' : 'Cadastrar Usuário'}</span>
           </button>
         </div>
       </div>

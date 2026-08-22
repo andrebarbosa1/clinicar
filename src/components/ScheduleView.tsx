@@ -29,7 +29,8 @@ import {
   AlertTriangle,
   Send,
   MoreVertical,
-  Activity
+  Activity,
+  List
 } from 'lucide-react';
 import { 
   startOfMonth, 
@@ -51,6 +52,17 @@ import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency } from '../lib/utils';
 import { DentalRecord } from '../types';
+import { 
+  CLINIC_TIME_SLOTS,
+  APPOINTMENT_DURATION_MINUTES,
+  normalizeAppointmentDateTime,
+  findDentistScheduleConflict,
+  doSlotsOverlap,
+  minutesToTime,
+  timeToMinutes,
+  isBusinessDay,
+  getNextBusinessDay
+} from '../lib/scheduleUtils';
 
 interface ScheduleViewProps {
   data: DentalRecord[];
@@ -72,11 +84,7 @@ const STATIC_EVENT_TAGS = [
   { id: '5', title: 'ESTUDO / CURSO', color: 'bg-slate-800 text-white' }
 ];
 
-const HOURS_TIMELINE = [
-  "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
-  "12:00", "12:30", "13:00", "13:30", "14:00", "14:30", "15:00", "15:30",
-  "16:00", "16:30", "17:00", "17:30", "18:00", "18:30", "19:00"
-];
+const HOURS_TIMELINE = CLINIC_TIME_SLOTS;
 
 export default function ScheduleView({ 
   data, 
@@ -91,7 +99,7 @@ export default function ScheduleView({
 }: ScheduleViewProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'chairs'>('week');
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'chairs' | 'list'>('week');
   const [selectedDentist, setSelectedDentist] = useState<string>('todos');
   const [searchScheduleTerm, setSearchScheduleTerm] = useState('');
   const [removeAfterDrop, setRemoveAfterDrop] = useState(false);
@@ -122,6 +130,15 @@ export default function ScheduleView({
   const [quickEventNote, setQuickEventNote] = useState('');
   const [isSavingQuickEvent, setIsSavingQuickEvent] = useState(false);
 
+  // Interactive Appointment Details & Action Modal
+  const [selectedAppointmentModal, setSelectedAppointmentModal] = useState<DentalRecord | null>(null);
+
+  // Active Ongoing Consultation
+  const activeOngoingConsultation = useMemo(() => {
+    if (!data) return null;
+    return (data || []).find(apt => apt && apt.status === 'Em Atendimento');
+  }, [data]);
+
   // WhatsApp quick modal from appointment card
   const [whatsappCardModal, setWhatsappCardModal] = useState<{
     isOpen: boolean;
@@ -138,10 +155,10 @@ export default function ScheduleView({
     return Array.from(names).sort() as string[];
   }, [users]);
 
-  // Week days based on selectedDate
+  // Week days based on selectedDate - Segunda a Sexta (5 dias úteis)
   const weekDays = useMemo(() => {
     const start = startOfWeek(selectedDate, { weekStartsOn: 1 }); // Monday
-    const end = endOfWeek(selectedDate, { weekStartsOn: 1 });
+    const end = addDays(start, 4); // Friday
     return eachDayOfInterval({ start, end });
   }, [selectedDate]);
 
@@ -229,7 +246,11 @@ export default function ScheduleView({
     } else if (viewMode === 'week') {
       setSelectedDate(prev => subDays(prev, 7));
     } else {
-      setSelectedDate(prev => subDays(prev, 1));
+      setSelectedDate(prev => {
+        let d = subDays(prev, 1);
+        while (!isBusinessDay(d)) d = subDays(d, 1);
+        return d;
+      });
     }
   };
 
@@ -239,21 +260,27 @@ export default function ScheduleView({
     } else if (viewMode === 'week') {
       setSelectedDate(prev => addDays(prev, 7));
     } else {
-      setSelectedDate(prev => addDays(prev, 1));
+      setSelectedDate(prev => {
+        let d = addDays(prev, 1);
+        while (!isBusinessDay(d)) d = addDays(d, 1);
+        return d;
+      });
     }
   };
 
   const handleToday = () => {
-    setCurrentMonth(new Date());
-    setSelectedDate(new Date());
+    const now = new Date();
+    setCurrentMonth(now);
+    setSelectedDate(getNextBusinessDay(now, false));
   };
 
   // Open slot modal
   const handleOpenSlotModal = (dateStr: string, timeStr: string, dentistStr?: string) => {
+    const normalized = normalizeAppointmentDateTime(dateStr, timeStr);
     setSlotModal({
       isOpen: true,
-      date: dateStr,
-      time: timeStr,
+      date: normalized.date,
+      time: normalized.time,
       dentist: dentistStr || (selectedDentist !== 'todos' ? selectedDentist : dentistList[0] || 'Dr. Daniel')
     });
     setSlotPatientName('');
@@ -263,10 +290,20 @@ export default function ScheduleView({
     setSlotNotes('');
   };
 
-  // Save quick appointment from slot modal
+  // Save quick appointment from slot modal with 1.5h conflict protection
   const handleSaveSlotAppointment = async () => {
     if (!slotModal || !slotPatientName.trim()) {
       alert('Por favor, informe o nome do paciente.');
+      return;
+    }
+
+    const normalized = normalizeAppointmentDateTime(slotModal.date, slotModal.time);
+    const finalDate = normalized.date;
+    const finalTime = normalized.time;
+
+    const conflict = findDentistScheduleConflict(data, slotModal.dentist, finalDate, finalTime);
+    if (conflict) {
+      alert(`CONFLITO DE HORÁRIO: O(A) ${slotModal.dentist} já possui consulta agendada (${conflict.horario} - ${conflict.paciente}) que colide com este intervalo de 1h30 no dia ${finalDate}.`);
       return;
     }
 
@@ -275,8 +312,8 @@ export default function ScheduleView({
       paciente: slotPatientName.trim(),
       procedimento: slotProcedure,
       dentista: slotModal.dentist,
-      data: slotModal.date,
-      horario: slotModal.time,
+      data: finalDate,
+      horario: finalTime,
       valor: parseFloat(slotValue) || 0,
       telefone: slotPhone,
       observacao: slotNotes,
@@ -292,17 +329,29 @@ export default function ScheduleView({
     setSlotModal(null);
   };
 
-  // Save quick event tag
+  // Save quick event tag with conflict protection
   const handleSaveQuickEvent = async () => {
     if (!quickEventModal) return;
+
+    const chosenDentist = quickEventDentist || dentistList[0] || 'Dr. Daniel';
+    const dateStr = format(selectedDate, 'yyyy-MM-dd');
+    const normalized = normalizeAppointmentDateTime(dateStr, quickEventTime);
+    const finalDate = normalized.date;
+    const finalTime = normalized.time;
+
+    const conflict = findDentistScheduleConflict(data, chosenDentist, finalDate, finalTime);
+    if (conflict) {
+      alert(`CONFLITO DE HORÁRIO: O(A) ${chosenDentist} já possui agendamento (${conflict.horario} - ${conflict.paciente}) conflitante neste horário no dia ${finalDate}.`);
+      return;
+    }
+
     setIsSavingQuickEvent(true);
-    
     const newAppt = {
       paciente: quickEventModal.title,
       procedimento: 'Compromisso',
-      dentista: quickEventDentist || dentistList[0] || 'Dr. Daniel',
-      data: format(selectedDate, 'yyyy-MM-dd'),
-      horario: quickEventTime,
+      dentista: chosenDentist,
+      data: finalDate,
+      horario: finalTime,
       valor: 0,
       observacao: quickEventNote || 'Criado via Eventos Rápidos',
       isQuickEvent: true,
@@ -351,30 +400,23 @@ export default function ScheduleView({
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-3 duration-300 pb-16 text-left">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-3 duration-300 pb-16 text-left">
       
       {/* HEADER BAR */}
-      <div className="bg-white border border-slate-200/80 rounded-3xl p-5 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] font-black uppercase text-brand-cyan tracking-widest bg-cyan-50 border border-cyan-100 px-2.5 py-0.5 rounded-full">
-              Agenda Interativa
-            </span>
-            <span className="text-xs text-slate-400 font-bold">
-              • {visibleData.length} agendamentos no período
-            </span>
-          </div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <Calendar className="w-6 h-6 text-brand-cyan" />
+      <div className="bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
+            <Calendar className="w-5 h-5 text-brand-cyan" />
             <span>Calendário Clínico</span>
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Visualize por Mês, Semana, Dia ou Cadeiras. Clique em qualquer horário livre para agendar.
-          </p>
+          <span className="text-xs text-slate-300 font-semibold">•</span>
+          <span className="text-xs text-slate-500 font-medium">
+            {visibleData.length} {visibleData.length === 1 ? 'agendamento' : 'agendamentos no período'}
+          </span>
         </div>
 
         {/* View Mode Controls & Top Actions */}
-        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           
           {/* Quick Search inside Calendar */}
           <div className="relative">
@@ -384,7 +426,7 @@ export default function ScheduleView({
               placeholder="Filtrar por paciente/proc..."
               value={searchScheduleTerm}
               onChange={e => setSearchScheduleTerm(e.target.value)}
-              className="pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-700 w-44 md:w-48 focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 outline-none"
+              className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 w-44 md:w-48 focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 outline-none"
             />
           </div>
 
@@ -393,7 +435,7 @@ export default function ScheduleView({
             <select
               value={selectedDentist}
               onChange={(e) => setSelectedDentist(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-2xl pl-3 pr-8 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 appearance-none cursor-pointer"
+              className="bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-1.5 text-xs font-bold text-slate-700 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 appearance-none cursor-pointer"
             >
               <option value="todos">Todos os Profissionais</option>
               {dentistList.map(name => (
@@ -404,7 +446,7 @@ export default function ScheduleView({
           </div>
 
           {/* View Mode Switcher */}
-          <div className="flex bg-slate-100 p-1 border border-slate-200/60 rounded-2xl">
+          <div className="flex bg-slate-100 p-0.5 border border-slate-200/60 rounded-xl">
             <button 
               onClick={() => setViewMode('month')}
               className={cn(
@@ -443,6 +485,17 @@ export default function ScheduleView({
               <Layers className="w-3.5 h-3.5 text-brand-cyan" />
               <span>Cadeiras</span>
             </button>
+            <button 
+              onClick={() => setViewMode('list')}
+              className={cn(
+                "px-3 py-1.5 rounded-xl font-black text-xs transition-all cursor-pointer flex items-center gap-1",
+                viewMode === 'list' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+              title="Lista Detalhada de Atendimentos"
+            >
+              <List className="w-3.5 h-3.5 text-brand-cyan" />
+              <span>Lista</span>
+            </button>
           </div>
 
           {/* New Appointment Primary Button */}
@@ -455,6 +508,54 @@ export default function ScheduleView({
           </button>
         </div>
       </div>
+
+      {/* ACTIVE ONGOING CONSULTATION BANNER */}
+      {activeOngoingConsultation && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-white border border-amber-300 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-md shadow-amber-500/20 shrink-0 animate-pulse">
+              <PlayCircle className="w-6 h-6" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 px-2.5 py-0.5 rounded-full border border-amber-300">
+                  Consulta em Andamento
+                </span>
+                <span className="text-xs font-mono font-bold text-amber-800">
+                  {activeOngoingConsultation.horario || '--:--'}
+                </span>
+              </div>
+              <p className="text-sm sm:text-base font-black text-slate-900 mt-0.5 truncate">
+                Paciente: <span className="text-amber-900 font-extrabold">{activeOngoingConsultation.paciente}</span>
+                <span className="text-xs font-semibold text-slate-500 ml-2">
+                  ({activeOngoingConsultation.procedimento} • Dr(a). {activeOngoingConsultation.dentista})
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            {onOpenChart && (
+              <button
+                onClick={() => onOpenChart(activeOngoingConsultation.paciente)}
+                className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-black rounded-xl border border-slate-200 shadow-2xs cursor-pointer flex items-center gap-1.5 transition-all"
+              >
+                <FileText className="w-4 h-4 text-brand-cyan" />
+                <span>Prontuário</span>
+              </button>
+            )}
+            {onFinish && (
+              <button
+                onClick={() => onFinish(activeOngoingConsultation.id)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-600/20 cursor-pointer flex items-center gap-1.5 transition-all active:scale-95"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Concluir Consulta</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* KPI METRICS ROW FOR SELECTED DAY */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -538,8 +639,8 @@ export default function ScheduleView({
               <CalendarDays className="w-4 h-4 text-brand-cyan" />
               <span>
                 {viewMode === 'month' && format(currentMonth, 'MMMM yyyy', { locale: ptBR })}
-                {viewMode === 'week' && `Semana de ${format(weekDays[0], 'dd/MM')} a ${format(weekDays[6], 'dd/MM/yyyy')}`}
-                {(viewMode === 'day' || viewMode === 'chairs') && format(selectedDate, "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                {viewMode === 'week' && weekDays.length > 0 && `Semana de ${format(weekDays[0], 'dd/MM')} a ${format(weekDays[weekDays.length - 1], 'dd/MM/yyyy')}`}
+                {(viewMode === 'day' || viewMode === 'chairs' || viewMode === 'list') && format(selectedDate, "EEEE, dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
               </span>
             </h2>
 
@@ -629,7 +730,7 @@ export default function ScheduleView({
                               key={apt.id}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (onOpenChart) onOpenChart(apt.paciente);
+                                setSelectedAppointmentModal(apt);
                               }}
                               className={cn(
                                 "px-1.5 py-0.5 rounded-md text-[9px] font-bold border truncate shadow-2xs cursor-pointer hover:opacity-90 flex items-center justify-between gap-1",
@@ -659,10 +760,10 @@ export default function ScheduleView({
           {viewMode === 'week' && (
             <div className="overflow-x-auto">
               <div className="min-w-[850px]">
-                {/* Weekday Columns Header */}
-                <div className="grid grid-cols-8 border-b border-slate-200 bg-slate-50/80 divide-x divide-slate-200/80">
-                  <div className="p-3 text-center text-[10px] font-black uppercase tracking-wider text-slate-400">
-                    Horário
+                {/* Weekday Columns Header (Segunda a Sexta) */}
+                <div className="grid grid-cols-6 border-b border-slate-200 bg-slate-50/80 divide-x divide-slate-200/80">
+                  <div className="p-3 text-center text-[10px] font-black uppercase tracking-wider text-slate-400 flex items-center justify-center">
+                    Horário (1h30)
                   </div>
                   {weekDays.map(day => {
                     const isTodayDay = isSameDay(day, new Date());
@@ -691,26 +792,29 @@ export default function ScheduleView({
                   })}
                 </div>
 
-                {/* Time Slots Rows */}
+                {/* Time Slots Rows (Intervalos de 1h30) */}
                 <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
-                  {HOURS_TIMELINE.map(hour => (
-                    <div key={hour} className="grid grid-cols-8 divide-x divide-slate-100 min-h-[52px]">
-                      {/* Hour column */}
-                      <div className="p-2 text-center bg-slate-50/40 text-[11px] font-black text-slate-400 font-mono flex items-center justify-center">
-                        {hour}
-                      </div>
+                  {HOURS_TIMELINE.map(hour => {
+                    const endHour = minutesToTime(timeToMinutes(hour) + APPOINTMENT_DURATION_MINUTES);
+                    return (
+                      <div key={hour} className="grid grid-cols-6 divide-x divide-slate-100 min-h-[58px]">
+                        {/* Hour column */}
+                        <div className="p-2 text-center bg-slate-50/40 text-[11px] font-black text-slate-500 font-mono flex flex-col items-center justify-center">
+                          <span>{hour}</span>
+                          <span className="text-[9px] text-slate-400 font-normal">às {endHour}</span>
+                        </div>
 
-                      {/* Day cells for this hour */}
-                      {weekDays.map(day => {
-                        const dateStr = format(day, 'yyyy-MM-dd');
-                        const dayApts = appointmentsByDate[dateStr] || [];
-                        const slotApts = dayApts.filter(a => a.horario === hour);
+                        {/* Day cells for this hour */}
+                        {weekDays.map(day => {
+                          const dateStr = format(day, 'yyyy-MM-dd');
+                          const dayApts = appointmentsByDate[dateStr] || [];
+                          const slotApts = dayApts.filter(a => a.horario === hour || doSlotsOverlap(a.horario, 90, hour, 90));
 
-                        return (
-                          <div 
-                            key={day.toString()}
-                            className="p-1 relative group hover:bg-slate-50/70 transition-colors flex flex-col justify-center min-h-[52px]"
-                          >
+                          return (
+                            <div 
+                              key={day.toString()}
+                              className="p-1.5 relative group hover:bg-slate-50/70 transition-colors flex flex-col justify-center min-h-[58px]"
+                            >
                             {slotApts.length === 0 ? (
                               <button
                                 onClick={() => handleOpenSlotModal(dateStr, hour)}
@@ -780,7 +884,8 @@ export default function ScheduleView({
                         );
                       })}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -964,6 +1069,126 @@ export default function ScheduleView({
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ===================== VIEW MODE: LISTA (DETAILED APPOINTMENTS LIST) ===================== */}
+          {viewMode === 'list' && (
+            <div className="p-4 overflow-x-auto">
+              <div className="min-w-[650px] space-y-3">
+                <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                      Consultas de {format(selectedDate, "dd 'de' MMMM", { locale: ptBR })}
+                    </span>
+                    <span className="text-[10px] font-black bg-cyan-50 text-cyan-700 px-2 py-0.5 rounded-full border border-cyan-200">
+                      {selectedDayAppointments.length} registro(s)
+                    </span>
+                  </div>
+                </div>
+
+                {selectedDayAppointments.length === 0 ? (
+                  <div className="text-center py-16 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                    <Calendar className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                    <p className="text-sm font-bold text-slate-600">Nenhum atendimento listado para este dia</p>
+                    <p className="text-xs text-slate-400 mt-1">Utilize o botão "Novo Agendamento" ou clique no calendário para marcar.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-2xs">
+                    {selectedDayAppointments.map((apt) => {
+                      const isRealizado = apt.status === 'Realizado';
+                      const isCancelado = apt.status === 'Cancelado';
+                      const isEmAtendimento = apt.status === 'Em Atendimento';
+
+                      return (
+                        <div 
+                          key={apt.id}
+                          className="p-3.5 flex items-center justify-between gap-4 hover:bg-slate-50/80 transition-colors"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-14 text-center shrink-0">
+                              <span className="font-mono text-xs font-black text-brand-cyan bg-cyan-50 border border-cyan-100 px-2 py-1 rounded-lg block">
+                                {apt.horario || '09:00'}
+                              </span>
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-black text-slate-800 truncate">
+                                  {apt.paciente}
+                                </span>
+                                <span className={cn(
+                                  "text-[10px] font-black px-2 py-0.5 rounded-full border",
+                                  isRealizado && "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                  isEmAtendimento && "bg-amber-50 text-amber-700 border-amber-200 animate-pulse",
+                                  isCancelado && "bg-rose-50 text-rose-600 border-rose-200",
+                                  !isRealizado && !isCancelado && !isEmAtendimento && "bg-cyan-50 text-cyan-700 border-cyan-200"
+                                )}>
+                                  {apt.status || 'Agendado'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                                <span>{apt.procedimento}</span>
+                                <span>•</span>
+                                <span className="flex items-center gap-1">
+                                  <Stethoscope className="w-3 h-3 text-brand-cyan" />
+                                  {apt.dentista}
+                                </span>
+                                <span>•</span>
+                                <span className="font-bold text-slate-700">
+                                  {formatCurrency(Number(apt.valor) || 0)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {onOpenChart && (
+                              <button
+                                onClick={() => onOpenChart(apt.paciente)}
+                                className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-brand-cyan hover:bg-cyan-50 rounded-lg transition-colors cursor-pointer"
+                                title="Abrir Prontuário"
+                              >
+                                Prontuário
+                              </button>
+                            )}
+
+                            {!isRealizado && !isCancelado && onStart && (
+                              <button
+                                onClick={() => onStart(apt.id)}
+                                className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                                title="Iniciar Atendimento"
+                              >
+                                <PlayCircle className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {!isRealizado && !isCancelado && onFinish && (
+                              <button
+                                onClick={() => onFinish(apt.id)}
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                                title="Concluir Consulta"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {!isRealizado && !isCancelado && (
+                              <button
+                                onClick={() => onCancel(apt.id)}
+                                className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Cancelar Agendamento"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1188,6 +1413,173 @@ export default function ScheduleView({
                 >
                   {isSavingSlot ? 'Salvando...' : 'Confirmar Agendamento'}
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* INTERACTIVE APPOINTMENT DETAILS & CONSULTATION ACTION MODAL */}
+      <AnimatePresence>
+        {selectedAppointmentModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-5 border border-slate-200 text-left"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between pb-3 border-b border-slate-100">
+                <div className="space-y-1">
+                  <span className={cn(
+                    "text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border inline-flex items-center gap-1.5",
+                    selectedAppointmentModal.status === 'Em Atendimento' && "bg-amber-100 text-amber-900 border-amber-300",
+                    selectedAppointmentModal.status === 'Realizado' && "bg-emerald-100 text-emerald-900 border-emerald-300",
+                    selectedAppointmentModal.status === 'Cancelado' && "bg-rose-100 text-rose-900 border-rose-300",
+                    (!selectedAppointmentModal.status || selectedAppointmentModal.status === 'Agendado') && "bg-cyan-100 text-cyan-900 border-cyan-300"
+                  )}>
+                    {selectedAppointmentModal.status === 'Em Atendimento' && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                    )}
+                    {selectedAppointmentModal.status || 'Agendado'}
+                  </span>
+                  <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                    {selectedAppointmentModal.paciente}
+                  </h3>
+                  <p className="text-xs font-bold text-brand-cyan">
+                    {selectedAppointmentModal.procedimento}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedAppointmentModal(null)}
+                  className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Details Info Grid */}
+              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50/80 p-4 rounded-2xl border border-slate-100">
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 block">Data & Horário</span>
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5 mt-0.5">
+                    <Clock className="w-3.5 h-3.5 text-brand-cyan" />
+                    {(() => {
+                      if (!selectedAppointmentModal.data) return '--/--';
+                      try {
+                        const parsed = parseISO(selectedAppointmentModal.data);
+                        return isValid(parsed) ? format(parsed, 'dd/MM/yyyy') : selectedAppointmentModal.data;
+                      } catch {
+                        return selectedAppointmentModal.data;
+                      }
+                    })()} às {selectedAppointmentModal.horario || '08:00'}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 block">Profissional / Dentista</span>
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5 mt-0.5">
+                    <Stethoscope className="w-3.5 h-3.5 text-brand-cyan" />
+                    {selectedAppointmentModal.dentista}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 block">Valor Previsto</span>
+                  <span className="font-mono font-bold text-emerald-700 mt-0.5 block">
+                    {formatCurrency(Number(selectedAppointmentModal.valor) || 0)}
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 block">Contato</span>
+                  <span className="font-mono font-bold text-slate-700 mt-0.5 block">
+                    {(selectedAppointmentModal as any).telefone || 'Não informado'}
+                  </span>
+                </div>
+
+                {selectedAppointmentModal.observacao && (
+                  <div className="col-span-2 pt-2 border-t border-slate-200/60">
+                    <span className="text-[10px] font-black uppercase text-slate-400 block">Observação Clínica / Motivo</span>
+                    <p className="text-slate-600 font-medium italic mt-0.5">
+                      “{selectedAppointmentModal.observacao}”
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Primary Consultation Controls */}
+              <div className="space-y-2 pt-1">
+                {selectedAppointmentModal.status === 'Agendado' && onStart && (
+                  <button
+                    onClick={() => {
+                      onStart(selectedAppointmentModal.id);
+                      setSelectedAppointmentModal(prev => prev ? { ...prev, status: 'Em Atendimento' } : null);
+                    }}
+                    className="w-full py-3.5 bg-amber-500 hover:bg-amber-600 text-white text-xs font-black uppercase tracking-wider rounded-2xl shadow-md shadow-amber-500/20 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+                  >
+                    <PlayCircle className="w-5 h-5" />
+                    <span>Começar Consulta (Mudar Status para "Em Atendimento")</span>
+                  </button>
+                )}
+
+                {selectedAppointmentModal.status === 'Em Atendimento' && onFinish && (
+                  <button
+                    onClick={() => {
+                      onFinish(selectedAppointmentModal.id);
+                      setSelectedAppointmentModal(prev => prev ? { ...prev, status: 'Realizado' } : null);
+                    }}
+                    className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wider rounded-2xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    <span>Concluir Consulta (Mudar Status para "Concluído")</span>
+                  </button>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  {onOpenChart && (
+                    <button
+                      onClick={() => {
+                        onOpenChart(selectedAppointmentModal.paciente);
+                        setSelectedAppointmentModal(null);
+                      }}
+                      className="py-2.5 bg-slate-50 hover:bg-cyan-50 hover:text-brand-cyan text-slate-700 text-xs font-black rounded-xl border border-slate-200 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <FileText className="w-4 h-4 text-brand-cyan" />
+                      <span>Abrir Prontuário</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      handleSendCardWhatsApp(
+                        selectedAppointmentModal.paciente,
+                        (selectedAppointmentModal as any).telefone || '',
+                        selectedAppointmentModal.data,
+                        selectedAppointmentModal.horario,
+                        selectedAppointmentModal.dentista
+                      );
+                    }}
+                    className="py-2.5 bg-slate-50 hover:bg-emerald-50 hover:text-emerald-700 text-slate-700 text-xs font-black rounded-xl border border-slate-200 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Send className="w-4 h-4 text-emerald-600" />
+                    <span>WhatsApp</span>
+                  </button>
+                </div>
+
+                {selectedAppointmentModal.status !== 'Cancelado' && selectedAppointmentModal.status !== 'Realizado' && (
+                  <button
+                    onClick={() => {
+                      onCancel(selectedAppointmentModal.id);
+                      setSelectedAppointmentModal(null);
+                    }}
+                    className="w-full py-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 text-[11px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 mt-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Cancelar este Agendamento</span>
+                  </button>
+                )}
               </div>
             </motion.div>
           </div>

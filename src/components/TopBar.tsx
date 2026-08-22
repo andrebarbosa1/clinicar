@@ -430,36 +430,31 @@ export default function TopBar({
       {/* RIGHT SECTION: Quick Actions, Booking Link, Fullscreen, Notifications & Profile */}
       <div className="flex items-center gap-2.5 shrink-0">
         
-        {/* Agendamento Online Button (Quick Copier) */}
+        {/* Portal do Paciente & Agendamento Online */}
         <button 
-          onClick={handleCopyBooking}
-          className={cn(
-            "hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95",
-            copiedLink 
-              ? "bg-emerald-600 text-white shadow-emerald-600/20" 
-              : "bg-brand-cyan hover:bg-slate-900 text-white shadow-cyan-500/20"
-          )}
-          title="Copiar link de autoagendamento online para pacientes"
+          onClick={() => onNavigate('PortalPaciente')}
+          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 bg-gradient-to-r from-brand-cyan to-cyan-600 hover:from-cyan-600 hover:to-brand-cyan text-white shadow-cyan-500/20"
+          title="Abrir Portal do Paciente White-label"
         >
-          {copiedLink ? <Check className="w-3.5 h-3.5 text-white" /> : <Monitor className="w-3.5 h-3.5" />}
-          <span>{copiedLink ? 'Copiado!' : 'Agendamento Online'}</span>
+          <Globe className="w-3.5 h-3.5" />
+          <span>Portal do Paciente</span>
         </button>
 
         {/* Quick Nav Icons */}
-        <div className="hidden lg:flex items-center gap-1 bg-slate-50 rounded-xl p-0.5 border border-slate-200/60">
+        <div className="hidden xl:flex items-center bg-slate-50/80 rounded-xl p-0.5 border border-slate-200/60">
           <button 
-            onClick={() => onNavigate('Mensagens')}
-            className="p-1.5 text-slate-400 hover:text-brand-cyan hover:bg-white rounded-lg transition-colors cursor-pointer"
-            title="Mensagens & Automações WhatsApp"
+            onClick={() => onNavigate('IAClinica')}
+            className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-white rounded-lg transition-all duration-150 cursor-pointer group relative shadow-2xs"
+            title="IA Clínica, Diagnósticos & Raio-X"
           >
-            <Mail className="w-4 h-4" />
+            <Sparkles className="w-4 h-4 text-brand-cyan group-hover:scale-110 transition-transform" />
           </button>
           <button 
-            onClick={() => onNavigate('Retorno')}
-            className="p-1.5 text-slate-400 hover:text-brand-cyan hover:bg-white rounded-lg transition-colors cursor-pointer"
-            title="Retornos Preventivos"
+            onClick={() => onNavigate('ChatbotIA')}
+            className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-white rounded-lg transition-all duration-150 cursor-pointer group relative shadow-2xs"
+            title="Chatbot IA no WhatsApp"
           >
-            <CheckSquare className="w-4 h-4" />
+            <Mail className="w-4 h-4 group-hover:scale-110 transition-transform" />
           </button>
         </div>
 

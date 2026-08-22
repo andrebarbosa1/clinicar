@@ -139,13 +139,15 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
     'Dashboard', 
     'Agenda', 
     'Pacientes', 
-    'Retorno', 
-    'Mensagens', 
-    'Financeiro', 
-    'Equipe', 
-    'Administração', 
     'Documentos',
-    'Estoque'
+    'IAClinica',
+    'PortalPaciente',
+    'Retorno', 
+    'ChatbotIA',
+    'Mensagens', 
+    'Estoque',
+    'Financeiro', 
+    'Administração'
   ];
 
   // Fetch real-time security logs, system notice banner configurations, and active coupon codes

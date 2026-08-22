@@ -30,6 +30,20 @@ import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency } from '../lib/utils';
 import { DentalRecord } from '../types';
+import {
+  CLINIC_TIME_SLOTS,
+  CLINIC_OPEN_TIME,
+  CLINIC_CLOSE_TIME,
+  APPOINTMENT_DURATION_MINUTES,
+  getSystemInitialDate,
+  isBusinessDay,
+  getNextBusinessDay,
+  normalizeAppointmentDateTime,
+  getOccupiedSlotsForDentist,
+  findDentistScheduleConflict,
+  minutesToTime,
+  timeToMinutes
+} from '../lib/scheduleUtils';
 
 interface AppointmentFormViewProps {
   patients: any[];
@@ -44,28 +58,22 @@ interface AppointmentFormViewProps {
 }
 
 export const PROCEDURES_CATALOG = [
-  { name: 'Avaliação Inicial & Diagnóstico', price: 150, durationMin: 30, category: 'Diagnóstico' },
-  { name: 'Profilaxia e Limpeza Dental (Tartarectomia)', price: 180, durationMin: 45, category: 'Prevenção' },
-  { name: 'Restauração em Resina Composta (1 Face)', price: 220, durationMin: 45, category: 'Dentística' },
-  { name: 'Restauração Complexa (Multi-faces)', price: 320, durationMin: 60, category: 'Dentística' },
-  { name: 'Extração Dentária Simples', price: 250, durationMin: 45, category: 'Cirurgia' },
-  { name: 'Extração de Terceiro Molar (Siso Incluso)', price: 550, durationMin: 60, category: 'Cirurgia' },
-  { name: 'Tratamento Endodôntico (Canal Unirradicular)', price: 480, durationMin: 60, category: 'Endodontia' },
+  { name: 'Avaliação Inicial & Diagnóstico', price: 150, durationMin: 90, category: 'Diagnóstico' },
+  { name: 'Profilaxia e Limpeza Dental (Tartarectomia)', price: 180, durationMin: 90, category: 'Prevenção' },
+  { name: 'Restauração em Resina Composta (1 Face)', price: 220, durationMin: 90, category: 'Dentística' },
+  { name: 'Restauração Complexa (Multi-faces)', price: 320, durationMin: 90, category: 'Dentística' },
+  { name: 'Extração Dentária Simples', price: 250, durationMin: 90, category: 'Cirurgia' },
+  { name: 'Extração de Terceiro Molar (Siso Incluso)', price: 550, durationMin: 90, category: 'Cirurgia' },
+  { name: 'Tratamento Endodôntico (Canal Unirradicular)', price: 480, durationMin: 90, category: 'Endodontia' },
   { name: 'Tratamento Endodôntico (Canal Molar)', price: 750, durationMin: 90, category: 'Endodontia' },
-  { name: 'Clareamento Dental a Laser / Consultório', price: 850, durationMin: 60, category: 'Estética' },
-  { name: 'Clareamento Dental Caseiro c/ Moldeiras', price: 450, durationMin: 30, category: 'Estética' },
-  { name: 'Gengivoplastia / Periodontia', price: 380, durationMin: 45, category: 'Periodontia' },
-  { name: 'Aplicação Tópica de Flúor / Selante', price: 120, durationMin: 30, category: 'Prevenção' },
-  { name: 'Manutenção de Aparelho Ortodôntico', price: 160, durationMin: 30, category: 'Ortodontia' },
-  { name: 'Instalação de Prótese / Coroa Provisória', price: 400, durationMin: 45, category: 'Prótese' },
+  { name: 'Clareamento Dental a Laser / Consultório', price: 850, durationMin: 90, category: 'Estética' },
+  { name: 'Clareamento Dental Caseiro c/ Moldeiras', price: 450, durationMin: 90, category: 'Estética' },
+  { name: 'Gengivoplastia / Periodontia', price: 380, durationMin: 90, category: 'Periodontia' },
+  { name: 'Aplicação Tópica de Flúor / Selante', price: 120, durationMin: 90, category: 'Prevenção' },
+  { name: 'Manutenção de Aparelho Ortodôntico', price: 160, durationMin: 90, category: 'Ortodontia' },
+  { name: 'Instalação de Prótese / Coroa Provisória', price: 400, durationMin: 90, category: 'Prótese' },
   { name: 'Implante Dentário (Etapa Cirúrgica)', price: 1800, durationMin: 90, category: 'Implantodontia' },
-  { name: 'Consulta de Emergência / Alívio de Dor', price: 200, durationMin: 30, category: 'Urgência' },
-];
-
-const TIME_SLOTS = [
-  '08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30',
-  '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30',
-  '17:00', '17:30', '18:00', '18:30'
+  { name: 'Consulta de Emergência / Alívio de Dor', price: 200, durationMin: 90, category: 'Urgência' },
 ];
 
 export default function AppointmentFormView({
@@ -89,9 +97,9 @@ export default function AppointmentFormView({
   const [newPatientPhone, setNewPatientPhone] = useState('');
   const [newPatientCpf, setNewPatientCpf] = useState('');
 
-  // Date and Time selection
-  const todayStr = format(new Date(), 'yyyy-MM-dd');
-  const [dataVal, setDataVal] = useState(todayStr);
+  // Date and Time selection (Regra: Segunda a Sexta, até 17:00, slots de 1h30)
+  const initialDate = getSystemInitialDate();
+  const [dataVal, setDataVal] = useState(initialDate);
   const [horario, setHorario] = useState('');
   
   // Dentist selection
@@ -151,12 +159,10 @@ export default function AppointmentFormView({
     ).slice(0, 15);
   }, [patients, patientSearch]);
 
-  // Occupied slots calculation for selected dentist and date
-  const occupiedSlots = useMemo(() => {
+  // Occupied slots calculation for selected dentist and date (1.5h intervals)
+  const slotStatuses = useMemo(() => {
     if (!dentista || !dataVal) return [];
-    return data
-      .filter(r => r.dentista === dentista && r.data === dataVal && r.status !== 'Cancelado' && r.horario)
-      .map(r => r.horario as string);
+    return getOccupiedSlotsForDentist(data, dentista, dataVal);
   }, [data, dentista, dataVal]);
 
   const handleProcedureChange = (procName: string) => {
@@ -167,11 +173,23 @@ export default function AppointmentFormView({
     }
   };
 
+  const handleDateChange = (rawDate: string) => {
+    if (!rawDate) return;
+    const target = parseISO(rawDate);
+    if (!isBusinessDay(target)) {
+      const nextBiz = getNextBusinessDay(target, false);
+      const nextBizStr = format(nextBiz, 'yyyy-MM-dd');
+      alert('A clínica funciona exclusivamente de Segunda a Sexta-feira (até 17h00). A data selecionada caiu no final de semana e foi ajustada para a próxima segunda-feira útil.');
+      setDataVal(nextBizStr);
+    } else {
+      setDataVal(rawDate);
+    }
+    setHorario('');
+  };
+
   const handleDateShortcut = (daysToAdd: number) => {
     let target = addDays(new Date(), daysToAdd);
-    if (isWeekend(target)) {
-      target = addDays(target, target.getDay() === 6 ? 2 : 1); // skip to Monday
-    }
+    target = getNextBusinessDay(target, false);
     const str = format(target, 'yyyy-MM-dd');
     setDataVal(str);
     setHorario('');
@@ -181,7 +199,7 @@ export default function AppointmentFormView({
   const whatsappPreviewMessage = useMemo(() => {
     const patName = selectedPatientObj ? selectedPatientObj.name.split(' ')[0] : (paciente ? paciente.split(' ')[0] : 'Paciente');
     const formattedDate = dataVal && isValid(parseISO(dataVal)) ? format(parseISO(dataVal), "dd 'de' MMMM", { locale: ptBR }) : 'data marcada';
-    const hour = horario || 'horário agendado';
+    const hour = horario ? `${horario} (Duração: 1h30)` : 'horário agendado';
     return `Olá, *${patName}*! 👋\n\nConfirmamos seu agendamento na clínica *${clinicName}*:\n\n📅 *Data:* ${formattedDate}\n⏰ *Horário:* ${hour}\n🩺 *Dentista:* ${dentista}\n📋 *Procedimento:* ${procedimento}\n\nPor favor, responda *SIM* para confirmar sua presença ou *REAGENDAR* caso precise de outro horário. Aguardamos você! 🦷✨`;
   }, [paciente, selectedPatientObj, dataVal, horario, dentista, procedimento, clinicName]);
 
@@ -203,15 +221,24 @@ export default function AppointmentFormView({
       return;
     }
 
-    // Check conflict
-    const isTaken = data.some(r => 
-      r.dentista === dentista && 
-      r.data === dataVal && 
-      r.horario === horario &&
-      r.status !== 'Cancelado'
-    );
-    if (isTaken) {
-      alert(`O horário ${horario} já está ocupado para o(a) ${dentista}. Por favor escolha outro horário.`);
+    // Regra: Normaliza data e horário caso caia em fim de semana ou passe das 17h00
+    const normalized = normalizeAppointmentDateTime(dataVal, horario);
+    if (normalized.wasAdjusted) {
+      const confirmAdjust = window.confirm(
+        `${normalized.reason}\n\nDeseja confirmar o agendamento para ${format(parseISO(normalized.date), 'dd/MM/yyyy')} às ${normalized.time}?`
+      );
+      if (!confirmAdjust) return;
+    }
+
+    const finalDate = normalized.date;
+    const finalTime = normalized.time;
+
+    // Check 1.5h conflict for dentist on this date
+    const conflict = findDentistScheduleConflict(data, dentista, finalDate, finalTime);
+    if (conflict) {
+      alert(
+        `CONFLITO DE HORÁRIO: O(A) ${dentista} já possui consulta marcada (${conflict.horario} - ${conflict.paciente}) que colide com este intervalo de 1h30 no dia ${format(parseISO(finalDate), 'dd/MM/yyyy')}.\n\nPor favor, escolha outro horário disponível.`
+      );
       return;
     }
 
@@ -223,8 +250,8 @@ export default function AppointmentFormView({
         paciente: selectedPatientObj ? selectedPatientObj.name : paciente,
         pacienteId: selectedPatientObj?.id,
         telefone: patientPhone,
-        data: dataVal,
-        horario,
+        data: finalDate,
+        horario: finalTime,
         dentista,
         procedimento,
         valor: Number(valor) || 0,
@@ -503,54 +530,59 @@ export default function AppointmentFormView({
                   onClick={() => handleDateShortcut(0)}
                   className={cn(
                     "text-[10px] font-bold px-2 py-1 rounded-lg border transition-all cursor-pointer",
-                    dataVal === todayStr ? "bg-emerald-600 text-white border-emerald-600" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                    dataVal === initialDate ? "bg-emerald-600 text-white border-emerald-600" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
                   )}
                 >
-                  Hoje
+                  Próx. Disponível
                 </button>
                 <button
                   type="button"
                   onClick={() => handleDateShortcut(1)}
                   className="text-[10px] font-bold px-2 py-1 rounded-lg border bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 transition-all cursor-pointer"
                 >
-                  Amanhã
+                  +1 Dia Útil
                 </button>
                 <button
                   type="button"
                   onClick={() => handleDateShortcut(3)}
                   className="text-[10px] font-bold px-2 py-1 rounded-lg border bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 transition-all cursor-pointer"
                 >
-                  +3 Dias
+                  +3 Dias Úteis
                 </button>
               </div>
+            </div>
+
+            {/* Clinic schedule rule info banner */}
+            <div className="p-3 bg-cyan-50/70 border border-cyan-200/60 rounded-2xl flex items-center gap-2.5 text-xs text-cyan-900 font-medium">
+              <Info className="w-4 h-4 text-brand-cyan shrink-0" />
+              <span>
+                <strong>Horário Clínico:</strong> Segunda a Sexta, das 08h00 às 17h00. Cada atendimento possui <strong>1h30 de duração</strong> exclusiva.
+              </span>
             </div>
 
             {/* Date Input */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
               <div>
-                <label className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Data Selecionada</label>
+                <label className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Data Selecionada (Segunda a Sexta)</label>
                 <input 
                   type="date"
                   value={dataVal}
-                  min={todayStr}
-                  onChange={e => {
-                    setDataVal(e.target.value);
-                    setHorario('');
-                  }}
+                  min={format(new Date(), 'yyyy-MM-dd')}
+                  onChange={e => handleDateChange(e.target.value)}
                   className="w-full mt-1 p-3 bg-slate-50/70 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none cursor-pointer"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Horário Escolhido</label>
+                <label className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Horário Escolhido (1h30)</label>
                 <div className="mt-1 p-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs font-black text-slate-800 flex items-center justify-between">
                   <span className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-emerald-600" />
-                    {horario ? `${horario} hrs` : 'Nenhum selecionado'}
+                    {horario ? `${horario} hrs (até ${minutesToTime(timeToMinutes(horario) + 90)})` : 'Nenhum selecionado'}
                   </span>
                   {horario && (
                     <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md">
-                      Confirmado
+                      1h30 Reservada
                     </span>
                   )}
                 </div>
@@ -560,34 +592,58 @@ export default function AppointmentFormView({
             {/* Visual Time Slot Grid */}
             <div className="space-y-2 pt-2">
               <div className="flex items-center justify-between text-[11px]">
-                <span className="font-bold text-slate-600">Grade de Horários Disponíveis:</span>
+                <span className="font-bold text-slate-600">Grade de Horários Disponíveis (1h30):</span>
                 <div className="flex items-center gap-3 text-[10px] font-bold text-slate-400">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Livre</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400"></span> Ocupado</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-5 gap-2 max-h-44 overflow-y-auto p-1 bg-slate-50/50 rounded-2xl border border-slate-100">
-                {TIME_SLOTS.map(slot => {
-                  const isBusy = occupiedSlots.includes(slot);
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-2 bg-slate-50/50 rounded-2xl border border-slate-100">
+                {slotStatuses.map(({ slot, isOccupied, isPast, conflictingPatient }) => {
+                  const isBlocked = isOccupied || isPast;
                   const isSelected = horario === slot;
+                  const endSlot = minutesToTime(timeToMinutes(slot) + APPOINTMENT_DURATION_MINUTES);
 
                   return (
                     <button
                       key={slot}
                       type="button"
-                      disabled={isBusy}
+                      disabled={isBlocked}
                       onClick={() => setHorario(slot)}
                       className={cn(
-                        "py-2.5 px-2 rounded-xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer border",
-                        isBusy 
-                          ? "bg-rose-50/60 text-rose-300 border-rose-100 cursor-not-allowed line-through" 
+                        "py-3 px-3 rounded-2xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer border text-center relative",
+                        isBlocked 
+                          ? "bg-rose-50/50 text-rose-400 border-rose-100 cursor-not-allowed" 
                           : isSelected
-                            ? "bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 scale-105"
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 scale-[1.02]"
                             : "bg-white text-slate-700 border-slate-200/80 hover:border-emerald-400 hover:bg-emerald-50/40"
                       )}
                     >
-                      <span>{slot}</span>
+                      <div className="flex items-center gap-1.5 font-mono text-sm font-black">
+                        <span>{slot}</span>
+                        <span className="text-[10px] opacity-70">às {endSlot}</span>
+                      </div>
+                      
+                      <div className="mt-1">
+                        {isOccupied ? (
+                          <span className="text-[9px] font-bold uppercase bg-rose-100/80 text-rose-700 px-2 py-0.5 rounded-md">
+                            Ocupado {conflictingPatient ? `(${conflictingPatient.split(' ')[0]})` : ''}
+                          </span>
+                        ) : isPast ? (
+                          <span className="text-[9px] font-bold uppercase bg-slate-100 text-slate-400 px-2 py-0.5 rounded-md">
+                            Horário Passado
+                          </span>
+                        ) : isSelected ? (
+                          <span className="text-[9px] font-bold uppercase bg-emerald-700 text-white px-2 py-0.5 rounded-md">
+                            ✓ Selecionado
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-bold uppercase bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-md">
+                            Disponível
+                          </span>
+                        )}
+                      </div>
                     </button>
                   );
                 })}

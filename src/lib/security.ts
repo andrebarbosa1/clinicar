@@ -171,7 +171,12 @@ export const SecurityUtils = {
 
   checkFirestoreLockout: async (username: string): Promise<{ isLocked: boolean; remaining: number }> => {
     if (!username || !db) return { isLocked: false, remaining: 0 };
-    const cleanUsername = username.trim().toLowerCase();
+    const cleanUsername = username.trim().toLowerCase().replace(/^[@\/.\s#]+/, '');
+    
+    // Never lock out super admin master accounts
+    if (cleanUsername === 'administrador' || cleanUsername === 'suporte@odontodash.com.br' || cleanUsername === 'superadmin') {
+      return { isLocked: false, remaining: 0 };
+    }
     
     try {
       const docRef = doc(db, 'login_attempts', cleanUsername);
@@ -188,19 +193,22 @@ export const SecurityUtils = {
         }
       }
     } catch (e) {
-      console.error("[Prevention] Database security state check was bypassed or unavailable:", e);
+      console.warn("[Prevention] Database security check:", e);
     }
     return { isLocked: false, remaining: 0 };
   },
 
   recordAttemptFirestore: async (username: string, success: boolean): Promise<void> => {
     if (!username || !db) return;
-    const cleanUsername = username.trim().toLowerCase();
+    const cleanUsername = username.trim().toLowerCase().replace(/^[@\/.\s#]+/, '');
     
     try {
       const docRef = doc(db, 'login_attempts', cleanUsername);
       if (success) {
-        await deleteDoc(docRef);
+        await deleteDoc(docRef).catch(() => {});
+        // Also clean prefixed attempt if present
+        const atDocRef = doc(db, 'login_attempts', `@${cleanUsername}`);
+        await deleteDoc(atDocRef).catch(() => {});
       } else {
         const docSnap = await getDoc(docRef);
         let attempts = 1;
@@ -219,7 +227,7 @@ export const SecurityUtils = {
         });
       }
     } catch (e) {
-      console.error("[Prevention] Error logging security tracker:", e);
+      console.warn("[Prevention] Security logging:", e);
     }
   },
 
@@ -241,7 +249,7 @@ export const SecurityUtils = {
         }
       }
     } catch (e) {
-      console.error("[Device Security] Check failed:", e);
+      console.warn("[Device Security] Check unavailable (offline/fallback mode):", e);
     }
     return { isLocked: false, remaining: 0 };
   },
@@ -271,7 +279,7 @@ export const SecurityUtils = {
         });
       }
     } catch (e) {
-      console.error("[Device Security] Record failed:", e);
+      console.warn("[Device Security] Record unavailable (offline/fallback mode):", e);
     }
   }
 };

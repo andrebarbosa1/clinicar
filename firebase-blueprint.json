@@ -10,11 +10,19 @@
         "paciente": { "type": "string" },
         "procedimento": { "type": "string" },
         "dentista": { "type": "string" },
-        "status": { "type": "string", "enum": ["Realizado", "Agendado", "Cancelado", "Pendente"] },
+        "horario": { "type": "string" },
+        "telefone": { "type": "string" },
+        "status": { "type": "string", "enum": ["Realizado", "Agendado", "Cancelado", "Pendente", "Em Atendimento", "Concluído"] },
         "statusPagamento": { "type": "string", "enum": ["Pago", "Pendente", "Atrasado"] },
-        "valor": { "type": "number" }
+        "valor": { "type": "number" },
+        "observacao": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "servingSince": { "type": "string" },
+        "isQuickEvent": { "type": "boolean" },
+        "createdBy": { "type": "string" }
       },
-      "required": ["id", "data", "paciente", "procedimento", "dentista", "status", "statusPagamento", "valor"]
+      "required": ["id", "data", "paciente", "procedimento", "dentista", "status", "valor"]
     },
     "AppUser": {
       "title": "AppUser",
@@ -26,9 +34,12 @@
         "role": { "type": "string" },
         "modules": { "type": "string" },
         "username": { "type": "string" },
-        "password": { "type": "string" }
+        "password": { "type": "string" },
+        "availability": { "type": "string" },
+        "currentPatient": { "type": "string" },
+        "servingSince": { "type": "string" }
       },
-      "required": ["id", "name", "role", "modules", "username", "password"]
+      "required": ["id", "name", "role", "modules", "username"]
     },
     "Notification": {
       "title": "Notification",

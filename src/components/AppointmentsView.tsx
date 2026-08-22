@@ -173,33 +173,26 @@ export default function AppointmentsView({
   const endIndex = Math.min(currentPage * pageSize, filteredAppointments.length);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-4 animate-in fade-in duration-300">
       {/* Header & Quick Action */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-cyan bg-brand-cyan/10 px-2.5 py-0.5 rounded-full border border-brand-cyan/20">
-              Gestão Clínica
-            </span>
-            <span className="text-[10px] font-bold text-slate-400">
-              {filteredAppointments.length} consulta(s) encontradas
-            </span>
-          </div>
-          <h1 id="appointments-title" className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2 mt-1">
-            <CalendarDays className="w-6 h-6 text-brand-cyan" />
+      <div className="bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 id="appointments-title" className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
+            <CalendarDays className="w-5 h-5 text-brand-cyan" />
             <span>Consultas e Atendimentos</span>
           </h1>
-          <p className="text-xs text-slate-500 font-medium mt-0.5">
-            Acompanhe, filtre e gerencie as consultas agendadas, em andamento e realizadas
-          </p>
+          <span className="text-xs text-slate-300 font-semibold">•</span>
+          <span className="text-xs text-slate-500 font-medium">
+            {filteredAppointments.length} {filteredAppointments.length === 1 ? 'consulta encontrada' : 'consultas encontradas'}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button 
             onClick={onAdd}
-            className="flex items-center justify-center gap-2 bg-brand-cyan hover:bg-cyan-500 text-slate-950 font-black text-xs px-4 py-2.5 rounded-xl shadow-sm shadow-brand-cyan/20 transition-all active:scale-95 cursor-pointer"
+            className="flex items-center justify-center gap-1.5 bg-brand-cyan hover:bg-cyan-500 text-slate-950 font-bold text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             <span>Nova Consulta</span>
           </button>
         </div>

@@ -282,58 +282,53 @@ export default function PatientsView({
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
       
       {/* Top Header & Actions */}
-      <div className="bg-white border border-slate-200/80 rounded-3xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] font-black uppercase text-brand-cyan tracking-widest bg-cyan-50 border border-cyan-100 px-2.5 py-0.5 rounded-full">
-              Gestão de Pacientes
-            </span>
-            <span className="text-xs text-slate-400 font-bold">
-              • {filteredPatients.length} {filteredPatients.length === 1 ? 'paciente' : 'pacientes cadastrados'}
-            </span>
-          </div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Fichas & Prontuários</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Consulte cadastros, acesse prontuários, agende novas consultas e envie WhatsApp direto.
-          </p>
+      <div className="bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
+            <span>Fichas & Prontuários</span>
+          </h1>
+          <span className="text-xs text-slate-300 font-semibold">•</span>
+          <span className="text-xs text-slate-500 font-medium">
+            {filteredPatients.length} {filteredPatients.length === 1 ? 'paciente' : 'pacientes cadastrados'}
+          </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           {/* Export CSV */}
           <button
             onClick={handleExportCSV}
-            className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-2xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+            className="p-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
             title="Exportar lista de pacientes em CSV"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Exportar</span>
           </button>
 
           {/* View Mode Toggle */}
-          <div className="flex bg-slate-100 p-1 border border-slate-200/60 rounded-2xl">
+          <div className="flex bg-slate-100 p-0.5 border border-slate-200/60 rounded-xl">
             <button 
               onClick={() => setViewMode('list')}
               title="Visualização em Lista"
               className={cn(
-                "p-2 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer",
-                viewMode === 'list' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                "p-1.5 px-2.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer",
+                viewMode === 'list' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
               )}
             >
-              <LayoutList className="w-4 h-4" />
+              <LayoutList className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Lista</span>
             </button>
             <button 
               onClick={() => setViewMode('grid')}
               title="Visualização em Grade"
               className={cn(
-                "p-2 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer",
-                viewMode === 'grid' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                "p-1.5 px-2.5 rounded-lg transition-all flex items-center gap-1 text-xs font-bold cursor-pointer",
+                viewMode === 'grid' ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-700"
               )}
             >
-              <Grid className="w-4 h-4" />
+              <Grid className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Cards</span>
             </button>
           </div>
@@ -341,9 +336,9 @@ export default function PatientsView({
           {/* New Patient Button */}
           <button 
             onClick={onAdd}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-brand-cyan hover:bg-slate-900 text-white px-5 py-2.5 font-black text-xs uppercase tracking-wider rounded-2xl transition-all shadow-md shadow-cyan-500/20 active:scale-95 cursor-pointer"
+            className="flex-1 md:flex-none flex items-center justify-center gap-1.5 bg-brand-cyan hover:bg-slate-900 text-white px-3.5 py-1.5 font-bold text-xs rounded-xl transition-all shadow-xs active:scale-95 cursor-pointer"
           >
-            <UserPlus className="w-4 h-4" />
+            <UserPlus className="w-3.5 h-3.5" />
             <span>Cadastrar Paciente</span>
           </button>
         </div>

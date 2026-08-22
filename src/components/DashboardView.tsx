@@ -45,6 +45,9 @@ export default function CustomDashboardView({
   onSendReminder,
   canSeeFinancials = true,
   users = [],
+  currentUser,
+  onStart,
+  onFinish,
   onNavigate,
   clinicName = 'DentalSoft'
 }: { 
@@ -54,6 +57,9 @@ export default function CustomDashboardView({
   onSendReminder: (record: DentalRecord) => void;
   canSeeFinancials?: boolean;
   users?: any[];
+  currentUser?: any;
+  onStart?: (recordId: string) => void;
+  onFinish?: (recordId: string) => void;
   onNavigate?: (page: string, subPage?: string | null) => void;
   clinicName?: string;
 }) {
@@ -147,22 +153,71 @@ export default function CustomDashboardView({
     };
   }, [filteredData, isTrialUser]);
 
-  // Financial summary when permitted
+  // Active Consultation across clinic
+  const activeConsultation = useMemo(() => {
+    return filteredData.find(r => r.status === 'Em Atendimento');
+  }, [filteredData]);
+
+  // Financial Summary calculation
   const financialSummary = useMemo(() => {
-    if (!canSeeFinancials) return null;
-    const activeRecords = filteredData.filter(r => r.status !== 'Cancelado');
-    const realizedRecords = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído');
-    const totalReceived = realizedRecords.reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
-    const totalPending = activeRecords.filter(r => r.status === 'Agendado').reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
-    const avgTicket = realizedRecords.length > 0 ? totalReceived / realizedRecords.length : 0;
-    
+    const totalReceived = filteredData
+      .filter(r => r.statusPagamento === 'Pago' || r.status === 'Realizado' || r.status === 'Concluído')
+      .reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const totalPending = filteredData
+      .filter(r => r.status === 'Agendado' || r.statusPagamento === 'Pendente')
+      .reduce((sum, r) => sum + (Number(r.valor) || 0), 0);
+    const completedCount = filteredData.filter(r => r.status === 'Realizado' || r.status === 'Concluído').length;
+    const avgTicket = completedCount > 0 ? totalReceived / completedCount : (totalReceived > 0 ? totalReceived : 280);
+
     return {
       totalReceived,
       totalPending,
-      avgTicket,
-      completedCount: realizedRecords.length
+      completedCount,
+      avgTicket
     };
-  }, [filteredData, canSeeFinancials]);
+  }, [filteredData]);
+
+  // Doctor rooms with live status for Reception
+  const doctorRooms = useMemo(() => {
+    const doctors = (users || []).filter(u => u && (u.role === 'Dentista' || u.role === 'Admin'));
+    
+    if (doctors.length === 0) {
+      const uniqueDentists = Array.from(new Set(filteredData.map(r => r.dentista).filter(Boolean)));
+      return (uniqueDentists.length ? uniqueDentists : ['Dr. Daniel Smith', 'Dra. Maria Paula']).map((name, idx) => {
+        const activeAppt = filteredData.find(r => r.dentista === name && r.status === 'Em Atendimento');
+        return {
+          id: `dentist-${idx}`,
+          name,
+          cro: 'CRO Ativo',
+          room: `Consultório ${idx + 1}`,
+          status: activeAppt ? 'Em Atendimento' : 'Disponível',
+          currentPatient: activeAppt?.paciente || null,
+          procedure: activeAppt?.procedimento || null,
+          servingSince: activeAppt?.startedAt ? format(parseISO(activeAppt.startedAt), 'HH:mm') : activeAppt?.horario,
+          activeApptId: activeAppt?.id || null
+        };
+      });
+    }
+
+    return doctors.map((doc, idx) => {
+      const activeAppt = filteredData.find(r => (r.dentista === doc.name || (doc.name && r.dentista?.includes(doc.name))) && r.status === 'Em Atendimento');
+      const isServing = doc.availability === 'em_atendimento' || !!activeAppt;
+      const currentPatient = doc.currentPatient || activeAppt?.paciente || null;
+      const servingSince = doc.servingSince || (activeAppt?.startedAt ? format(parseISO(activeAppt.startedAt), 'HH:mm') : activeAppt?.horario);
+
+      return {
+        id: doc.id,
+        name: doc.name,
+        cro: doc.cro || 'CRO Ativo',
+        room: `Consultório ${idx + 1}`,
+        status: isServing ? 'Em Atendimento' : (doc.availability === 'ausente' ? 'Ausente' : 'Disponível'),
+        currentPatient: isServing ? currentPatient : null,
+        procedure: activeAppt?.procedimento || null,
+        servingSince: isServing ? servingSince : null,
+        activeApptId: activeAppt?.id || null
+      };
+    });
+  }, [users, filteredData]);
 
   // Notifications (dynamic + fallback)
   const notifications = useMemo(() => {
@@ -410,51 +465,42 @@ export default function CustomDashboardView({
       )}
 
       {/* MAIN WORKSPACE PANEL */}
-      <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 gap-6 max-w-7xl mx-auto w-full">
+      <div className="flex-1 flex flex-col p-3 sm:p-4 lg:p-6 gap-4 max-w-7xl mx-auto w-full">
         
-        {/* HEADER SECTION: MODERN GREETING & QUICK ACTIONS */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-cyan-50 text-cyan-700 border border-cyan-200">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
-                {clinicName}
-              </span>
-              <span className="text-xs text-slate-400 font-semibold">•</span>
-              <span className="text-xs text-slate-500 font-medium capitalize">
-                {format(new Date(), "EEEE, dd 'de' MMMM", { locale: ptBR })}
-              </span>
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-              {greeting}, <span className="text-cyan-700">{doctorName.split(' ')[0]}</span> 👋
+        {/* HEADER SECTION: COMPACT GREETING & QUICK ACTIONS */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 shadow-xs">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+              <span>{greeting}, <span className="text-cyan-700">{doctorName.split(' ')[0]}</span></span> 👋
             </h1>
-            <p className="text-xs text-slate-500 font-medium">
-              Aqui está o resumo operacional e a movimentação da clínica para hoje.
-            </p>
+            <span className="text-xs text-slate-300 font-semibold">•</span>
+            <span className="text-xs text-slate-500 font-medium capitalize">
+              {format(new Date(), "EEEE, dd 'de' MMMM", { locale: ptBR })}
+            </span>
           </div>
 
           {/* Quick Action Navigation Buttons */}
-          <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
             <button 
               onClick={() => onNavigate?.('Agenda', 'NovoAgendamento')}
-              className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-2xl text-xs font-bold transition-all shadow-sm hover:shadow flex items-center gap-2 cursor-pointer active:scale-95"
+              className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
             >
-              <Plus className="w-4 h-4" />
+              <Plus className="w-3.5 h-3.5" />
               <span>Novo Agendamento</span>
             </button>
             <button 
               onClick={() => onNavigate?.('Pacientes', 'Cadastrar')}
-              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-2xl text-xs font-bold transition-all border border-slate-200 flex items-center gap-2 cursor-pointer active:scale-95"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200 flex items-center gap-1.5 cursor-pointer active:scale-95"
             >
-              <User className="w-4 h-4 text-slate-500" />
+              <User className="w-3.5 h-3.5 text-slate-500" />
               <span>Novo Paciente</span>
             </button>
             <button 
               onClick={() => onNavigate?.('Agenda')}
-              className="p-2.5 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-2xl text-xs font-bold transition-all border border-slate-200 flex items-center justify-center cursor-pointer"
+              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all border border-slate-200 flex items-center justify-center cursor-pointer"
               title="Abrir Agenda Completa"
             >
-              <Calendar className="w-4 h-4 text-slate-600" />
+              <Calendar className="w-3.5 h-3.5 text-slate-600" />
             </button>
           </div>
         </div>
@@ -575,12 +621,102 @@ export default function CustomDashboardView({
           </div>
         </div>
 
-        {/* MAIN CONTENTS GRID: 2 COLUMNS (8 COLS FOR CALENDAR & PATIENTS, 4 COLS FOR QUEUE & CONSOLE) */}
+        {/* MAIN CONTENTS GRID: 2 COLUMNS (8 COLS FOR DOCTORS & CALENDAR & PATIENTS, 4 COLS FOR QUEUE & CONSOLE) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* LEFT 8 COLUMNS: INTERACTIVE CALENDAR & RECENT PATIENTS */}
+          {/* LEFT 8 COLUMNS: DOCTOR ROOMS LIVE STATUS, INTERACTIVE CALENDAR & RECENT PATIENTS */}
           <div className="lg:col-span-8 flex flex-col gap-6">
             
+            {/* REAL-TIME DOCTOR ROOMS & CLINICAL STATUS (FOR RECEPTION & PROFESSIONALS) */}
+            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-50 text-brand-cyan border border-cyan-100 flex items-center justify-center">
+                    <Stethoscope className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Painel dos Consultórios & Recepção</h3>
+                    <p className="text-[10px] text-slate-400 font-semibold">Status em tempo real dos profissionais e atendimentos</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Tempo Real
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {doctorRooms.map((room) => {
+                  const isEmAtendimento = room.status === 'Em Atendimento';
+                  return (
+                    <div 
+                      key={room.id}
+                      className={cn(
+                        "p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3",
+                        isEmAtendimento 
+                          ? "bg-amber-50/40 border-amber-200 shadow-xs" 
+                          : "bg-slate-50/70 border-slate-200/80 hover:bg-slate-50"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-brand-cyan tracking-wider">
+                            {room.room}
+                          </span>
+                          <h4 className="text-sm font-black text-slate-900 truncate">
+                            {room.name}
+                          </h4>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {room.cro}
+                          </span>
+                        </div>
+
+                        <span className={cn(
+                          "text-[9px] font-black uppercase px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0",
+                          isEmAtendimento 
+                            ? "bg-amber-100 text-amber-800 border-amber-300" 
+                            : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                        )}>
+                          <span className={cn(
+                            "w-1.5 h-1.5 rounded-full",
+                            isEmAtendimento ? "bg-amber-500 animate-ping" : "bg-emerald-500"
+                          )} />
+                          {room.status}
+                        </span>
+                      </div>
+
+                      {isEmAtendimento ? (
+                        <div className="p-2.5 bg-white/90 border border-amber-200 rounded-xl space-y-1">
+                          <p className="text-[9px] font-black uppercase text-amber-700">Paciente na Cadeira:</p>
+                          <p className="text-xs font-black text-slate-900 truncate">{room.currentPatient || 'Em Consulta'}</p>
+                          {room.procedure && <p className="text-[10px] text-slate-500 truncate">{room.procedure}</p>}
+                          {room.servingSince && (
+                            <p className="text-[9px] font-mono text-amber-600 font-bold">Desde {room.servingSince}</p>
+                          )}
+                          {room.activeApptId && onFinish && (
+                            <button
+                              onClick={() => onFinish(room.activeApptId!)}
+                              className="w-full mt-2 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-lg transition-colors flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Concluir Consulta</span>
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="p-2.5 bg-white/60 border border-slate-200/60 rounded-xl flex items-center justify-between">
+                          <span className="text-xs text-slate-500 font-medium">Livre para atendimento</span>
+                          <span className="text-[10px] font-bold text-emerald-600">🟢 Pronto</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Calendar Widget */}
             <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
               <div className="flex items-center justify-between mb-4">
@@ -749,15 +885,34 @@ export default function CustomDashboardView({
                   </span>
                 </div>
 
-                <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl mb-4">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Paciente em Atendimento</p>
-                  {currentServingPatient ? (
+                <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl mb-4 space-y-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Paciente em Atendimento</p>
+                  {activeConsultation ? (
+                    <div>
+                      <p className="text-sm font-extrabold text-amber-700 truncate flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping shrink-0" />
+                        {activeConsultation.paciente}
+                      </p>
+                      <p className="text-xs text-slate-600 font-bold mt-0.5">
+                        {activeConsultation.procedimento} • Dr(a). {activeConsultation.dentista}
+                      </p>
+                      {onFinish && (
+                        <button
+                          onClick={() => onFinish(activeConsultation.id)}
+                          className="mt-2 w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Concluir Atendimento</span>
+                        </button>
+                      )}
+                    </div>
+                  ) : currentServingPatient ? (
                     <p className="text-sm font-extrabold text-cyan-800 truncate">
                       {currentServingPatient}
                     </p>
                   ) : (
                     <p className="text-xs text-slate-500 font-medium">
-                      Nenhum paciente chamado no momento.
+                      Nenhum paciente em atendimento no momento.
                     </p>
                   )}
                 </div>
