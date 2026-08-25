@@ -43,6 +43,7 @@ interface TopBarProps {
   clinicName: string;
   onNavigate: (page: string, subPage?: string | null) => void;
   onLogout: () => void;
+  isImpersonating?: boolean;
 
   // Filter props moved from page body to TopBar
   activePage?: string;
@@ -100,7 +101,8 @@ export default function TopBar({
   statuses = ['Todos'],
   paymentStatuses = ['Todos'],
   doctorsList = ['Todos'],
-  onOnlineBookingClick
+  onOnlineBookingClick,
+  isImpersonating = false
 }: TopBarProps) {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
@@ -139,7 +141,10 @@ export default function TopBar({
   const showFiltersInHeader = ['Dashboard', 'Agenda', 'Pacientes', 'Consultas', 'Financeiro'].includes(activePage);
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200/80 px-4 sm:px-6 flex items-center justify-between shrink-0 select-none fixed top-0 right-0 left-0 lg:left-20 z-30 shadow-xs">
+    <header className={cn(
+      "h-16 bg-white border-b border-slate-200/80 px-4 sm:px-6 flex items-center justify-between shrink-0 select-none fixed right-0 left-0 lg:left-64 z-30 shadow-xs transition-all",
+      isImpersonating ? "top-10" : "top-0"
+    )}>
       
       {/* LEFT SECTION: Mobile Trigger + Search & Context Filters */}
       <div className="flex items-center gap-3 flex-1 min-w-0 pr-2">
@@ -154,13 +159,13 @@ export default function TopBar({
 
         {/* Global Patient Search Input */}
         {setSearchPatient ? (
-          <div className="relative w-44 sm:w-56 md:w-64 shrink-0">
+          <div className="relative w-36 sm:w-44 md:w-48 shrink-0">
             <input 
               type="text"
-              placeholder="Buscar paciente / ficha..."
+              placeholder="Buscar..."
               value={searchPatient}
               onChange={(e) => setSearchPatient(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-7 py-1.5 text-xs font-bold text-slate-700 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-6 py-1.5 text-xs font-bold text-slate-700 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all"
             />
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
             {searchPatient && (
@@ -173,10 +178,10 @@ export default function TopBar({
             )}
           </div>
         ) : (
-          <div className="relative w-48 hidden sm:block shrink-0">
+          <div className="relative w-36 hidden sm:block shrink-0">
             <input 
               type="text"
-              placeholder="Pesquisar..."
+              placeholder="Buscar..."
               className="w-full bg-slate-50 border border-slate-100 rounded-xl pl-8 pr-3 py-1.5 text-xs font-medium text-slate-600 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-brand-cyan"
             />
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
@@ -429,42 +434,13 @@ export default function TopBar({
 
       {/* RIGHT SECTION: Quick Actions, Booking Link, Fullscreen, Notifications & Profile */}
       <div className="flex items-center gap-2.5 shrink-0">
-        
-        {/* Portal do Paciente & Agendamento Online */}
-        <button 
-          onClick={() => onNavigate('PortalPaciente')}
-          className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer active:scale-95 bg-gradient-to-r from-brand-cyan to-cyan-600 hover:from-cyan-600 hover:to-brand-cyan text-white shadow-cyan-500/20"
-          title="Abrir Portal do Paciente White-label"
-        >
-          <Globe className="w-3.5 h-3.5" />
-          <span>Portal do Paciente</span>
-        </button>
-
-        {/* Quick Nav Icons */}
-        <div className="hidden xl:flex items-center bg-slate-50/80 rounded-xl p-0.5 border border-slate-200/60">
-          <button 
-            onClick={() => onNavigate('IAClinica')}
-            className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-white rounded-lg transition-all duration-150 cursor-pointer group relative shadow-2xs"
-            title="IA Clínica, Diagnósticos & Raio-X"
-          >
-            <Sparkles className="w-4 h-4 text-brand-cyan group-hover:scale-110 transition-transform" />
-          </button>
-          <button 
-            onClick={() => onNavigate('ChatbotIA')}
-            className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-white rounded-lg transition-all duration-150 cursor-pointer group relative shadow-2xs"
-            title="Chatbot IA no WhatsApp"
-          >
-            <Mail className="w-4 h-4 group-hover:scale-110 transition-transform" />
-          </button>
-        </div>
-
         {/* Fullscreen toggle */}
         <button 
           onClick={toggleFullScreen}
-          className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-xl cursor-pointer hidden md:block"
+          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-xl cursor-pointer hidden lg:block"
           title="Modo Tela Cheia"
         >
-          <Maximize className="w-4.5 h-4.5" />
+          <Maximize className="w-4 h-4" />
         </button>
 
         {/* Notification Bell with indicator badge */}

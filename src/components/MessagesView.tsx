@@ -31,7 +31,8 @@ import {
   ShieldCheck,
   Smartphone,
   Eye,
-  Copy
+  Copy,
+  History
 } from 'lucide-react';
 import { format, parseISO, isValid, addDays, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -40,9 +41,9 @@ import { cn, formatCurrency } from '../lib/utils';
 import { DentalRecord } from '../types';
 
 interface MessagesViewProps {
-  data: DentalRecord[];
-  patients: any[];
-  clinicName: string;
+  data?: DentalRecord[];
+  patients?: any[];
+  clinicName?: string;
   db?: any;
   currentUser?: any;
 }
@@ -62,13 +63,13 @@ interface AutoQueueItem {
 }
 
 export default function MessagesView({
-  data,
-  patients,
+  data = [],
+  patients = [],
   clinicName = 'Oral Admin Odontologia',
   db,
   currentUser
 }: MessagesViewProps) {
-  const [activeTab, setActiveTab] = useState<'fila' | 'chat' | 'gatilhos' | 'modelos'>('fila');
+  const [activeTab, setActiveTab] = useState<'fila' | 'chat' | 'gatilhos' | 'modelos' | 'historico'>('fila');
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [directSearch, setDirectSearch] = useState('');
   
@@ -1074,6 +1075,60 @@ export default function MessagesView({
             </p>
           </div>
 
+        </div>
+      )}
+
+      {/* TAB 5: HISTÓRICO COMPLETO */}
+      {activeTab === 'historico' && (
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-sm font-black uppercase text-slate-800 tracking-wide flex items-center gap-2">
+                  <History className="w-4 h-4 text-brand-cyan" />
+                  Histórico de Envios & Registro WhatsApp
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Rastreamento de todas as mensagens automáticas e manuais disparadas pela clínica.
+                </p>
+              </div>
+              <span className="text-xs font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-xl">
+                {queueLogs.length} registro(s)
+              </span>
+            </div>
+
+            {queueLogs.length === 0 ? (
+              <div className="py-12 text-center space-y-2">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                  <History className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-black text-slate-800">Nenhum log registrado ainda</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Dispare lembretes na aba "Fila" ou inicie conversas no "Chat" para visualizar os registros detalhados aqui.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {queueLogs.map(log => (
+                  <div key={log.id} className="p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-2xl border border-slate-200/70 transition-all flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-800">{log.title}</span>
+                        {log.patient && <span className="text-[11px] font-semibold text-slate-600">• {log.patient}</span>}
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        Destinatário: {log.recipient} • Horário: {log.time}
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-100/70 border border-emerald-200 px-2.5 py-1 rounded-lg shrink-0 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      {log.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

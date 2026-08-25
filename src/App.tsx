@@ -646,6 +646,7 @@ const INITIAL_USERS = [
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [impersonatingSuperAdmin, setImpersonatingSuperAdmin] = useState<any>(null);
   const [globalBanner, setGlobalBanner] = useState<any>(null);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
 
@@ -786,18 +787,32 @@ export default function App() {
   }, []);
 
   const handleInstallPWA = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setDeferredPrompt(null);
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      } catch (err) {
+        console.error("Erro ao solicitar instalação PWA:", err);
+      }
+    } else {
+      alert("Para instalar a instância do OdontoDash como aplicativo (PWA):\n\n• No Computador (Chrome/Edge): Clique no ícone de 'Instalar' no lado direito da barra de endereço do navegador, ou acesse o Menu (três pontos) > 'Instalar OdontoDash'.\n• No Celular Android (Chrome): Abra o menu (três pontos) e toque em 'Adicionar à tela inicial' ou 'Instalar aplicativo'.\n• No iPhone/iPad (Safari): Toque no ícone de Compartilhar e selecione 'Adicionar à Tela de Início'.");
     }
   };
 
   const hasModule = React.useCallback((moduleName: string) => {
     if (!currentUser) return false;
+    
     // SuperAdmin or standard full Admin always has all access unless trial has specific custom modules
-    if (currentUser.role === 'Admin') {
+    if (
+      currentUser.role === 'Admin' || 
+      currentUser.role === 'SuperAdmin' || 
+      currentUser.username === 'administrador' ||
+      currentUser.modules === 'Todos' ||
+      (currentUser.modules && currentUser.modules.toLowerCase().includes('todos'))
+    ) {
       if (currentUser.isTrial && currentUser.modules && currentUser.modules !== 'Todos') {
         const userModules = (currentUser.modules || '').split(',').map((m: string) => m.trim().toLowerCase());
         return userModules.includes(moduleName.toLowerCase());
@@ -810,14 +825,17 @@ export default function App() {
       return false;
     }
 
-    // Recepcionista always gets Dashboard, Agenda, and Pacientes by default
-    if (currentUser.role === 'Recepcionista' && (moduleName.toLowerCase() === 'dashboard' || moduleName.toLowerCase() === 'agenda' || moduleName.toLowerCase() === 'pacientes')) {
-      return true;
+    // Recepcionista gets Dashboard, Agenda, Pacientes, Mensagens, Retorno and Documentos by default
+    if (currentUser.role === 'Recepcionista') {
+      const lower = moduleName.toLowerCase();
+      if (['dashboard', 'agenda', 'pacientes', 'mensagens', 'retorno', 'documentos'].includes(lower)) {
+        return true;
+      }
     }
 
     // New AI & Patient Portal modules are accessible to authenticated team members
     const lowerMod = moduleName.toLowerCase();
-    if (lowerMod === 'iaclinica' || lowerMod === 'portalpaciente' || lowerMod === 'chatbotia') {
+    if (lowerMod === 'iaclinica' || lowerMod === 'portalpaciente' || lowerMod === 'chatbotia' || lowerMod === 'mensagens') {
       return true;
     }
     
@@ -1129,7 +1147,7 @@ export default function App() {
   const procedures = useMemo(() => ['Todos', ...Array.from(new Set(data.map(r => r.procedimento)))], [data]);
   const statuses = ['Todos', 'Realizado', 'Agendado', 'Pendente', 'Cancelado'];
   const paymentStatuses = ['Todos', 'Pago', 'Pendente', 'Atrasado'];
-  const doctorsList = useMemo(() => ['Todos', ...Array.from(new Set(users.filter(u => u.role === 'Dentista' || u.role === 'Admin').map(u => u.name)))], [users]);
+  const doctorsList = useMemo(() => ['Todos', ...Array.from(new Set(users.filter(u => u.role === 'Dentista').map(u => u.name)))], [users]);
 
   // Patients filtered based on role (Dentists should only see their assigned patients)
   const patientsForUser = useMemo(() => {
@@ -1453,13 +1471,40 @@ export default function App() {
       const trimmedName = newPatient.name.trim();
       const trimmedEmail = newPatient.email?.trim() || '';
 
-      if (!existingId) {
-        // Validation is already done in the view, but we keep a final check here
-        const isDuplicateEmail = trimmedEmail && patients.some(p => p.email?.toLowerCase() === trimmedEmail.toLowerCase());
-        if (isDuplicateEmail) {
-           console.warn(`[handleCreatePatient] E-mail duplicado detectado para: ${trimmedEmail}`);
-           alert(`O e-mail "${trimmedEmail}" já está cadastrado.`);
-           return false;
+      // Verificação de duplicidade de e-mail no Firestore
+      if (trimmedEmail) {
+        try {
+          let pQuery;
+          if (trialId) {
+            pQuery = query(collection(db, 'patients'), where('trialOwnerId', '==', trialId));
+          } else {
+            pQuery = collection(db, 'patients');
+          }
+          const snapshot = await getDocs(pQuery);
+          const duplicateDoc = snapshot.docs.find(docSnap => {
+            const data = docSnap.data() as any;
+            const docEmail = (data.email || '').trim().toLowerCase();
+            const docId = docSnap.id;
+            return docEmail === trimmedEmail.toLowerCase() && docId !== patientId;
+          });
+
+          if (duplicateDoc) {
+            const dupData = duplicateDoc.data() as any;
+            const duplicatePatientName = dupData.name || 'outro paciente';
+            console.warn(`[handleCreatePatient] E-mail duplicado detectado no Firestore para: ${trimmedEmail}`);
+            alert(`Atenção: O e-mail "${trimmedEmail}" já está vinculado a outro paciente (${duplicatePatientName}) no sistema.`);
+            return false;
+          }
+        } catch (queryErr) {
+          console.warn("[handleCreatePatient] Erro ao consultar duplicidade no Firestore, aplicando verificação local:", queryErr);
+          const localDuplicate = patients.find(p => 
+            (p.email || '').trim().toLowerCase() === trimmedEmail.toLowerCase() && p.id !== patientId
+          );
+          if (localDuplicate) {
+            console.warn(`[handleCreatePatient] E-mail duplicado detectado para: ${trimmedEmail}`);
+            alert(`Atenção: O e-mail "${trimmedEmail}" já está vinculado a outro paciente (${localDuplicate.name || 'Paciente'}) no sistema.`);
+            return false;
+          }
         }
       }
       
@@ -1788,14 +1833,9 @@ export default function App() {
   const handleDeleteUser = async (userId: string): Promise<boolean> => {
     console.log("handleDeleteUser starting for:", userId);
     
-    // Protect core admin ana.admin (ID '1') and self
-    if (userId === '1') {
-      alert("O usuário administrador principal não pode ser excluído por segurança.");
-      return false;
-    }
-
+    // Evitar que o usuário exclua a si mesmo enquanto estiver logado na sessão ativa
     if (currentUser && (currentUser.id === userId || currentUser.uid === userId)) {
-      alert("Você não pode excluir seu próprio usuário enquanto estiver conectado.");
+      alert("Você não pode excluir sua própria conta enquanto estiver conectado.");
       return false;
     }
 
@@ -1817,7 +1857,6 @@ export default function App() {
         console.warn("Could not clean up user mapping:", err);
       }
       
-      alert("Usuário excluído com sucesso.");
       return true;
     } catch (e: any) {
       console.error("Error during handleDeleteUser:", e);
@@ -2177,9 +2216,36 @@ export default function App() {
   const handleLogout = () => {
     localStorage.removeItem('odonto_session');
     setCurrentUser(null);
+    setImpersonatingSuperAdmin(null);
     setIsAuthenticated(false);
     setActivePage('Dashboard');
     setSubPage(null);
+  };
+
+  const handleAccessClinic = (target: any) => {
+    if (!currentUser) return;
+    const targetOwner = target?.owner || target;
+    const resolvedClinicName = target?.clinicName || targetOwner?.resolvedClinic || targetOwner?.clinicName || 'Clínica';
+    const responsibleDoctorName = target?.responsibleDoctor || targetOwner?.name || targetOwner?.username;
+
+    setImpersonatingSuperAdmin(currentUser);
+    setCurrentUser({
+      ...targetOwner,
+      name: responsibleDoctorName,
+      clinicName: resolvedClinicName,
+      role: 'Admin', // Guarantee administrative context for this clinic
+    });
+    setActivePage('Dashboard');
+    setSubPage(null);
+  };
+
+  const handleExitImpersonation = () => {
+    if (impersonatingSuperAdmin) {
+      setCurrentUser(impersonatingSuperAdmin);
+      setImpersonatingSuperAdmin(null);
+      setActivePage('SuperAdmin');
+      setSubPage(null);
+    }
   };
 
   const handleRestoreData = async (backup: any) => {
@@ -2498,6 +2564,8 @@ export default function App() {
           clinicLogo={clinicLogo}
           footerText={footerText}
           onOpenFreeTrial={() => setIsFreeTrialView(true)}
+          onInstallPWA={handleInstallPWA}
+          deferredPrompt={deferredPrompt}
         />
         {renderLegal()}
       </>
@@ -2798,6 +2866,9 @@ export default function App() {
           <SuperAdminView 
             users={users} 
             onUpdateUser={handleUpdateUser} 
+            onDeleteUser={handleDeleteUser}
+            onAccessClinic={handleAccessClinic}
+            clinicName={clinicName}
             db={db} 
           />
         );
@@ -2876,7 +2947,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#f4f7fa] flex font-sans text-slate-900 overflow-x-hidden">
       {/* Desktop Sidebar */}
-      <div className="hidden lg:block w-[84px] shrink-0">
+      <div className="hidden lg:block w-64 shrink-0">
         <Sidebar 
           activePage={activePage}
           adminTab={adminTab}
@@ -2888,6 +2959,8 @@ export default function App() {
           clinicName={clinicName}
           appointmentsCount={upcomingAppointments.length}
           patientsCount={patientsForUser.length}
+          isImpersonating={!!impersonatingSuperAdmin}
+          onExitImpersonation={handleExitImpersonation}
         />
       </div>
 
@@ -2903,11 +2976,11 @@ export default function App() {
               className="fixed inset-0 bg-slate-950/50 backdrop-blur-xs z-50 lg:hidden"
             />
             <motion.div 
-              initial={{ x: -84 }}
+              initial={{ x: -256 }}
               animate={{ x: 0 }}
-              exit={{ x: -84 }}
+              exit={{ x: -256 }}
               transition={{ type: 'tween', duration: 0.2 }}
-              className="fixed top-0 left-0 bottom-0 w-[84px] bg-white shadow-2xl z-55 lg:hidden"
+              className="fixed top-0 left-0 bottom-0 w-64 bg-white shadow-2xl z-55 lg:hidden"
             >
               <Sidebar 
                 activePage={activePage}
@@ -2920,18 +2993,44 @@ export default function App() {
                 clinicName={clinicName}
                 appointmentsCount={upcomingAppointments.length}
                 patientsCount={patientsForUser.length}
+                isImpersonating={!!impersonatingSuperAdmin}
+                onExitImpersonation={handleExitImpersonation}
               />
             </motion.div>
           </>
         )}
       </AnimatePresence>
 
+      {/* SuperAdmin Impersonation Banner */}
+      {impersonatingSuperAdmin && (
+        <div className="fixed top-0 left-0 right-0 z-[120] bg-gradient-to-r from-amber-600 via-indigo-700 to-indigo-950 text-white px-4 py-2.5 flex items-center justify-between shadow-2xl text-xs select-none border-b border-amber-400/30">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full shadow-sm flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-slate-900" />
+              Acesso Master / Suporte
+            </span>
+            <span className="text-white/95 font-medium">
+              Clínica: <strong className="text-amber-200">{currentUser?.clinicName || clinicName || 'Clínica'}</strong> &bull; Responsável Técnico: <strong className="text-white">{currentUser?.name || currentUser?.username}</strong> (Administrador da Clínica)
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleExitImpersonation}
+            className="bg-white hover:bg-amber-50 text-slate-900 font-bold px-3.5 py-1.5 rounded-xl text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer border border-white/50 shrink-0 ml-3"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-indigo-700" />
+            <span>Sair da Clínica / Painel Master</span>
+          </button>
+        </div>
+      )}
+
       {/* Main Workspace Area */}
-      <div className="flex-1 flex flex-col min-h-screen min-w-0 pt-16">
+      <div className={cn("flex-1 flex flex-col min-h-screen min-w-0", impersonatingSuperAdmin ? "pt-26" : "pt-16")}>
         {/* Top Navbar */}
         <TopBar 
           onMenuToggle={() => setIsMenuOpen(true)}
           currentUser={currentUser}
+          isImpersonating={!!impersonatingSuperAdmin}
           notifications={notifications}
           onNotificationClick={() => setShowNotifications(!showNotifications)}
           showNotifications={showNotifications}
@@ -6798,8 +6897,8 @@ function FinanceView({ data, patients, onUpdatePayment }: { data: DentalRecord[]
 function TeamView({ data, users, currentUser, onViewAgenda, onDeleteUser }: { data: DentalRecord[]; users: any[]; currentUser: any; onViewAgenda: (name: string) => void; onDeleteUser?: (id: string) => void }) {
   const [userToDelete, setUserToDelete] = useState<any>(null);
   const team = useMemo(() => {
-    // Only include users who are Dentists or Admins (doctors)
-    const doctors = users.filter(u => u.role === 'Dentista' || u.role === 'Admin');
+    // Only include users who are Dentists
+    const doctors = users.filter(u => u.role === 'Dentista');
     
     // Total statistics for the provided data
     const statsByDoctor: { [key: string]: { revenue: number, procedures: number, patients: Set<string> } } = {};
@@ -6820,7 +6919,7 @@ function TeamView({ data, users, currentUser, onViewAgenda, onDeleteUser }: { da
         revenue: stats.revenue,
         procedures: stats.procedures,
         patientCount: stats.patients.size,
-        specialty: (user.role === 'Admin' || user.name.includes('Ana')) ? 'Ortodontia' : 'Clínica Geral',
+        specialty: user.specialty || 'Cirurgião-Dentista',
         availability: user.availability || 'disponivel',
         currentPatient: user.currentPatient
       };
@@ -9633,7 +9732,7 @@ function AppointmentFormView({
   }, [data, patients]);
 
   const dentistList = useMemo(() => {
-    const names = new Set(users.map(u => u.role === 'Dentista' || u.role === 'Admin' ? u.name : null).filter(Boolean));
+    const names = new Set(users.map(u => u.role === 'Dentista' ? u.name : null).filter(Boolean));
     // Fallback to MOCK dentists if no users found
     if (names.size === 0) return ['Dr. Silva', 'Dra. Maria', 'Dr. Ricardo', 'Dra. Ana'];
     return Array.from(names).sort() as string[];
@@ -9941,7 +10040,7 @@ function CertificateFormView({ onBack, onSave, patientName, users }: { onBack: (
             <label className="text-[10px] uppercase font-bold text-slate-400">Dentista</label>
             <select value={dentist} onChange={(e) => setDentist(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none">
               <option value="">Selecione o dentista...</option>
-              {users.map(u => (u.role === 'Dentista' || u.role === 'Admin') && <option key={u.id} value={u.name}>{u.name}</option>)}
+              {users.map(u => u.role === 'Dentista' && <option key={u.id} value={u.name}>{u.name}</option>)}
             </select>
           </div>
           <div className="space-y-1">
@@ -9997,7 +10096,7 @@ function PrescriptionFormView({ onBack, onSave, patientName, users }: { onBack: 
             <label className="text-[10px] uppercase font-bold text-slate-400">Dentista</label>
             <select value={dentist} onChange={(e) => setDentist(e.target.value)} className="w-full p-2 border border-slate-200 rounded text-sm focus:border-brand-cyan outline-none">
               <option value="">Selecione o dentista...</option>
-              {users.map(u => (u.role === 'Dentista' || u.role === 'Admin') && <option key={u.id} value={u.name}>{u.name}</option>)}
+              {users.map(u => u.role === 'Dentista' && <option key={u.id} value={u.name}>{u.name}</option>)}
             </select>
           </div>
           <div className="space-y-1">
@@ -10202,7 +10301,7 @@ function ClinicalEvolutionFormView({ onBack, onSave, patientName, users }: { onB
                   className="w-full pl-12 pr-4 py-4 bg-slate-50/50 border border-slate-100 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all appearance-none cursor-pointer"
                 >
                   <option value="">Selecione o profissional responsável</option>
-                  {users.map(u => (u.role === 'Dentista' || u.role === 'Admin') && <option key={u.id} value={u.name}>{u.name}</option>)}
+                  {users.map(u => u.role === 'Dentista' && <option key={u.id} value={u.name}>{u.name}</option>)}
                 </select>
                 <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 pointer-events-none" />
               </div>
@@ -11001,7 +11100,9 @@ function LoginView({
   clinicName,
   clinicLogo,
   footerText,
-  onOpenFreeTrial
+  onOpenFreeTrial,
+  onInstallPWA,
+  deferredPrompt
 }: { 
   users: any[]; 
   onLogin: (user: any) => void; 
@@ -11012,6 +11113,8 @@ function LoginView({
   clinicLogo: string | null;
   footerText: string;
   onOpenFreeTrial?: () => void;
+  onInstallPWA?: () => void;
+  deferredPrompt?: any;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -11599,17 +11702,18 @@ function LoginView({
         <div className="space-y-6 pt-6 border-t border-slate-100 w-full max-w-md mx-auto">
           {/* Shortcuts */}
           <div className="flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-[10px] font-bold text-slate-500 tracking-wider uppercase select-none">
-            {onOpenFreeTrial && (
+            {onInstallPWA && (
               <button 
                 type="button" 
-                onClick={onOpenFreeTrial} 
-                className="hover:text-amber-600 transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                onClick={onInstallPWA} 
+                className="hover:text-cyan-600 transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                title="Instalar aplicativo localmente no computador ou celular"
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-500 fill-amber-500/20" />
-                <span>Instalar Instância ERP</span>
+                <Monitor className="w-3.5 h-3.5 text-cyan-600" />
+                <span>Instalar Instância / App (PWA)</span>
               </button>
             )}
-            {onOpenFreeTrial && <span className="text-slate-200 shrink-0">•</span>}
+            {onInstallPWA && <span className="text-slate-200 shrink-0">•</span>}
             <button 
               type="button" 
               onClick={onOpenBooking} 
@@ -11704,7 +11808,7 @@ function PublicBookingView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const doctors = useMemo(() => users.filter(u => u.role === 'Dentista' || u.role === 'Admin'), [users]);
+  const doctors = useMemo(() => users.filter(u => u.role === 'Dentista'), [users]);
   
   const timeSlots = CLINIC_TIME_SLOTS;
 
@@ -11951,7 +12055,7 @@ function PublicBookingView({
                             <p className="text-xl font-black text-slate-900 tracking-tight">{doc.name}</p>
                             <div className="flex flex-col gap-2 items-center">
                               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
-                                {doc.role === 'Admin' ? 'Especialista Sênior' : 'Clínico Geral'}
+                                {doc.specialty || 'Cirurgião-Dentista'}
                               </span>
                               <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />

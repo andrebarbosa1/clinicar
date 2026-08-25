@@ -150,7 +150,7 @@ export default function ScheduleView({
 
   // Dentist list from users
   const dentistList = useMemo(() => {
-    const names = new Set(users.map(u => u && (u.role === 'Dentista' || u.role === 'Admin') ? u.name : null).filter(Boolean));
+    const names = new Set(users.map(u => u && u.role === 'Dentista' ? u.name : null).filter(Boolean));
     if (names.size === 0) return ['Dr. Silva', 'Dra. Maria', 'Dr. Daniel', 'Dra. Ana'];
     return Array.from(names).sort() as string[];
   }, [users]);

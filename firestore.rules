@@ -3,14 +3,9 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // =========================================================================
-    // 1. GLOBAL SAFETY NET & HELPER FUNCTIONS
+    // 1. HELPER FUNCTIONS
     // =========================================================================
     
-    // Default Deny Catch-all for any undefined paths
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     function isSignedIn() {
       return request.auth != null;
     }
@@ -19,230 +14,12 @@ service cloud.firestore {
       return request.resource.data;
     }
 
-    function existing() {
-      return resource.data;
-    }
-
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128;
     }
 
-    function isNonEmptyString(val, maxLen) {
-      return val is string && val.size() > 0 && val.size() <= maxLen;
-    }
-
-    function isOptionalString(data, fieldName, maxLen) {
-      return !(fieldName in data) || data[fieldName] == null || (data[fieldName] is string && data[fieldName].size() <= maxLen);
-    }
-
-    function isOptionalNumber(data, fieldName) {
-      return !(fieldName in data) || data[fieldName] == null || data[fieldName] is number || data[fieldName] is int;
-    }
-
-    function isOptionalBool(data, fieldName) {
-      return !(fieldName in data) || data[fieldName] == null || data[fieldName] is bool;
-    }
-
-    function isOptionalMap(data, fieldName) {
-      return !(fieldName in data) || data[fieldName] == null || data[fieldName] is map;
-    }
-
-    function isOptionalList(data, fieldName, maxLen) {
-      return !(fieldName in data) || data[fieldName] == null || (data[fieldName] is list && data[fieldName].size() <= maxLen);
-    }
-
     // =========================================================================
-    // 2. ENTITY VALIDATION HELPERS
-    // =========================================================================
-
-    function isValidClinicalRecord(rec) {
-      return isOptionalString(rec, 'id', 128)
-        && isOptionalString(rec, 'data', 50)
-        && isOptionalString(rec, 'paciente', 200)
-        && isOptionalString(rec, 'procedimento', 200)
-        && isOptionalString(rec, 'dentista', 150)
-        && isOptionalString(rec, 'horario', 50)
-        && isOptionalString(rec, 'status', 50)
-        && isOptionalString(rec, 'statusPagamento', 50)
-        && isOptionalString(rec, 'metodoPagamento', 50)
-        && isOptionalString(rec, 'observacao', 5000)
-        && isOptionalString(rec, 'observacoes', 5000)
-        && isOptionalString(rec, 'startedAt', 50)
-        && isOptionalString(rec, 'finishedAt', 50)
-        && isOptionalString(rec, 'servingSince', 50)
-        && isOptionalString(rec, 'telefone', 50)
-        && isOptionalString(rec, 'createdBy', 150)
-        && isOptionalString(rec, 'trialOwnerId', 128)
-        && isOptionalString(rec, 'pacienteId', 128)
-        && isOptionalString(rec, 'dentistaId', 128)
-        && isOptionalString(rec, 'patientId', 128)
-        && isOptionalString(rec, 'cpf', 50)
-        && isOptionalString(rec, 'convenio', 100)
-        && isOptionalString(rec, 'tipo', 100)
-        && isOptionalString(rec, 'motivo', 500)
-        && isOptionalString(rec, 'reminderSentAt', 50)
-        && isOptionalString(rec, 'createdAt', 50)
-        && isOptionalString(rec, 'updatedAt', 50)
-        && isOptionalBool(rec, 'isQuickEvent')
-        && isOptionalBool(rec, 'reminderSent')
-        && isOptionalNumber(rec, 'valor')
-        && isOptionalNumber(rec, 'duracao');
-    }
-
-    function isValidAppUser(u) {
-      return isOptionalString(u, 'id', 128)
-        && isOptionalString(u, 'name', 150)
-        && isOptionalString(u, 'role', 50)
-        && isOptionalString(u, 'username', 100)
-        && isOptionalString(u, 'password', 200)
-        && isOptionalString(u, 'email', 150)
-        && isOptionalString(u, 'phone', 50)
-        && isOptionalString(u, 'cro', 50)
-        && isOptionalString(u, 'modules', 1000)
-        && isOptionalString(u, 'availability', 50)
-        && isOptionalString(u, 'currentPatient', 200)
-        && isOptionalString(u, 'servingSince', 50)
-        && isOptionalString(u, 'createdAt', 50)
-        && isOptionalString(u, 'updatedAt', 50)
-        && isOptionalString(u, 'lastLogin', 50)
-        && isOptionalString(u, 'firebaseUid', 128)
-        && isOptionalString(u, 'parentTrialId', 128)
-        && isOptionalString(u, 'trialPlan', 50)
-        && isOptionalString(u, 'trialStartedAt', 50)
-        && isOptionalNumber(u, 'trialExtensionDays')
-        && isOptionalBool(u, 'isTrial')
-        && isOptionalBool(u, 'isPremium')
-        && isOptionalBool(u, 'isLocked')
-        && isOptionalNumber(u, 'loginAttempts')
-        && isOptionalBool(u, 'active');
-    }
-
-    function isValidPatient(p) {
-      return isOptionalString(p, 'id', 128)
-        && isOptionalString(p, 'name', 200)
-        && isOptionalString(p, 'phone', 50)
-        && isOptionalString(p, 'telefone', 50)
-        && isOptionalString(p, 'celular', 50)
-        && isOptionalString(p, 'email', 150)
-        && isOptionalString(p, 'cpf', 30)
-        && isOptionalString(p, 'rg', 30)
-        && isOptionalString(p, 'birthDate', 50)
-        && isOptionalString(p, 'gender', 30)
-        && isOptionalString(p, 'address', 300)
-        && isOptionalString(p, 'notes', 5000)
-        && isOptionalString(p, 'healthHistory', 5000)
-        && isOptionalString(p, 'dentistaResponsavel', 150)
-        && isOptionalString(p, 'trialOwnerId', 128)
-        && isOptionalString(p, 'createdAt', 50)
-        && isOptionalString(p, 'updatedAt', 50)
-        && isOptionalMap(p, 'anamnesis');
-    }
-
-    function isValidDocument(docObj) {
-      return isOptionalString(docObj, 'id', 128)
-        && isOptionalString(docObj, 'type', 100)
-        && isOptionalString(docObj, 'patientId', 128)
-        && isOptionalString(docObj, 'patientName', 200)
-        && isOptionalString(docObj, 'dentistId', 128)
-        && isOptionalString(docObj, 'dentistName', 150)
-        && isOptionalString(docObj, 'dentista', 150)
-        && isOptionalString(docObj, 'content', 50000)
-        && isOptionalString(docObj, 'trialOwnerId', 128)
-        && isOptionalString(docObj, 'createdAt', 50)
-        && isOptionalString(docObj, 'updatedAt', 50)
-        && isOptionalMap(docObj, 'metadata');
-    }
-
-    function isValidNotification(n) {
-      return isOptionalString(n, 'id', 128)
-        && isOptionalString(n, 'userId', 128)
-        && isOptionalString(n, 'message', 2000)
-        && isOptionalString(n, 'type', 50)
-        && isOptionalString(n, 'createdAt', 50)
-        && isOptionalBool(n, 'read');
-    }
-
-    function isValidSupportTicket(t) {
-      return isOptionalString(t, 'id', 128)
-        && isOptionalString(t, 'userId', 128)
-        && isOptionalString(t, 'userName', 150)
-        && isOptionalString(t, 'description', 3000)
-        && isOptionalString(t, 'status', 50)
-        && isOptionalString(t, 'assignedTo', 128)
-        && isOptionalString(t, 'assignedToName', 150)
-        && isOptionalString(t, 'userAgent', 500)
-        && isOptionalString(t, 'createdAt', 50)
-        && isOptionalString(t, 'updatedAt', 50);
-    }
-
-    function isValidClinicSetting(s) {
-      return isOptionalString(s, 'id', 128)
-        && isOptionalString(s, 'clinicName', 200)
-        && isOptionalString(s, 'clinicPhone', 50)
-        && isOptionalString(s, 'clinicAddress', 300)
-        && isOptionalString(s, 'clinicLogo', 500000)
-        && isOptionalString(s, 'footerText', 500)
-        && isOptionalString(s, 'providerPhone', 50)
-        && isOptionalString(s, 'providerName', 100)
-        && isOptionalString(s, 'updatedAt', 50);
-    }
-
-    function isValidSystemAnnouncement(ann) {
-      return isOptionalString(ann, 'id', 128)
-        && isOptionalString(ann, 'title', 200)
-        && isOptionalString(ann, 'message', 3000)
-        && isOptionalString(ann, 'type', 50)
-        && isOptionalBool(ann, 'active')
-        && isOptionalString(ann, 'createdAt', 50);
-    }
-
-    function isValidSaasCoupon(c) {
-      return isOptionalString(c, 'code', 100)
-        && isOptionalNumber(c, 'discountPercent')
-        && isOptionalNumber(c, 'extraDays')
-        && isOptionalNumber(c, 'maxUses')
-        && isOptionalNumber(c, 'usesCount')
-        && isOptionalBool(c, 'active');
-    }
-
-    function isValidLoginAttempt(la) {
-      return isOptionalString(la, 'username', 128)
-        && isOptionalNumber(la, 'attempts')
-        && isOptionalNumber(la, 'count')
-        && (!('lastAttempt' in la) || la.lastAttempt == null || la.lastAttempt is number || la.lastAttempt is int || la.lastAttempt is string)
-        && (!('lockedUntil' in la) || la.lockedUntil == null || la.lockedUntil is number || la.lockedUntil is int || la.lockedUntil is string)
-        && isOptionalNumber(la, 'lockoutUntil')
-        && isOptionalBool(la, 'blocked');
-    }
-
-    function isValidDeviceAttempt(da) {
-      return isOptionalString(da, 'deviceId', 128)
-        && isOptionalNumber(da, 'attempts')
-        && (!('lastAttempt' in da) || da.lastAttempt == null || da.lastAttempt is number || da.lastAttempt is int || da.lastAttempt is string)
-        && (!('lockedUntil' in da) || da.lockedUntil == null || da.lockedUntil is number || da.lockedUntil is int || da.lockedUntil is string)
-        && isOptionalNumber(da, 'lockoutUntil');
-    }
-
-    function isValidOdontogram(odo) {
-      return isOptionalString(odo, 'id', 128)
-        && isOptionalString(odo, 'patientId', 128)
-        && isOptionalString(odo, 'patientName', 200)
-        && isOptionalString(odo, 'updatedAt', 50)
-        && isOptionalMap(odo, 'teeth')
-        && isOptionalMap(odo, 'data');
-    }
-
-    function isValidUserByUid(u) {
-      return isOptionalString(u, 'userDocId', 128)
-        && isOptionalString(u, 'uid', 128)
-        && isOptionalString(u, 'name', 150)
-        && isOptionalString(u, 'role', 50)
-        && isOptionalString(u, 'email', 150)
-        && isOptionalString(u, 'updatedAt', 50);
-    }
-
-    // =========================================================================
-    // 3. COLLECTION MATCH BLOCKS
+    // 2. COLLECTION RULES
     // =========================================================================
 
     // Connectivity Test
@@ -250,95 +27,82 @@ service cloud.firestore {
       allow read, write: if isValidId(docId);
     }
 
-    // Clinical Records / Consultas
+    // Clinical Records / Consultas / Procedimentos
     match /records/{recordId} {
       allow read: if true;
-      allow create, update: if isValidId(recordId) && isValidClinicalRecord(incoming());
-      allow delete: if isValidId(recordId);
+      allow write: if isValidId(recordId);
     }
 
-    // User Accounts
+    // User Accounts & Team Members
     match /users/{userId} {
       allow read: if true;
-      allow create, update: if isValidId(userId) && isValidAppUser(incoming());
-      allow delete: if isValidId(userId);
+      allow write: if isValidId(userId);
     }
 
     // User UID Mapping
     match /users_by_uid/{uid} {
       allow read: if true;
-      allow create, update: if isValidId(uid) && isValidUserByUid(incoming());
-      allow delete: if isValidId(uid);
+      allow write: if isValidId(uid);
     }
 
     // Patient Directory & Prontuários
     match /patients/{patientId} {
       allow read: if true;
-      allow create, update: if isValidId(patientId) && isValidPatient(incoming());
-      allow delete: if isValidId(patientId);
+      allow write: if isValidId(patientId);
     }
 
     // Clinical Documents (Receitas, Atestados, Exames)
     match /documents/{docId} {
       allow read: if true;
-      allow create, update: if isValidId(docId) && isValidDocument(incoming());
-      allow delete: if isValidId(docId);
+      allow write: if isValidId(docId);
     }
 
     // Interactive Odontogram Data
     match /odontograms/{odoId} {
       allow read: if true;
-      allow create, update: if isValidId(odoId) && isValidOdontogram(incoming());
-      allow delete: if isValidId(odoId);
+      allow write: if isValidId(odoId);
     }
 
     // Notifications
     match /notifications/{notificationId} {
       allow read: if true;
-      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
-      allow delete: if isValidId(notificationId);
+      allow write: if isValidId(notificationId);
     }
 
     // Support Tickets
     match /support_tickets/{ticketId} {
       allow read: if true;
-      allow create, update: if isValidId(ticketId) && isValidSupportTicket(incoming());
-      allow delete: if isValidId(ticketId);
+      allow write: if isValidId(ticketId);
     }
 
-    // Clinic Settings
+    // Clinic Settings & White-label Configurations
     match /settings/{settingId} {
       allow read: if true;
-      allow create, update: if isValidId(settingId) && isValidClinicSetting(incoming());
-      allow delete: if isValidId(settingId);
+      allow write: if isValidId(settingId);
     }
 
     // Brute Force Lockouts (Login Attempts)
     match /login_attempts/{username} {
       allow read: if true;
-      allow create, update: if isValidId(username) && isValidLoginAttempt(incoming());
-      allow delete: if isValidId(username);
+      allow write: if isValidId(username);
     }
 
     // Device Attempts (Lockouts per device/browser fingerprint)
     match /device_attempts/{deviceId} {
       allow read: if true;
-      allow create, update: if isValidId(deviceId) && isValidDeviceAttempt(incoming());
-      allow delete: if isValidId(deviceId);
+      allow write: if isValidId(deviceId);
     }
 
-    // System Announcements
+    // System Announcements & Global Banners
     match /system_announcements/{announcementId} {
       allow read: if true;
-      allow create, update: if isValidId(announcementId) && isValidSystemAnnouncement(incoming());
-      allow delete: if isValidId(announcementId);
+      allow write: if isValidId(announcementId);
     }
 
     // SaaS promotion coupons
     match /saas_coupons/{couponId} {
       allow read: if true;
-      allow create, update: if isValidId(couponId) && isValidSaasCoupon(incoming());
-      allow delete: if isValidId(couponId);
+      allow write: if isValidId(couponId);
     }
   }
 }

@@ -32,7 +32,9 @@ import {
   ArrowRight,
   TrendingUp,
   Activity,
-  Award
+  Award,
+  LogIn,
+  ExternalLink
 } from 'lucide-react';
 import { 
   doc, 
@@ -99,18 +101,23 @@ interface Coupon {
 interface SuperAdminViewProps {
   users: UserProfile[];
   onUpdateUser: (id: string, updatedData: any) => Promise<boolean>;
+  onDeleteUser?: (id: string) => Promise<boolean | any>;
+  onAccessClinic?: (user: UserProfile) => void;
+  clinicName?: string;
   db: any; // Firestore instance
 }
 
 type TabType = 'users' | 'metrics' | 'security' | 'announcements' | 'vouchers';
 
-export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminViewProps) {
+export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAccessClinic, clinicName, db }: SuperAdminViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>('users');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClinicFilter, setSelectedClinicFilter] = useState('all');
   const [selectedRoleFilter, setSelectedRoleFilter] = useState('all');
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [deletingUser, setDeletingUser] = useState<UserProfile | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -118,6 +125,7 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
   const [recordsCountByClinic, setRecordsCountByClinic] = useState<Record<string, number>>({});
   const [securityLogs, setSecurityLogs] = useState<BruteForceLog[]>([]);
   const [deviceLogs, setDeviceLogs] = useState<DeviceLockoutLog[]>([]);
+  const [clinicSettingsMap, setClinicSettingsMap] = useState<Record<string, string>>({});
   const [globalNotice, setGlobalNotice] = useState<GlobalNotice>({
     id: 'global_banner',
     message: '',
@@ -215,7 +223,19 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       setCouponsList(coupons);
     }, (err) => console.warn("Failed loading promotional coupons:", err));
 
-    // 4. Heavy database clinical query: Aggregate clinical check-ins (volume de atendimentos) per clinic owner
+    // 4. Listen to settings collection to resolve registered clinic names
+    const unsubSettings = onSnapshot(collection(db, 'settings'), (snap) => {
+      const map: Record<string, string> = {};
+      snap.forEach(docSnap => {
+        const d = docSnap.data();
+        if (d && d.clinicName) {
+          map[docSnap.id] = d.clinicName;
+        }
+      });
+      setClinicSettingsMap(map);
+    }, (err) => console.warn("Failed loading clinic settings:", err));
+
+    // 5. Heavy database clinical query: Aggregate clinical check-ins (volume de atendimentos) per clinic owner
     const fetchClinicActivityRecords = async () => {
       try {
         const snap = await getDocs(collection(db, 'records'));
@@ -237,32 +257,46 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       unsubDeviceLogs();
       unsubNotice();
       unsubCoupons();
+      unsubSettings();
     };
   }, [db]);
 
   // Map each user to their logical Clinic/Tenant grouping
   const usersWithClinic = useMemo(() => {
+    const defaultClinic = clinicSettingsMap['clinic'] || clinicSettingsMap['general'] || clinicSettingsMap['clinic-main'] || clinicName || 'Clínica Principal';
+
     return users.map(user => {
-      let clinic = 'Clínica Corporativa Principal';
+      let clinic = defaultClinic;
       let idRef = 'Principal';
       
-      if (user.clinicName) {
-        clinic = user.clinicName;
+      if (user.clinicName && user.clinicName.trim().length > 0) {
+        clinic = user.clinicName.trim();
         idRef = user.parentTrialId || user.id;
       } else if (user.parentTrialId) {
         const parent = users.find(u => u.id === user.parentTrialId);
         idRef = user.parentTrialId;
-        if (parent && parent.clinicName) {
+        const mappedName = clinicSettingsMap[`clinic-${user.parentTrialId}`] || clinicSettingsMap[user.parentTrialId];
+        if (mappedName) {
+          clinic = mappedName;
+        } else if (parent && parent.clinicName) {
           clinic = parent.clinicName;
         } else {
-          clinic = `Trial Workspace [ID: ${user.parentTrialId.substring(0, 8)}]`;
+          clinic = `Clínica [ID: ${user.parentTrialId.substring(0, 8)}]`;
         }
       } else if (user.isTrial) {
-        clinic = `Trial Clínica [ID: ${user.id.substring(0, 8)}]`;
+        const mappedName = clinicSettingsMap[`clinic-${user.id}`] || clinicSettingsMap[user.id];
+        if (mappedName) {
+          clinic = mappedName;
+        } else {
+          clinic = `Clínica Trial [ID: ${user.id.substring(0, 8)}]`;
+        }
         idRef = user.id;
       } else if (user.role === 'SuperAdmin' || user.username === 'administrador') {
         clinic = 'Sistemas (Suporte Central)';
         idRef = 'SuperCentral';
+      } else {
+        const mappedName = clinicSettingsMap['clinic'] || clinicSettingsMap['general'] || clinicSettingsMap['clinic-main'] || defaultClinic;
+        clinic = mappedName;
       }
 
       return {
@@ -271,30 +305,96 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
         clinicKey: idRef
       };
     });
-  }, [users]);
+  }, [users, clinicName, clinicSettingsMap]);
+
+  // Group users into distinct Clinics (Tenants), showing ONLY the Clinic and its Owner / Responsible Doctor
+  const clinicsList = useMemo(() => {
+    const groups: Record<string, {
+      clinicKey: string;
+      clinicName: string;
+      owner: any;
+      staff: any[];
+      staffCount: number;
+    }> = {};
+
+    usersWithClinic.forEach(u => {
+      // Ignore super admin in regular customer clinic listings
+      if (u.role === 'SuperAdmin' || u.username === 'administrador') return;
+
+      const key = u.clinicKey || 'Principal';
+      if (!groups[key]) {
+        groups[key] = {
+          clinicKey: key,
+          clinicName: u.resolvedClinic || 'Clínica',
+          owner: null,
+          staff: [],
+          staffCount: 0
+        };
+      }
+
+      groups[key].staff.push(u);
+      groups[key].staffCount += 1;
+
+      // Identify the clinic owner / doctor responsible
+      if (!groups[key].owner) {
+        groups[key].owner = u;
+      } else {
+        const currentOwner = groups[key].owner;
+        const uIsRoot = !u.parentTrialId;
+        const currIsRoot = !currentOwner.parentTrialId;
+        
+        if (uIsRoot && !currIsRoot) {
+          groups[key].owner = u;
+        } else if (u.role === 'Admin' && currentOwner.role !== 'Admin') {
+          groups[key].owner = u;
+        } else if (u.role === 'Dentista' && currentOwner.role === 'Recepcionista') {
+          groups[key].owner = u;
+        }
+      }
+    });
+
+    return Object.values(groups).map(g => {
+      const owner = g.owner || g.staff[0];
+      return {
+        clinicKey: g.clinicKey,
+        clinicName: g.clinicName,
+        owner,
+        staff: g.staff,
+        staffCount: g.staffCount,
+        responsibleDoctor: owner?.name || 'Médico Responsável',
+        isTrial: owner?.isTrial === true,
+        isPremium: owner?.isPremium === true,
+        trialPlan: owner?.trialPlan || 'Pro',
+        trialStartedAt: owner?.trialStartedAt,
+        trialExtensionDays: owner?.trialExtensionDays || 0,
+        allowedModules: owner?.allowedModules,
+        blocked: owner?.blocked === true
+      };
+    });
+  }, [usersWithClinic]);
 
   // Extract unique clinics for filters
   const uniqueClinics = useMemo(() => {
     const names = new Set<string>();
-    usersWithClinic.forEach(u => {
-      if (u.resolvedClinic) names.add(u.resolvedClinic);
+    clinicsList.forEach(c => {
+      if (c.clinicName) names.add(c.clinicName);
     });
     return Array.from(names);
-  }, [usersWithClinic]);
+  }, [clinicsList]);
 
-  // Basic numeric metrics
+  // Basic numeric metrics based on clinics
   const metrics = useMemo(() => {
+    const totalClinics = clinicsList.length;
     const totalUsers = users.length;
-    const clinicsCount = uniqueClinics.filter(c => c !== 'Sistemas (Suporte Central)').length;
-    const blockedCount = users.filter(u => u.blocked === true).length;
-    const trialCount = users.filter(u => u.isTrial === true).length;
-    const premiumCount = users.filter(u => u.isPremium === true).length;
+    const blockedCount = clinicsList.filter(c => c.blocked).length;
+    const trialCount = clinicsList.filter(c => c.isTrial).length;
+    const premiumCount = clinicsList.filter(c => c.isPremium).length;
 
     // Specialty analytics
     const specialtyDistribution: Record<string, number> = {};
-    users.forEach(u => {
-      if (u.isTrial || u.isPremium) {
-        const spec = u.trialSpecialty || 'Clínico Geral';
+    clinicsList.forEach(c => {
+      if (c.isTrial || c.isPremium) {
+        const spec = c.owner?.trialSpecialty || 'Clínico Geral';
         specialtyDistribution[spec] = (specialtyDistribution[spec] || 0) + 1;
       }
     });
@@ -305,8 +405,9 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       : 0;
 
     return {
+      totalClinics,
       totalUsers,
-      clinicsCount,
+      clinicsCount: totalClinics,
       blockedCount,
       trialCount,
       premiumCount,
@@ -314,24 +415,28 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       totalActiveAccounts,
       conversionRate
     };
-  }, [users, uniqueClinics]);
+  }, [clinicsList, users.length]);
 
-  // Filtered users list
-  const filteredUsers = useMemo(() => {
-    return usersWithClinic.filter(user => {
+  // Filtered clinics list for the main table
+  const filteredClinics = useMemo(() => {
+    return clinicsList.filter(clinic => {
       const matchSearch = 
-        user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (user.email && user.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (user.resolvedClinic && user.resolvedClinic.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (user.cpf && user.cpf.includes(searchTerm));
+        clinic.clinicName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        clinic.responsibleDoctor.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (clinic.owner?.username && clinic.owner.username.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (clinic.owner?.email && clinic.owner.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+        (clinic.owner?.phone && clinic.owner.phone.includes(searchTerm)) ||
+        (clinic.owner?.cpf && clinic.owner.cpf.includes(searchTerm));
 
-      const matchClinic = selectedClinicFilter === 'all' || user.resolvedClinic === selectedClinicFilter;
-      const matchRole = selectedRoleFilter === 'all' || user.role === selectedRoleFilter;
+      const matchClinic = selectedClinicFilter === 'all' || clinic.clinicName === selectedClinicFilter;
+      const matchPlan = selectedRoleFilter === 'all' || 
+        (selectedRoleFilter === 'Trial' && clinic.isTrial) || 
+        (selectedRoleFilter === 'Premium' && clinic.isPremium) ||
+        (selectedRoleFilter === 'Bloqueada' && clinic.blocked);
 
-      return matchSearch && matchClinic && matchRole;
+      return matchSearch && matchClinic && matchPlan;
     });
-  }, [usersWithClinic, searchTerm, selectedClinicFilter, selectedRoleFilter]);
+  }, [clinicsList, searchTerm, selectedClinicFilter, selectedRoleFilter]);
 
   // Action: Unlock access / clear brute-force lockout record
   const handleUnlockAccount = async (usernameToUnlock: string) => {
@@ -500,6 +605,30 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
       setErrorMsg(`Falha na atualização: ${err?.message || err}`);
     } finally {
       setIsUpdating(false);
+    }
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!deletingUser) return;
+    setIsDeleting(true);
+    try {
+      if (onDeleteUser) {
+        const ok = await onDeleteUser(deletingUser.id);
+        if (ok) {
+          setSuccessMsg(`Usuário ${deletingUser.name || deletingUser.username} foi excluído com sucesso.`);
+          setTimeout(() => setSuccessMsg(null), 4000);
+          if (editingUser?.id === deletingUser.id) {
+            setEditingUser(null);
+          }
+          setDeletingUser(null);
+        }
+      } else {
+        setErrorMsg("Função de exclusão não configurada.");
+      }
+    } catch (err: any) {
+      setErrorMsg(`Erro ao excluir usuário: ${err?.message || err}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -684,7 +813,7 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
                     onChange={(e) => setSelectedClinicFilter(e.target.value)}
                     className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:border-indigo-600 text-xs text-slate-700 font-medium bg-white"
                   >
-                    <option value="all">Filtro por Clínica (Todas)</option>
+                    <option value="all">Todas as Clínicas</option>
                     {uniqueClinics.map(clinic => (
                       <option key={clinic} value={clinic}>{clinic}</option>
                     ))}
@@ -697,156 +826,206 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
                     onChange={(e) => setSelectedRoleFilter(e.target.value)}
                     className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:border-indigo-600 text-xs text-slate-700 font-medium bg-white"
                   >
-                    <option value="all">Todos os Cargos</option>
-                    <option value="Admin">Admin</option>
-                    <option value="Dentista">Dentista</option>
-                    <option value="Recepcionista">Recepcionista</option>
-                    <option value="SuperAdmin">SuperAdmin</option>
+                    <option value="all">Todos os Planos / Status</option>
+                    <option value="Trial">Ambientes em Teste (Trial)</option>
+                    <option value="Premium">Assinantes Premium</option>
+                    <option value="Bloqueada">Contas Bloqueadas</option>
                   </select>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Main Customers List Card */}
+          {/* Main Clinics List Card */}
           <div className="bg-white rounded-2xl border border-slate-200/50 shadow-sm overflow-hidden text-left">
             <div className="px-5 py-3 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/50">
               <div className="space-y-0.5">
-                <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight">Cadastro Geral de Contas</h2>
+                <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-indigo-600" />
+                  Gestão Geral de Clínicas & Consultórios
+                </h2>
                 <p className="text-[10px] text-slate-400 font-semibold flex items-center gap-1.5">
-                  Exibindo {Math.min(10, filteredUsers.length)} de {filteredUsers.length} usuários (Filtro ativo)
+                  Exibindo {filteredClinics.length} clínica{filteredClinics.length === 1 ? '' : 's'} (Exibição dos Donos e Médicos Responsáveis)
                 </p>
               </div>
-              <div className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-lg self-start sm:self-center">
-                Limite de 10 Contas Ativo
+              <div className="text-[9px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-lg self-start sm:self-center flex items-center gap-1">
+                <ShieldIcon className="w-3 h-3 text-indigo-600" />
+                Painel do Super Admin Master
               </div>
             </div>
 
             <div className="overflow-x-auto">
-              {filteredUsers.length === 0 ? (
+              {filteredClinics.length === 0 ? (
                 <div className="p-12 text-center text-slate-400 text-xs">
-                  Nenhuma conta ou clínica encontrada para os filtros selecionados.
+                  Nenhuma clínica encontrada para os filtros selecionados.
                 </div>
               ) : (
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50/75 text-[10px] uppercase font-black text-slate-400 border-b border-slate-100 select-none">
-                      <th className="py-3 px-5">Cliente / Profissional</th>
-                      <th className="py-3 px-4">Clínica Referente</th>
-                      <th className="py-3 px-4">Contato & Identificação</th>
-                      <th className="py-3 px-4 text-center">Permissões SaaS</th>
+                      <th className="py-3 px-5">Clínica / Consultório</th>
+                      <th className="py-3 px-4">Dono / Médico Responsável</th>
+                      <th className="py-3 px-4 text-center">Equipe</th>
+                      <th className="py-3 px-4">Contato do Responsável</th>
+                      <th className="py-3 px-4 text-center">Plano & Permissões</th>
                       <th className="py-3 px-4 text-center">Prazo Extra (Voucher)</th>
-                      <th className="py-3 px-4 text-center">Contrato / Status</th>
-                      <th className="py-3 px-4 text-right">Ações</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-right">Ações Master</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {filteredUsers.slice(0, 10).map(user => {
-                      const isBlocked = user.blocked === true;
-                      const isSuper = user.role === 'SuperAdmin';
-                      const bonusDays = user.trialExtensionDays || 0;
+                    {filteredClinics.map(clinic => {
+                      const owner = clinic.owner;
+                      const isBlocked = clinic.blocked;
+                      const bonusDays = clinic.trialExtensionDays || 0;
                       
                       return (
-                        <tr key={user.id} className="hover:bg-slate-50/50 transition-colors">
+                        <tr key={clinic.clinicKey} className="hover:bg-slate-50/50 transition-colors">
+                          {/* Clinic Name and ID */}
                           <td className="py-3.5 px-5">
                             <div className="flex items-center gap-3">
-                              <div className={`w-9 h-9 rounded-full ${isSuper ? 'bg-indigo-600/10 text-indigo-600' : 'bg-slate-100 text-slate-600'} flex items-center justify-center font-bold text-xs uppercase shrink-0`}>
-                                {user.name.substring(0, 2)}
+                              <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm shrink-0 shadow-2xs">
+                                <Building2 className="w-5 h-5 text-indigo-600" />
                               </div>
                               <div className="min-w-0">
-                                <span className="font-bold text-slate-800 leading-tight block truncate">
-                                  {user.name}
+                                <span className="font-extrabold text-slate-800 leading-tight block truncate text-sm">
+                                  {clinic.clinicName}
                                 </span>
-                                <span className="text-[10px] font-mono text-slate-400 mt-0.5 block">
-                                  @{user.username}
+                                <span className="text-[10px] text-slate-400 font-mono flex items-center gap-1 mt-0.5">
+                                  ID: {clinic.clinicKey.substring(0, 10)}
                                 </span>
                               </div>
                             </div>
                           </td>
 
-                          <td className="py-3.5 px-4 font-semibold text-slate-700 min-w-[150px]">
-                            <div className="flex items-center gap-2">
-                              <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <span className="truncate max-w-[180px]">{user.resolvedClinic}</span>
+                          {/* Owner / Responsible Doctor */}
+                          <td className="py-3.5 px-4 min-w-[170px]">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                                <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span className="truncate">{clinic.responsibleDoctor}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                @{owner?.username || 'usuario'} &bull; <span className="text-indigo-600 font-medium font-sans">Dono / Resp. Técnico</span>
+                              </div>
                             </div>
                           </td>
 
+                          {/* Staff size */}
+                          <td className="py-3.5 px-4 text-center">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-slate-100 text-slate-700 px-2.5 py-1 rounded-xl border border-slate-200/80">
+                              <Users className="w-3 h-3 text-slate-500" />
+                              {clinic.staffCount === 1 ? '1 profissional' : `${clinic.staffCount} profissionais`}
+                            </span>
+                          </td>
+
+                          {/* Contacts of the Owner */}
                           <td className="py-3.5 px-4 text-slate-600 space-y-1">
-                            {user.email && (
+                            {owner?.email && (
                               <div className="flex items-center gap-1.5 text-[11px]">
                                 <Mail className="w-3 h-3 text-slate-400 shrink-0" />
-                                <a href={`mailto:${user.email}`} className="hover:underline text-slate-600 truncate max-w-[170px]">{user.email}</a>
+                                <a href={`mailto:${owner.email}`} className="hover:underline text-slate-600 truncate max-w-[170px]">{owner.email}</a>
                               </div>
                             )}
-                            {user.phone && (
+                            {owner?.phone && (
                               <div className="flex items-center gap-1.5 text-[11px]">
                                 <Phone className="w-3 h-3 text-emerald-500 shrink-0" />
-                                <a href={`https://wa.me/${user.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="hover:underline font-medium text-slate-600">{user.phone}</a>
+                                <a href={`https://wa.me/${owner.phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="hover:underline font-medium text-slate-600">{owner.phone}</a>
                               </div>
                             )}
-                            {user.cpf && (
+                            {owner?.cpf && (
                               <div className="flex items-center gap-1.5 text-[10px] font-mono">
                                 <CreditCard className="w-3 h-3 text-slate-400 shrink-0" />
-                                <span>{user.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
+                                <span>{owner.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
                               </div>
                             )}
                           </td>
 
+                          {/* Plan & Permissions */}
                           <td className="py-3.5 px-4 text-center">
                             <div className="inline-flex flex-col items-center gap-1">
                               <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded-full border border-slate-200">
-                                {user.role}
+                                Plano {clinic.trialPlan}
                               </span>
                               <span className="text-[9px] text-slate-400">
-                                {user.modules === 'Todos' ? '10 Módulos Ativos' : `${user.modules?.split(',').filter(Boolean).length || 0} de 10 módulos`}
+                                {owner?.modules === 'Todos' || !owner?.modules ? 'Todos os Módulos' : `${owner?.modules?.split(',').filter(Boolean).length || 0} módulos`}
                               </span>
                             </div>
                           </td>
 
+                          {/* Bonus days */}
                           <td className="py-3.5 px-4 text-center font-mono">
                             {bonusDays > 0 ? (
                               <span className="font-bold text-indigo-600 bg-indigo-50 border border-indigo-150 px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1">
                                 <Plus className="w-3 h-3" /> {bonusDays} dias
                               </span>
                             ) : (
-                              <span className="text-slate-400">Nenhum</span>
+                              <span className="text-slate-400 text-[11px]">Nenhum</span>
                             )}
                           </td>
 
+                          {/* Status */}
                           <td className="py-3.5 px-4 text-center">
                             <div className="flex flex-col items-center gap-1">
                               {isBlocked ? (
                                 <span className="inline-flex items-center gap-1 text-[10px] bg-red-50 text-red-700 font-bold px-2.5 py-0.5 rounded-full border border-red-200">
-                                  <Lock className="w-2.5 h-2.5 text-red-500" /> BLOQUEADO
+                                  <Lock className="w-2.5 h-2.5 text-red-500" /> BLOQUEADA
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-0.5 rounded-full border border-emerald-200">
-                                  <Unlock className="w-2.5 h-2.5 text-emerald-500" /> ATIVO
+                                  <Unlock className="w-2.5 h-2.5 text-emerald-500" /> ATIVA
                                 </span>
                               )}
 
-                              {user.isPremium ? (
+                              {clinic.isPremium ? (
                                 <span className="inline-flex items-center gap-1 text-[9px] text-amber-600 font-bold bg-amber-50 px-2 py-0.5 rounded">
                                   <Crown className="w-3 h-3 text-amber-500 shrink-0" /> PREMIUM
                                 </span>
-                              ) : user.isTrial ? (
+                              ) : clinic.isTrial ? (
                                 <span className="inline-flex items-center gap-1 text-[9px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded">
-                                  TRIAL ({user.trialPlan})
+                                  TRIAL
                                 </span>
                               ) : (
-                                <span className="text-[9px] text-slate-400 font-medium">Regular</span>
+                                <span className="text-[9px] text-slate-400 font-medium">Assinatura</span>
                               )}
                             </div>
                           </td>
 
+                          {/* Actions */}
                           <td className="py-3.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => setEditingUser(user)}
-                              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 rounded-xl text-indigo-700 border border-indigo-100 hover:border-indigo-200 text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer"
-                            >
-                              <Edit2 className="w-3 h-3" /> Configuração
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {onAccessClinic && (
+                                <button
+                                  type="button"
+                                  onClick={() => onAccessClinic(clinic as any)}
+                                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow-emerald-500/20 active:scale-95"
+                                  title={`Acessar ambiente da clínica ${clinic.clinicName}`}
+                                >
+                                  <LogIn className="w-3.5 h-3.5" />
+                                  <span>Acessar Clínica</span>
+                                </button>
+                              )}
+                              {owner && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingUser(owner)}
+                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 rounded-xl text-indigo-700 border border-indigo-100 hover:border-indigo-200 text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer"
+                                  title="Configurações e Permissões da Clínica"
+                                >
+                                  <Edit2 className="w-3 h-3" /> Configuração
+                                </button>
+                              )}
+                              {owner && onDeleteUser && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeletingUser(owner)}
+                                  className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 border border-rose-100 hover:border-rose-200 rounded-xl text-xs font-bold transition-all inline-flex items-center justify-center cursor-pointer"
+                                  title="Excluir Clínica e Contas"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -944,28 +1123,28 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
             <div className="px-5 py-4 border-b border-slate-100">
               <h3 className="text-xs font-black uppercase text-slate-800 tracking-tight flex items-center gap-1.5">
                 <Activity className="w-4 h-4 text-emerald-500 animate-pulse" />
-                Auditoria de Volume de Atendimentos / Atividades Clínica
+                Auditoria de Volume de Atendimentos / Atividades por Clínica
               </h3>
-              <p className="text-[10px] text-slate-400">Total de registros de prontuários (records) contabilizados em Firestore por cliente</p>
+              <p className="text-[10px] text-slate-400">Total de registros de prontuários e evoluções contabilizados em Firestore por clínica</p>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {filteredUsers.filter(u => u.role === 'Admin').length === 0 ? (
+              {filteredClinics.length === 0 ? (
                 <div className="p-8 text-center text-slate-405 text-xs">
-                  Sem dados de consultórios de teste cadastrados.
+                  Sem dados de clínicas cadastradas.
                 </div>
               ) : (
-                filteredUsers.filter(u => u.isTrial || u.isPremium).map((u, i) => {
-                  const activityCount = recordsCountByClinic[u.id] || recordsCountByClinic[u.parentTrialId || ''] || 0;
+                filteredClinics.map((clinic, i) => {
+                  const activityCount = recordsCountByClinic[clinic.owner?.id] || recordsCountByClinic[clinic.clinicKey] || 0;
                   const isGold = activityCount > 35;
                   
                   return (
-                    <div key={u.id} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
+                    <div key={clinic.clinicKey} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
                       <div className="flex items-center gap-3">
                         <span className="font-mono text-xs font-bold text-slate-400 w-5">#{i+1}</span>
                         <div>
-                          <p className="font-bold text-slate-850 hover:underline cursor-pointer">{u.resolvedClinic}</p>
-                          <p className="text-[10px] text-slate-400">Gestor Administrador: @{u.username} • Plano: {u.isPremium ? 'Premium' : 'Trial'}</p>
+                          <p className="font-bold text-slate-850 hover:underline cursor-pointer">{clinic.clinicName}</p>
+                          <p className="text-[10px] text-slate-400">Responsável: {clinic.responsibleDoctor} &bull; Plano: {clinic.isPremium ? 'Premium' : 'Trial'}</p>
                         </div>
                       </div>
 
@@ -981,6 +1160,18 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
                           <span className="bg-amber-500 text-white rounded-lg p-1" title="Clínica Ultra Ativa!">
                             <Award className="w-4 h-4 shrink-0" />
                           </span>
+                        )}
+
+                        {onAccessClinic && (
+                          <button
+                            type="button"
+                            onClick={() => onAccessClinic(clinic as any)}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                            title={`Acessar ambiente de ${clinic.clinicName}`}
+                          >
+                            <LogIn className="w-3.5 h-3.5" />
+                            <span>Acessar Clínica</span>
+                          </button>
                         )}
                       </div>
                     </div>
@@ -1665,34 +1856,121 @@ export default function SuperAdminView({ users, onUpdateUser, db }: SuperAdminVi
             </form>
 
             {/* Modal Footer */}
-            <div className="p-4 border-t border-slate-150 bg-slate-50 flex items-center justify-end gap-3 shrink-0">
+            <div className="p-4 border-t border-slate-150 bg-slate-50 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl border border-rose-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  disabled={isUpdating}
+                  onClick={() => setDeletingUser(editingUser)}
+                  title="Excluir este usuário permanentemente"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-600" />
+                  Excluir Conta
+                </button>
+
+                {editingUser.role !== 'SuperAdmin' && onAccessClinic && (
+                  <button
+                    type="button"
+                    className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl border border-emerald-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    disabled={isUpdating}
+                    onClick={() => {
+                      const target = editingUser;
+                      setEditingUser(null);
+                      onAccessClinic(target);
+                    }}
+                    title="Entrar no painel desta clínica como gestor"
+                  >
+                    <LogIn className="w-4 h-4 text-emerald-600" />
+                    Acessar Ambiente
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  className="px-5 py-2.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer transition-all"
+                  disabled={isUpdating}
+                  onClick={() => setEditingUser(null)}
+                >
+                  Cancelar
+                </button>
+
+                <button
+                  type="button"
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer shadow-lg shadow-indigo-600/10 transition-all flex items-center gap-2 border-0"
+                  disabled={isUpdating}
+                  onClick={handleSaveEdit}
+                >
+                  {isUpdating ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Salvando...
+                    </>
+                  ) : (
+                    <>
+                      <UserCheck className="w-4 h-4" /> Salvar Alterações
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal for SuperAdmin */}
+      {deletingUser && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center z-[1000] p-4">
+          <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-6 shadow-2xl border border-rose-100 animate-in fade-in zoom-in-95 duration-200 text-left">
+            <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100 shadow-sm">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div className="text-center space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-rose-600 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200">
+                Ação Irreversível
+              </span>
+              <h3 className="text-lg font-black text-slate-900">Excluir Conta de Usuário?</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Você está prestes a remover o acesso e cadastro de{' '}
+                <strong className="text-slate-800 font-bold">{deletingUser.name || deletingUser.username}</strong>{' '}
+                (<span className="font-mono text-slate-600">@{deletingUser.username}</span>){' '}
+                {deletingUser.clinicName ? `da clínica ${deletingUser.clinicName}` : ''}.
+              </p>
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-left text-[11px] text-amber-900 mt-3 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>O usuário perderá instantaneamente o acesso às ferramentas e dados do sistema.</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
               <button
                 type="button"
-                className="px-5 py-2.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer transition-all"
-                disabled={isUpdating}
-                onClick={() => setEditingUser(null)}
+                disabled={isDeleting}
+                onClick={() => setDeletingUser(null)}
+                className="flex-1 py-3 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               >
                 Cancelar
               </button>
-
               <button
                 type="button"
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer shadow-lg shadow-indigo-600/10 transition-all flex items-center gap-2 border-0"
-                disabled={isUpdating}
-                onClick={handleSaveEdit}
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteUser}
+                className="flex-1 py-3 text-xs font-black uppercase tracking-wider text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md shadow-rose-200 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
-                {isUpdating ? (
+                {isDeleting ? (
                   <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Salvando...
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Excluindo...
                   </>
                 ) : (
                   <>
-                    <UserCheck className="w-4 h-4" /> Salvar Alterações
+                    <Trash2 className="w-4 h-4" /> Excluir Conta
                   </>
                 )}
               </button>
             </div>
-
           </div>
         </div>
       )}

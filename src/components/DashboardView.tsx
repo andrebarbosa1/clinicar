@@ -79,6 +79,12 @@ export default function CustomDashboardView({
   }, []);
   const doctorName = loggedInUser?.name || 'Dr. Daniel Smith';
 
+  // Check if current user is reception
+  const isReceptionist = useMemo(() => {
+    const role = currentUser?.role || loggedInUser?.role;
+    return role === 'Recepcionista' || role === 'Recepção';
+  }, [currentUser, loggedInUser]);
+
   const isTrialUser = useMemo(() => {
     return !!(loggedInUser?.isTrial || loggedInUser?.parentTrialId);
   }, [loggedInUser]);
@@ -179,7 +185,7 @@ export default function CustomDashboardView({
 
   // Doctor rooms with live status for Reception
   const doctorRooms = useMemo(() => {
-    const doctors = (users || []).filter(u => u && (u.role === 'Dentista' || u.role === 'Admin'));
+    const doctors = (users || []).filter(u => u && u.role === 'Dentista');
     
     if (doctors.length === 0) {
       const uniqueDentists = Array.from(new Set(filteredData.map(r => r.dentista).filter(Boolean)));
@@ -505,50 +511,6 @@ export default function CustomDashboardView({
           </div>
         </div>
 
-        {/* FINANCIAL SUMMARY BANNER (IF ALLOWED) */}
-        {canSeeFinancials && financialSummary && (
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-gradient-to-r from-slate-900 to-slate-800 rounded-3xl p-5 text-white shadow-sm border border-slate-800">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                <DollarSign className="w-6 h-6" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Faturado</p>
-                <h4 className="text-xl font-black text-emerald-400 tracking-tight truncate">
-                  {formatCurrency(financialSummary.totalReceived)}
-                </h4>
-                <p className="text-[10px] text-slate-400 font-medium mt-0.5">{financialSummary.completedCount} procedimentos</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-slate-700/60 pt-3 sm:pt-0 sm:pl-4">
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-                <Clock className="w-6 h-6" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Previsto em Aberto</p>
-                <h4 className="text-xl font-black text-amber-400 tracking-tight truncate">
-                  {formatCurrency(financialSummary.totalPending)}
-                </h4>
-                <p className="text-[10px] text-slate-400 font-medium mt-0.5">Consultas agendadas</p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-slate-700/60 pt-3 sm:pt-0 sm:pl-4">
-              <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
-                <TrendingUp className="w-6 h-6" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Ticket Médio</p>
-                <h4 className="text-xl font-black text-cyan-400 tracking-tight truncate">
-                  {formatCurrency(financialSummary.avgTicket)}
-                </h4>
-                <p className="text-[10px] text-slate-400 font-medium mt-0.5">Por atendimento</p>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ROW 1: KEY PERFORMANCE INDICATORS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           
@@ -627,95 +589,97 @@ export default function CustomDashboardView({
           {/* LEFT 8 COLUMNS: DOCTOR ROOMS LIVE STATUS, INTERACTIVE CALENDAR & RECENT PATIENTS */}
           <div className="lg:col-span-8 flex flex-col gap-6">
             
-            {/* REAL-TIME DOCTOR ROOMS & CLINICAL STATUS (FOR RECEPTION & PROFESSIONALS) */}
-            <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-cyan-50 text-brand-cyan border border-cyan-100 flex items-center justify-center">
-                    <Stethoscope className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Painel dos Consultórios & Recepção</h3>
-                    <p className="text-[10px] text-slate-400 font-semibold">Status em tempo real dos profissionais e atendimentos</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Tempo Real
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {doctorRooms.map((room) => {
-                  const isEmAtendimento = room.status === 'Em Atendimento';
-                  return (
-                    <div 
-                      key={room.id}
-                      className={cn(
-                        "p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3",
-                        isEmAtendimento 
-                          ? "bg-amber-50/40 border-amber-200 shadow-xs" 
-                          : "bg-slate-50/70 border-slate-200/80 hover:bg-slate-50"
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <span className="text-[9px] font-black uppercase text-brand-cyan tracking-wider">
-                            {room.room}
-                          </span>
-                          <h4 className="text-sm font-black text-slate-900 truncate">
-                            {room.name}
-                          </h4>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {room.cro}
-                          </span>
-                        </div>
-
-                        <span className={cn(
-                          "text-[9px] font-black uppercase px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0",
-                          isEmAtendimento 
-                            ? "bg-amber-100 text-amber-800 border-amber-300" 
-                            : "bg-emerald-100 text-emerald-800 border-emerald-300"
-                        )}>
-                          <span className={cn(
-                            "w-1.5 h-1.5 rounded-full",
-                            isEmAtendimento ? "bg-amber-500 animate-ping" : "bg-emerald-500"
-                          )} />
-                          {room.status}
-                        </span>
-                      </div>
-
-                      {isEmAtendimento ? (
-                        <div className="p-2.5 bg-white/90 border border-amber-200 rounded-xl space-y-1">
-                          <p className="text-[9px] font-black uppercase text-amber-700">Paciente na Cadeira:</p>
-                          <p className="text-xs font-black text-slate-900 truncate">{room.currentPatient || 'Em Consulta'}</p>
-                          {room.procedure && <p className="text-[10px] text-slate-500 truncate">{room.procedure}</p>}
-                          {room.servingSince && (
-                            <p className="text-[9px] font-mono text-amber-600 font-bold">Desde {room.servingSince}</p>
-                          )}
-                          {room.activeApptId && onFinish && (
-                            <button
-                              onClick={() => onFinish(room.activeApptId!)}
-                              className="w-full mt-2 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-lg transition-colors flex items-center justify-center gap-1 shadow-xs cursor-pointer"
-                            >
-                              <CheckCircle2 className="w-3 h-3" />
-                              <span>Concluir Consulta</span>
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="p-2.5 bg-white/60 border border-slate-200/60 rounded-xl flex items-center justify-between">
-                          <span className="text-xs text-slate-500 font-medium">Livre para atendimento</span>
-                          <span className="text-[10px] font-bold text-emerald-600">🟢 Pronto</span>
-                        </div>
-                      )}
+            {/* REAL-TIME DOCTOR ROOMS & CLINICAL STATUS (FOR RECEPTION ONLY) */}
+            {isReceptionist && (
+              <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col animate-in fade-in duration-200">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-cyan-50 text-brand-cyan border border-cyan-100 flex items-center justify-center">
+                      <Stethoscope className="w-4 h-4" />
                     </div>
-                  );
-                })}
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Painel dos Consultórios & Recepção</h3>
+                      <p className="text-[10px] text-slate-400 font-semibold">Status em tempo real dos profissionais e atendimentos</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      Tempo Real
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {doctorRooms.map((room) => {
+                    const isEmAtendimento = room.status === 'Em Atendimento';
+                    return (
+                      <div 
+                        key={room.id}
+                        className={cn(
+                          "p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3",
+                          isEmAtendimento 
+                            ? "bg-amber-50/40 border-amber-200 shadow-xs" 
+                            : "bg-slate-50/70 border-slate-200/80 hover:bg-slate-50"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="text-[9px] font-black uppercase text-brand-cyan tracking-wider">
+                              {room.room}
+                            </span>
+                            <h4 className="text-sm font-black text-slate-900 truncate">
+                              {room.name}
+                            </h4>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {room.cro}
+                            </span>
+                          </div>
+
+                          <span className={cn(
+                            "text-[9px] font-black uppercase px-2 py-0.5 rounded-full border flex items-center gap-1 shrink-0",
+                            isEmAtendimento 
+                              ? "bg-amber-100 text-amber-800 border-amber-300" 
+                              : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                          )}>
+                            <span className={cn(
+                              "w-1.5 h-1.5 rounded-full",
+                              isEmAtendimento ? "bg-amber-500 animate-ping" : "bg-emerald-500"
+                            )} />
+                            {room.status}
+                          </span>
+                        </div>
+
+                        {isEmAtendimento ? (
+                          <div className="p-2.5 bg-white/90 border border-amber-200 rounded-xl space-y-1">
+                            <p className="text-[9px] font-black uppercase text-amber-700">Paciente na Cadeira:</p>
+                            <p className="text-xs font-black text-slate-900 truncate">{room.currentPatient || 'Em Consulta'}</p>
+                            {room.procedure && <p className="text-[10px] text-slate-500 truncate">{room.procedure}</p>}
+                            {room.servingSince && (
+                              <p className="text-[9px] font-mono text-amber-600 font-bold">Desde {room.servingSince}</p>
+                            )}
+                            {room.activeApptId && onFinish && (
+                              <button
+                                onClick={() => onFinish(room.activeApptId!)}
+                                className="w-full mt-2 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black rounded-lg transition-colors flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Concluir Consulta</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="p-2.5 bg-white/60 border border-slate-200/60 rounded-xl flex items-center justify-between">
+                            <span className="text-xs text-slate-500 font-medium">Livre para atendimento</span>
+                            <span className="text-[10px] font-bold text-emerald-600">🟢 Pronto</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Calendar Widget */}
             <div className="bg-white border border-slate-200/80 rounded-3xl p-5 sm:p-6 shadow-xs flex flex-col">

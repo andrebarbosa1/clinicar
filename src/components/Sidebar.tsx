@@ -18,12 +18,7 @@ import {
   Sparkles,
   LogOut,
   Stethoscope,
-  ClipboardList,
-  Zap,
-  ChevronRight,
-  Scan,
-  Globe,
-  Bot
+  Globe
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -38,6 +33,8 @@ interface SidebarProps {
   clinicName: string;
   appointmentsCount?: number;
   patientsCount?: number;
+  isImpersonating?: boolean;
+  onExitImpersonation?: () => void;
 }
 
 export default function Sidebar({
@@ -50,105 +47,99 @@ export default function Sidebar({
   onLogout,
   clinicName,
   appointmentsCount = 0,
-  patientsCount = 0
+  patientsCount = 0,
+  isImpersonating = false,
+  onExitImpersonation
 }: SidebarProps) {
   
   const menuSections = [
     {
-      title: 'CLÍNICA',
+      title: 'PRINCIPAL',
       items: [
         {
           id: 'Dashboard',
           label: 'Dashboard',
-          shortLabel: 'Início',
-          icon: <LayoutDashboard className="w-5 h-5" />,
+          icon: <LayoutDashboard className="w-4 h-4 shrink-0" />,
           module: 'Dashboard',
           badge: null
         },
         {
           id: 'Agenda',
-          label: 'Agenda & Consultas',
-          shortLabel: 'Agenda',
-          icon: <Calendar className="w-5 h-5" />,
+          label: 'Agenda',
+          icon: <Calendar className="w-4 h-4 shrink-0" />,
           module: 'Agenda',
           badge: appointmentsCount > 0 ? `${appointmentsCount}` : null
         },
         {
-          id: 'IAClinica',
-          label: 'IA Clínica & Raio-X',
-          shortLabel: 'IA Clínica',
-          icon: <Sparkles className="w-5 h-5 text-brand-cyan" />,
-          module: 'IAClinica',
-          badge: 'IA'
-        }
-      ]
-    },
-    {
-      title: 'PACIENTES',
-      items: [
-        {
           id: 'Pacientes',
-          label: 'Gestão de Pacientes',
-          shortLabel: 'Pacientes',
-          icon: <Users className="w-5 h-5" />,
+          label: 'Pacientes',
+          icon: <Users className="w-4 h-4 shrink-0" />,
           module: 'Pacientes',
           badge: patientsCount > 0 ? `${patientsCount}` : null
         },
         {
-          id: 'PortalPaciente',
-          label: 'Portal do Paciente',
-          shortLabel: 'Portal',
-          icon: <Globe className="w-5 h-5 text-emerald-500" />,
-          module: 'PortalPaciente',
-          badge: 'App'
-        },
-        {
-          id: 'Retorno',
-          label: 'Retornos Preventivos',
-          shortLabel: 'Retornos',
-          icon: <MessageCircle className="w-5 h-5" />,
-          module: 'Retorno',
+          id: 'Documentos',
+          label: 'Documentos Clínicos',
+          icon: <FileText className="w-4 h-4 shrink-0" />,
+          module: 'Documentos',
           badge: null
         }
       ]
     },
     {
-      title: 'COMUNICAÇÃO',
+      title: 'CLÍNICA & COMUNICAÇÃO',
       items: [
         {
+          id: 'IAClinica',
+          label: 'IA Clínica & Raio-X',
+          icon: <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />,
+          module: 'IAClinica',
+          badge: 'IA'
+        },
+        {
           id: 'Mensagens',
-          label: 'Mensagens & WhatsApp IA',
-          shortLabel: 'Mensagens',
-          icon: <MessageSquare className="w-5 h-5" />,
+          label: 'Mensagens & WhatsApp',
+          icon: <MessageSquare className="w-4 h-4 shrink-0" />,
           module: 'Mensagens',
-          badge: 'Auto'
+          badge: null
+        },
+        {
+          id: 'Retorno',
+          label: 'Retornos Preventivos',
+          icon: <MessageCircle className="w-4 h-4 shrink-0" />,
+          module: 'Retorno',
+          badge: null
+        },
+        {
+          id: 'PortalPaciente',
+          label: 'Portal do Paciente',
+          icon: <Globe className="w-4 h-4 text-emerald-400 shrink-0" />,
+          module: 'PortalPaciente',
+          badge: null
         }
       ]
     },
     {
-      title: 'GESTÃO',
+      title: 'GESTÃO & SISTEMA',
       items: [
         {
           id: 'Estoque',
-          label: 'Controle de Estoque',
-          shortLabel: 'Estoque',
-          icon: <Package className="w-5 h-5" />,
+          label: 'Estoque',
+          icon: <Package className="w-4 h-4 shrink-0" />,
           module: 'Estoque',
           badge: null
         },
         {
           id: 'Financeiro',
-          label: 'Financeiro & Fluxo',
-          shortLabel: 'Financeiro',
-          icon: <DollarSign className="w-5 h-5" />,
+          label: 'Financeiro',
+          icon: <DollarSign className="w-4 h-4 shrink-0" />,
           module: 'Financeiro',
           badge: null
         },
         {
           id: 'Administração',
-          label: 'Administração & Configs',
-          shortLabel: 'Admin',
-          icon: <Settings className="w-5 h-5" />,
+          label: 'Configurações',
+          icon: <Settings className="w-4 h-4 shrink-0" />,
           module: 'Administração',
           badge: null
         }
@@ -160,31 +151,40 @@ export default function Sidebar({
   const showSuperAdmin = currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador');
 
   return (
-    <aside className="w-[84px] bg-white border-r border-slate-200/80 flex flex-col h-screen fixed top-0 left-0 z-40 select-none py-2 items-center justify-between shadow-xs overflow-hidden">
+    <aside className={cn(
+      "w-64 bg-[#0d1527] text-white border-r border-slate-800 flex flex-col fixed left-0 z-40 select-none shadow-2xl transition-all",
+      isImpersonating ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen"
+    )}>
       
-      {/* Branding Header Logo */}
-      <div className="flex flex-col items-center shrink-0 pt-0.5">
+      {/* Branding Header */}
+      <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/90 bg-[#0a101f] shrink-0">
         <button 
           onClick={() => onNavigate('Dashboard', null)}
-          className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-brand-cyan to-cyan-400 flex items-center justify-center text-white shadow-md shadow-cyan-500/20 cursor-pointer hover:scale-105 active:scale-95 transition-all duration-200 group"
-          title={clinicName || 'OdontoDash'}
+          className="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-cyan to-cyan-400 flex items-center justify-center text-slate-950 shadow-md shadow-cyan-500/20 font-black shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all"
         >
-          <Stethoscope className="w-5 h-5 group-hover:rotate-6 transition-transform" />
+          <Stethoscope className="w-5 h-5 text-slate-950" />
         </button>
-        <span className="text-[8px] font-black tracking-wider text-slate-400 mt-1 uppercase">
-          ODONTO
-        </span>
+        <div className="min-w-0 flex-1 text-left">
+          <h2 className="text-sm font-black text-white tracking-tight truncate flex items-center gap-1.5">
+            <span>{clinicName || 'OdontoDash'}</span>
+          </h2>
+          <p className="text-[10px] text-cyan-400 font-bold tracking-wider uppercase truncate">
+            Gestão Odontológica
+          </p>
+        </div>
       </div>
 
-      {/* Menu Area - Compact with Icon on top and clear name below */}
-      <div className="flex-1 flex flex-col items-center justify-start gap-1 my-1.5 w-full px-1.5 overflow-y-auto no-scrollbar">
-        {menuSections.map((section, sIdx) => {
+      {/* Standard Navigation Menu */}
+      <div className="flex-1 px-3 py-4 overflow-y-auto no-scrollbar space-y-5">
+        {menuSections.map((section) => {
           const visibleItems = section.items.filter(item => hasModule(item.module));
           if (visibleItems.length === 0) return null;
 
           return (
-            <div key={section.title} className="w-full flex flex-col items-center gap-1">
-              {sIdx > 0 && <div className="w-8 h-px bg-slate-100 my-0.5" />}
+            <div key={section.title} className="space-y-1">
+              <div className="px-3 text-[10px] font-black tracking-widest text-slate-400 uppercase mb-1.5">
+                {section.title}
+              </div>
               
               {visibleItems.map((item) => {
                 const isLocked = isModuleLockedBySaaS(item.module);
@@ -195,45 +195,40 @@ export default function Sidebar({
                     key={item.id}
                     onClick={() => onNavigate(item.id, null)}
                     className={cn(
-                      "w-full py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 relative group cursor-pointer transition-all duration-150",
+                      "w-full px-3 py-2.5 rounded-xl flex items-center justify-between gap-3 text-xs font-bold transition-all cursor-pointer group",
                       isActive 
-                        ? "bg-brand-cyan text-slate-950 font-black shadow-sm shadow-cyan-500/25 scale-[1.02]" 
-                        : "text-slate-500 hover:text-slate-900 hover:bg-slate-50 active:scale-95"
+                        ? "bg-brand-cyan text-slate-950 shadow-md shadow-cyan-500/25 font-black scale-[1.01]" 
+                        : "text-slate-300 hover:text-white hover:bg-white/10 active:scale-[0.99]"
                     )}
-                    title={item.label}
                   >
-                    {/* Active Left Indicator Bar */}
-                    {isActive && (
-                      <span className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-1 h-5 bg-brand-cyan rounded-r-full shadow-xs" />
-                    )}
-
-                    <div className={cn(
-                      "transition-transform group-hover:scale-110",
-                      isActive ? "text-slate-950" : ""
-                    )}>
-                      {item.icon}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className={cn(
+                        "transition-colors",
+                        isActive ? "text-slate-950" : "text-slate-400 group-hover:text-cyan-400"
+                      )}>
+                        {item.icon}
+                      </span>
+                      <span className="truncate">{item.label}</span>
                     </div>
 
-                    {/* Label Below Icon */}
-                    <span className={cn(
-                      "text-[9px] tracking-tight leading-[11px] font-bold truncate max-w-full text-center px-0.5",
-                      isActive ? "text-slate-950 font-black" : "text-slate-500 group-hover:text-slate-800 font-medium"
-                    )}>
-                      {item.shortLabel || item.label}
-                    </span>
-                    
-                    {/* Badge */}
-                    {item.badge && !isActive && (
-                      <span className="absolute top-1 right-1.5 px-1 min-w-[14px] h-3.5 bg-emerald-500 text-white rounded-full text-[7.5px] font-black flex items-center justify-center shadow-xs">
-                        {item.badge}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {item.badge && (
+                        <span className={cn(
+                          "px-2 py-0.5 rounded-full text-[10px] font-black",
+                          isActive 
+                            ? "bg-slate-950 text-white" 
+                            : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                        )}>
+                          {item.badge}
+                        </span>
+                      )}
 
-                    {isLocked && (
-                      <span className="absolute top-1 right-1.5 w-3.5 h-3.5 bg-amber-500 rounded-full flex items-center justify-center text-white text-[7.5px] animate-pulse">
-                        ⭐
-                      </span>
-                    )}
+                      {isLocked && (
+                        <span className="text-[10px] text-amber-400 font-bold" title="Requer upgrade de plano">
+                          ⭐
+                        </span>
+                      )}
+                    </div>
                   </button>
                 );
               })}
@@ -241,58 +236,81 @@ export default function Sidebar({
           );
         })}
 
-        {/* Plan / Subscription Link */}
-        <div className="w-full flex flex-col items-center pt-0.5">
-          <div className="w-8 h-px bg-slate-100 my-0.5" />
+        {/* Plan / SaaS Section */}
+        <div className="pt-2 border-t border-slate-800 space-y-1">
+          <div className="px-3 text-[10px] font-black tracking-widest text-slate-400 uppercase mb-1.5">
+            CONTA
+          </div>
           <button
             onClick={() => onNavigate('Assinatura', null)}
             className={cn(
-              "w-full py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 relative group cursor-pointer transition-all duration-150",
+              "w-full px-3 py-2 rounded-xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer",
               activePage === 'Assinatura' 
-                ? "bg-amber-500 text-white shadow-sm shadow-amber-500/20 font-bold" 
-                : "text-amber-600 hover:text-amber-700 hover:bg-amber-50/80 bg-amber-50/40"
+                ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-black" 
+                : "text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20"
             )}
-            title="Meu Plano SaaS"
           >
-            <Sparkles className="w-4.5 h-4.5 animate-pulse" />
-            <span className="text-[9px] font-bold tracking-tight leading-[11px] truncate">
-              Plano
+            <div className="flex items-center gap-3">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Meu Plano</span>
+            </div>
+            <span className="text-[10px] font-bold bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded-md border border-amber-400/30">
+              Pro
             </span>
           </button>
-        </div>
 
-        {/* SuperAdmin Link */}
-        {showSuperAdmin && (
-          <button
-            onClick={() => onNavigate('SuperAdmin', null)}
-            className={cn(
-              "w-full py-1.5 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 relative group cursor-pointer transition-all duration-150 mt-0.5",
-              activePage === 'SuperAdmin' 
-                ? "bg-slate-900 text-white shadow-sm font-bold" 
-                : "text-slate-600 hover:text-slate-950 hover:bg-slate-100/80"
-            )}
-            title="SaaS Central Admin"
-          >
-            <Shield className="w-4.5 h-4.5 text-brand-cyan" />
-            <span className="text-[9px] font-bold tracking-tight leading-[11px] truncate">
-              Master
-            </span>
-          </button>
-        )}
+          {showSuperAdmin && (
+            <button
+              onClick={() => onNavigate('SuperAdmin', null)}
+              className={cn(
+                "w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-bold transition-all cursor-pointer",
+                activePage === 'SuperAdmin' 
+                  ? "bg-slate-800 text-cyan-300 border border-cyan-500/30 font-black" 
+                  : "text-slate-300 hover:text-white hover:bg-white/10"
+              )}
+            >
+              <Shield className="w-4 h-4 text-brand-cyan shrink-0" />
+              <span>Painel Master</span>
+            </button>
+          )}
+
+          {isImpersonating && onExitImpersonation && (
+            <button
+              onClick={onExitImpersonation}
+              className="w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-black bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs cursor-pointer"
+            >
+              <Shield className="w-4 h-4 text-slate-950 shrink-0" />
+              <span>Sair da Clínica</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* User Avatar Pill / Logout Button */}
-      <div className="flex flex-col items-center shrink-0 pt-1 border-t border-slate-100 w-full px-1.5 pb-0.5">
-        <button
-          onClick={onLogout}
-          className="w-full py-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer group"
-          title="Encerrar Sessão"
-        >
-          <LogOut className="w-4 h-4 group-hover:scale-110 transition-transform" />
-          <span className="text-[8.5px] font-bold tracking-tight leading-[10px] text-slate-400 group-hover:text-rose-600">
-            Sair
-          </span>
-        </button>
+      {/* User Profile & Logout Bottom Area */}
+      <div className="p-3 border-t border-slate-800 bg-[#0a101f] shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-slate-800 border border-slate-700 text-cyan-400 font-black text-xs flex items-center justify-center shrink-0 uppercase shadow-xs">
+              {currentUser?.name ? currentUser.name.slice(0, 2) : 'US'}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-white truncate leading-tight">
+                {currentUser?.name || currentUser?.username || 'Usuário'}
+              </p>
+              <p className="text-[10px] text-cyan-400/80 font-medium truncate">
+                {currentUser?.role || 'Profissional'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={onLogout}
+            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+            title="Encerrar Sessão"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </aside>
   );

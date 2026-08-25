@@ -385,6 +385,10 @@ export default function AdminView({
               setIsAddUserOpen(false);
               setEditingUser(null);
             }}
+            onDelete={(userToDelete: any) => {
+              setEditingUser(null);
+              setDeletingUser(userToDelete);
+            }}
             onSave={async (userData: any) => {
               if (editingUser) {
                 const ok = await onUpdateUser(editingUser.id, userData);
@@ -657,12 +661,14 @@ function SettingsSection({
               <p className="text-[10px] text-slate-400 mt-0.5">Permite rodar em tela cheia com alta performance</p>
             </div>
 
-            {deferredPrompt ? (
+            {onInstallPWA ? (
               <button
+                type="button"
                 onClick={onInstallPWA}
-                className="px-4 py-2 bg-brand-cyan text-slate-950 font-black text-xs rounded-xl hover:bg-cyan-400 transition-all shadow-sm cursor-pointer"
+                className="px-4 py-2 bg-brand-cyan text-slate-950 font-black text-xs rounded-xl hover:bg-cyan-400 transition-all shadow-sm cursor-pointer flex items-center gap-1.5"
               >
-                Instalar App
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Instalar Instância / App</span>
               </button>
             ) : (
               <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-3 py-1.5 rounded-lg">
@@ -842,7 +848,7 @@ function BackupSection({
 }
 
 // Subcomponent: User Form Modal (Create / Edit)
-function UserFormModal({ user, currentUser, isOpen, onClose, onSave }: any) {
+function UserFormModal({ user, currentUser, isOpen, onClose, onDelete, onSave }: any) {
   const isEdit = !!user;
   const isMasterAdmin = currentUser && (currentUser.role === 'SuperAdmin' || currentUser.username === 'administrador');
   
@@ -1126,58 +1132,72 @@ function UserFormModal({ user, currentUser, isOpen, onClose, onSave }: any) {
         </div>
 
         {/* Modal Footer Buttons */}
-        <div className="flex gap-2.5 pt-3 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 py-2.5 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={async () => {
-              if (!name.trim() || !username.trim() || !email.trim()) {
-                alert('Preencha os campos obrigatórios (Nome, Usuário e Email).');
-                return;
-              }
-              if (!isEdit && (!password || password.length < 3)) {
-                alert('Defina uma senha com pelo menos 3 caracteres.');
-                return;
-              }
+        <div className="flex items-center justify-between gap-2.5 pt-3 border-t border-slate-100">
+          {isEdit && onDelete ? (
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => onDelete(user)}
+              className="py-2.5 px-3.5 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>Excluir</span>
+            </button>
+          ) : <div />}
 
-              setIsSubmitting(true);
-              try {
-                const modulesString = selectedModules.length === ALL_SYSTEM_MODULES.length 
-                  ? 'Todos' 
-                  : selectedModules.join(',');
-
-                const payload: any = {
-                  name: name.trim(),
-                  username: username.trim(),
-                  email: email.trim(),
-                  phone: phone.trim(),
-                  role,
-                  modules: modulesString,
-                  isLocked: !isActiveStatus,
-                  loginAttempts: isActiveStatus ? 0 : (user?.loginAttempts || 0),
-                };
-
-                if (password && password.trim().length > 0) {
-                  payload.password = password.trim();
+          <div className="flex gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 text-xs font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={async () => {
+                if (!name.trim() || !username.trim() || !email.trim()) {
+                  alert('Preencha os campos obrigatórios (Nome, Usuário e Email).');
+                  return;
+                }
+                if (!isEdit && (!password || password.length < 3)) {
+                  alert('Defina uma senha com pelo menos 3 caracteres.');
+                  return;
                 }
 
-                await onSave(payload);
-              } finally {
-                setIsSubmitting(false);
-              }
-            }}
-            className="flex-1 py-2.5 text-xs font-black uppercase tracking-wider text-slate-950 bg-brand-cyan hover:bg-cyan-400 rounded-xl shadow-md shadow-brand-cyan/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-          >
-            {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-            <span>{isEdit ? 'Salvar Acesso' : 'Cadastrar Usuário'}</span>
-          </button>
+                setIsSubmitting(true);
+                try {
+                  const modulesString = selectedModules.length === ALL_SYSTEM_MODULES.length 
+                    ? 'Todos' 
+                    : selectedModules.join(',');
+
+                  const payload: any = {
+                    name: name.trim(),
+                    username: username.trim(),
+                    email: email.trim(),
+                    phone: phone.trim(),
+                    role,
+                    modules: modulesString,
+                    isLocked: !isActiveStatus,
+                    loginAttempts: isActiveStatus ? 0 : (user?.loginAttempts || 0),
+                  };
+
+                  if (password && password.trim().length > 0) {
+                    payload.password = password.trim();
+                  }
+
+                  await onSave(payload);
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+              className="px-5 py-2.5 text-xs font-black uppercase tracking-wider text-slate-950 bg-brand-cyan hover:bg-cyan-400 rounded-xl shadow-md shadow-brand-cyan/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              <span>{isEdit ? 'Salvar Acesso' : 'Cadastrar Usuário'}</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

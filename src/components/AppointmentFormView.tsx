@@ -118,12 +118,12 @@ export default function AppointmentFormView({
   // Dentists list derived from users or defaults
   const dentistList = useMemo(() => {
     const fromUsers = users
-      .filter(u => u.role === 'Dentista' || u.role === 'Admin' || u.role === 'SuperAdmin')
+      .filter(u => u.role === 'Dentista')
       .map(u => ({
         id: u.id || u.username,
         name: u.name,
         cro: u.cro || 'CRO-SP 10293',
-        specialty: u.specialty || (u.role === 'Admin' ? 'Responsável Técnico' : 'Cirurgião-Dentista')
+        specialty: u.specialty || 'Cirurgião-Dentista'
       }));
 
     if (fromUsers.length > 0) return fromUsers;
