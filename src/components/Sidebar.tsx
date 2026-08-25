@@ -166,7 +166,7 @@ export default function Sidebar({
         </button>
         <div className="min-w-0 flex-1 text-left">
           <h2 className="text-sm font-black text-white tracking-tight truncate flex items-center gap-1.5">
-            <span>{clinicName || 'OdontoDash'}</span>
+            <span>{clinicName || 'mbsolucoes'}</span>
           </h2>
           <p className="text-[10px] text-cyan-400 font-bold tracking-wider uppercase truncate">
             Gestão Odontológica

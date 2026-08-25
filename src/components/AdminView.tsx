@@ -567,7 +567,7 @@ function SettingsSection({
               type="text"
               value={localClinicName}
               onChange={(e) => setLocalClinicName(e.target.value)}
-              placeholder="Ex: Clínica Odontológica OdontoDash"
+              placeholder="Ex: mbsolucoes"
               className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
             />
           </div>

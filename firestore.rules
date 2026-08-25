@@ -2,107 +2,72 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // =========================================================================
-    // 1. HELPER FUNCTIONS
-    // =========================================================================
-    
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
+    // Helper functions
     function isValidId(id) {
       return id is string && id.size() > 0 && id.size() <= 128;
     }
 
-    // =========================================================================
-    // 2. COLLECTION RULES
-    // =========================================================================
+    // Global document rule to ensure unblocked read/write access
+    match /{document=**} {
+      allow read, write: if true;
+    }
 
-    // Connectivity Test
+    // Collection-specific matches
     match /test/{docId} {
-      allow read, write: if isValidId(docId);
+      allow read, write: if true;
     }
 
-    // Clinical Records / Consultas / Procedimentos
     match /records/{recordId} {
-      allow read: if true;
-      allow write: if isValidId(recordId);
+      allow read, write: if true;
     }
 
-    // User Accounts & Team Members
     match /users/{userId} {
-      allow read: if true;
-      allow write: if isValidId(userId);
+      allow read, write: if true;
     }
 
-    // User UID Mapping
     match /users_by_uid/{uid} {
-      allow read: if true;
-      allow write: if isValidId(uid);
+      allow read, write: if true;
     }
 
-    // Patient Directory & Prontuários
     match /patients/{patientId} {
-      allow read: if true;
-      allow write: if isValidId(patientId);
+      allow read, write: if true;
     }
 
-    // Clinical Documents (Receitas, Atestados, Exames)
     match /documents/{docId} {
-      allow read: if true;
-      allow write: if isValidId(docId);
+      allow read, write: if true;
     }
 
-    // Interactive Odontogram Data
     match /odontograms/{odoId} {
-      allow read: if true;
-      allow write: if isValidId(odoId);
+      allow read, write: if true;
     }
 
-    // Notifications
     match /notifications/{notificationId} {
-      allow read: if true;
-      allow write: if isValidId(notificationId);
+      allow read, write: if true;
     }
 
-    // Support Tickets
     match /support_tickets/{ticketId} {
-      allow read: if true;
-      allow write: if isValidId(ticketId);
+      allow read, write: if true;
     }
 
-    // Clinic Settings & White-label Configurations
     match /settings/{settingId} {
-      allow read: if true;
-      allow write: if isValidId(settingId);
+      allow read, write: if true;
     }
 
-    // Brute Force Lockouts (Login Attempts)
     match /login_attempts/{username} {
-      allow read: if true;
-      allow write: if isValidId(username);
+      allow read, write: if true;
     }
 
-    // Device Attempts (Lockouts per device/browser fingerprint)
     match /device_attempts/{deviceId} {
-      allow read: if true;
-      allow write: if isValidId(deviceId);
+      allow read, write: if true;
     }
 
-    // System Announcements & Global Banners
     match /system_announcements/{announcementId} {
-      allow read: if true;
-      allow write: if isValidId(announcementId);
+      allow read, write: if true;
     }
 
-    // SaaS promotion coupons
     match /saas_coupons/{couponId} {
-      allow read: if true;
-      allow write: if isValidId(couponId);
+      allow read, write: if true;
     }
   }
 }
+

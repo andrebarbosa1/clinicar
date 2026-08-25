@@ -49,7 +49,7 @@ export default function CustomDashboardView({
   onStart,
   onFinish,
   onNavigate,
-  clinicName = 'DentalSoft'
+  clinicName = 'mbsolucoes'
 }: { 
   filteredData: DentalRecord[];
   upcomingAppointments?: DentalRecord[];

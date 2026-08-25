@@ -57,6 +57,7 @@ interface UserProfile {
   role: string;
   modules?: string;
   clinicName?: string;
+  clinicId?: string;
   isTrial?: boolean;
   trialPlan?: string;
   trialSpecialty?: string;
@@ -263,7 +264,7 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
 
   // Map each user to their logical Clinic/Tenant grouping
   const usersWithClinic = useMemo(() => {
-    const defaultClinic = clinicSettingsMap['clinic'] || clinicSettingsMap['general'] || clinicSettingsMap['clinic-main'] || clinicName || 'Clínica Principal';
+    const defaultClinic = clinicSettingsMap['clinic-1'] || clinicSettingsMap['clinic'] || clinicName || 'mbsolucoes';
 
     return users.map(user => {
       let clinic = defaultClinic;
@@ -271,7 +272,7 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
       
       if (user.clinicName && user.clinicName.trim().length > 0) {
         clinic = user.clinicName.trim();
-        idRef = user.parentTrialId || user.id;
+        idRef = user.parentTrialId || user.clinicId || user.id;
       } else if (user.parentTrialId) {
         const parent = users.find(u => u.id === user.parentTrialId);
         idRef = user.parentTrialId;
@@ -295,8 +296,10 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
         clinic = 'Sistemas (Suporte Central)';
         idRef = 'SuperCentral';
       } else {
-        const mappedName = clinicSettingsMap['clinic'] || clinicSettingsMap['general'] || clinicSettingsMap['clinic-main'] || defaultClinic;
+        const ownerKey = user.clinicId || user.id;
+        const mappedName = clinicSettingsMap[`clinic-${ownerKey}`] || clinicSettingsMap['clinic'] || defaultClinic;
         clinic = mappedName;
+        idRef = ownerKey;
       }
 
       return {

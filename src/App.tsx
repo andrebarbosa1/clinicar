@@ -637,9 +637,9 @@ const PROCEDURES_OPTIONS = [
 ];
 
 const INITIAL_USERS = [
-  { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com' },
-  { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com' },
-  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Dashboard, Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com' },
+  { id: '1', name: 'Dra. Ana Silveira', role: 'Admin', modules: 'Todos', username: 'ana.admin', password: '123', email: 'andreb202121@gmail.com', clinicName: 'mbsolucoes', clinicId: '1' },
+  { id: '2', name: 'Dr. Roberto Santos', role: 'Dentista', modules: 'Dashboard, Agenda, Pacientes', username: 'roberto', password: '123', email: 'roberto@clinica.com', parentTrialId: '1', clinicId: '1', clinicName: 'mbsolucoes' },
+  { id: '3', name: 'Mariana Lima', role: 'Recepcionista', modules: 'Dashboard, Agenda, Pacientes', username: 'mariana', password: '123', email: 'mariana@clinica.com', parentTrialId: '1', clinicId: '1', clinicName: 'mbsolucoes' },
   { id: 'super-admin-01', name: 'Suporte OdontoDash', role: 'SuperAdmin', modules: 'Todos', username: 'administrador', password: '123', email: 'suporte@odontodash.com.br' },
 ];
 
@@ -650,8 +650,8 @@ export default function App() {
   const [globalBanner, setGlobalBanner] = useState<any>(null);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
 
-  // Identificador de isolamento para sessões de teste grátis (trial)
-  const trialId = currentUser?.isTrial ? currentUser.id : currentUser?.parentTrialId;
+  // Identificador de isolamento para sessões de teste grátis (trial) ou inquilinos (clínicas)
+  const trialId = currentUser?.parentTrialId || currentUser?.clinicId || (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : null)));
 
   // SaaS tenant plan helper computations
   const currentPlanId = currentUser?.trialPlan || 'Pro';
@@ -763,7 +763,7 @@ export default function App() {
     if (typeof window === 'undefined') return true;
     return localStorage.getItem('odonto_cookie_consent') === 'true';
   });
-  const [clinicName, setClinicName] = useState('OdontoDash');
+  const [clinicName, setClinicName] = useState('mbsolucoes');
   const [clinicLogo, setClinicLogo] = useState<string | null>(null);
   const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
   const [providerPhone, setProviderPhone] = useState(() => localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999');
@@ -1112,13 +1112,22 @@ export default function App() {
   }, [isAuthReady, isAuthenticated, isPublicBooking, currentUser?.id, currentUser?.role, currentUser?.name, trialId]);
 
   React.useEffect(() => {
-    const docId = trialId ? `clinic-${trialId}` : 'clinic';
+    if (!isAuthenticated || !currentUser) {
+      setClinicName('mbsolucoes');
+      setClinicLogo(null);
+      setFooterText(`© ${new Date().getFullYear()} mbsolucoes`);
+      return;
+    }
+
+    const clinicOwnerId = currentUser?.parentTrialId || currentUser?.clinicId || (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
+    const docId = `clinic-${clinicOwnerId}`;
+
     const unsub = onSnapshot(doc(db, 'settings', docId), (docSnap) => {
       if (docSnap.exists()) {
         const d = docSnap.data();
-        setClinicName(d.clinicName || 'Dental Analytics');
+        setClinicName(d.clinicName || currentUser?.clinicName || 'mbsolucoes');
         setClinicLogo(d.clinicLogo || null);
-        setFooterText(d.footerText || `© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
+        setFooterText(d.footerText || `© ${new Date().getFullYear()} ${d.clinicName || currentUser?.clinicName || 'mbsolucoes'}`);
         if (d.providerPhone) {
           setProviderPhone(d.providerPhone);
           localStorage.setItem('odonto_cfg_providerPhone', d.providerPhone);
@@ -1127,22 +1136,18 @@ export default function App() {
           setProviderName(d.providerName);
           localStorage.setItem('odonto_cfg_providerName', d.providerName);
         }
-      } else if (trialId) {
-        // Valores padrão limpos para novos ambientes de teste grátis
-        setClinicName('Dental Analytics');
-        setClinicLogo(null);
-        setFooterText(`© ${new Date().getFullYear()} Dental Analytics | Teste Grátis`);
       } else {
-        // Default do sistema geral
-        setClinicName('OdontoDash');
+        // Valores padrão para clínicas que ainda não customizaram suas configurações
+        const fallbackName = currentUser?.clinicName || 'mbsolucoes';
+        setClinicName(fallbackName);
         setClinicLogo(null);
-        setFooterText(`© ${new Date().getFullYear()} Clínica Odontológica | CRO-SP 123456`);
+        setFooterText(`© ${new Date().getFullYear()} ${fallbackName}`);
       }
     }, (error) => {
       console.warn("Settings sync error (branding):", error);
     });
     return unsub;
-  }, [trialId]);
+  }, [isAuthenticated, currentUser?.id, currentUser?.parentTrialId, currentUser?.clinicId, currentUser?.isTrial, currentUser?.role, currentUser?.clinicName]);
 
   const procedures = useMemo(() => ['Todos', ...Array.from(new Set(data.map(r => r.procedimento)))], [data]);
   const statuses = ['Todos', 'Realizado', 'Agendado', 'Pendente', 'Cancelado'];
@@ -1777,6 +1782,8 @@ export default function App() {
 
   const handleCreateUser = async (newUser: any): Promise<boolean> => {
     const id = `user-${Date.now()}`;
+    const clinicOwnerId = currentUser?.parentTrialId || currentUser?.clinicId || (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
+
     const user: any = {
       id,
       name: newUser.name,
@@ -1786,12 +1793,11 @@ export default function App() {
       password: newUser.password || '123',
       email: newUser.email || '',
       phone: newUser.phone || '',
+      clinicName: clinicName || currentUser?.clinicName || 'mbsolucoes',
+      clinicId: clinicOwnerId,
+      parentTrialId: clinicOwnerId,
       createdAt: new Date().toISOString()
     };
-
-    if (trialId) {
-      user.parentTrialId = trialId;
-    }
     
     try {
       console.log("Iniciando criação de usuário no Firestore:", user);
@@ -2294,13 +2300,27 @@ export default function App() {
   };
 
   const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => {
+    const clinicOwnerId = currentUser?.parentTrialId || currentUser?.clinicId || (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
+    const docId = `clinic-${clinicOwnerId}`;
+
     try {
-      const docId = trialId ? `clinic-${trialId}` : 'clinic';
       await setDoc(doc(db, 'settings', docId), {
         id: docId,
         ...updates,
         updatedAt: new Date().toISOString()
       }, { merge: true });
+
+      // Atualiza também no perfil do usuário no Firestore para persistir com o usuário admin
+      if (currentUser?.id) {
+        try {
+          const userUpdates: any = { updatedAt: new Date().toISOString() };
+          if (updates.clinicName) userUpdates.clinicName = updates.clinicName;
+          await setDoc(doc(db, 'users', currentUser.id), userUpdates, { merge: true });
+        } catch (uErr) {
+          console.warn("Could not sync clinicName to user doc:", uErr);
+        }
+      }
+
       if (updates.providerPhone) {
         setProviderPhone(updates.providerPhone);
         localStorage.setItem('odonto_cfg_providerPhone', updates.providerPhone);
@@ -2310,7 +2330,6 @@ export default function App() {
         localStorage.setItem('odonto_cfg_providerName', updates.providerName);
       }
     } catch (e: any) {
-      const docId = trialId ? `clinic-${trialId}` : 'clinic';
       handleFirestoreError(e, OperationType.UPDATE, `settings/${docId}`);
     }
   };
@@ -2482,13 +2501,14 @@ export default function App() {
                 }
               }
 
-              setClinicName(details.clinicName);
+              const clinicNameValue = (details.clinicName || '').trim() || 'mbsolucoes';
+              setClinicName(clinicNameValue);
               const trialIdGenerated = `trial-${Date.now()}`;
               try {
                 // Salva as configurações diretamente no documento isolado do trial gerado
                 await setDoc(doc(db, 'settings', `clinic-${trialIdGenerated}`), {
                   id: `clinic-${trialIdGenerated}`,
-                  clinicName: details.clinicName,
+                  clinicName: clinicNameValue,
                   updatedAt: new Date().toISOString()
                 }, { merge: true });
               } catch (e) {
@@ -2503,6 +2523,8 @@ export default function App() {
               const trialUserProfile = {
                 id: trialIdGenerated,
                 name: details.fullName,
+                clinicName: clinicNameValue,
+                clinicId: trialIdGenerated,
                 role: 'Admin',
                 modules: modulesString,
                 username: usernameTrimmed,
@@ -12815,7 +12837,7 @@ function FreeTrialView({
   footerText: string;
 }) {
   const [fullName, setFullName] = useState('');
-  const [clinicName, setClinicName] = useState('');
+  const [clinicName, setClinicName] = useState('mbsolucoes');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [cpf, setCpf] = useState('');
@@ -13362,7 +13384,7 @@ function FreeTrialView({
                             value={clinicName}
                             onChange={(e) => setClinicName(e.target.value)}
                             className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: Clínica Sorriso"
+                            placeholder="Ex: mbsolucoes"
                           />
                         </div>
                       </div>
