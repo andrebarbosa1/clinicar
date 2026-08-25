@@ -527,33 +527,9 @@ const SecurityUtils = {
   }
 };
 
-// Safe Firebase Initialization
-let app: any = null;
-let db: any = null;
-let auth: any = null;
-
-const isFirebaseConfigured = !!(firebaseConfig && firebaseConfig.apiKey);
-
-if (isFirebaseConfigured) {
-  try {
-    app = initializeApp(firebaseConfig);
-    db = initializeFirestore(app, {
-      experimentalAutoDetectLongPolling: true,
-    }, firebaseConfig.firestoreDatabaseId);
-    auth = getAuth(app);
-
-    // Configure Persistence
-    setPersistence(auth, browserLocalPersistence).catch(err => {
-      console.error("Auth persistence error:", err);
-    });
-  } catch (err) {
-    console.error("Error setting up Firebase app:", err);
-  }
-} else {
-  console.warn("WARNING: Firebase API key is missing. Running in fallback offline/simulated mode.");
-}
-
+import { app, db, auth, isFirebaseConfigured } from './lib/firebase';
 export { app, db, auth };
+
 
 // Connection test as required by integration guidelines
 async function testConnection() {
@@ -9754,9 +9730,7 @@ function AppointmentFormView({
   }, [data, patients]);
 
   const dentistList = useMemo(() => {
-    const names = new Set(users.map(u => u.role === 'Dentista' ? u.name : null).filter(Boolean));
-    // Fallback to MOCK dentists if no users found
-    if (names.size === 0) return ['Dr. Silva', 'Dra. Maria', 'Dr. Ricardo', 'Dra. Ana'];
+    const names = new Set(users.map(u => u && (u.role === 'Dentista' || u.role === 'Cirurgião-Dentista' || (u.isDentist && u.role === 'Admin')) ? u.name : null).filter(Boolean));
     return Array.from(names).sort() as string[];
   }, [users]);
 

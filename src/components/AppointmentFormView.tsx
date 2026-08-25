@@ -115,31 +115,22 @@ export default function AppointmentFormView({
   const [sendAutoWhatsapp, setSendAutoWhatsapp] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dentists list derived from users or defaults
+  // Dentists list derived exclusively from real users added by the clinic admin
   const dentistList = useMemo(() => {
-    const fromUsers = users
-      .filter(u => u.role === 'Dentista')
+    return (users || [])
+      .filter(u => u && (u.role === 'Dentista' || u.role === 'Cirurgião-Dentista' || (u.isDentist && u.role === 'Admin')))
       .map(u => ({
         id: u.id || u.username,
         name: u.name,
-        cro: u.cro || 'CRO-SP 10293',
+        cro: u.cro || 'CRO Ativo',
         specialty: u.specialty || 'Cirurgião-Dentista'
       }));
-
-    if (fromUsers.length > 0) return fromUsers;
-
-    return [
-      { id: '1', name: 'Dr. Roberto Silva', cro: 'CRO-SP 45892', specialty: 'Implantodontia & Prótese' },
-      { id: '2', name: 'Dra. Maria Fernanda', cro: 'CRO-SP 78210', specialty: 'Ortodontia & Estética' },
-      { id: '3', name: 'Dr. Carlos Eduardo', cro: 'CRO-SP 63145', specialty: 'Endodontia' },
-      { id: '4', name: 'Dra. Camila Alves', cro: 'CRO-SP 89520', specialty: 'Clínica Geral & Periodontia' }
-    ];
   }, [users]);
 
-  // Set default dentist
+  // Ensure selected dentist is valid if dentistList changes
   useEffect(() => {
-    if (!dentista && dentistList.length > 0) {
-      setDentista(dentistList[0].name);
+    if (dentista && !dentistList.some(d => d.name === dentista)) {
+      setDentista('');
     }
   }, [dentistList, dentista]);
 
@@ -420,30 +411,66 @@ export default function AppointmentFormView({
                 </div>
 
                 {/* Autocomplete Dropdown */}
-                {isPatientDropdownOpen && filteredPatientsList.length > 0 && (
+                {isPatientDropdownOpen && (
                   <div className="absolute top-full left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-2xl shadow-xl z-30 max-h-56 overflow-y-auto p-1.5">
-                    {filteredPatientsList.map(pat => (
-                      <div
-                        key={pat.id || pat.name}
-                        onClick={() => {
-                          setPaciente(pat.name);
-                          setPatientSearch('');
-                          setIsPatientDropdownOpen(false);
-                        }}
-                        className="p-2.5 rounded-xl hover:bg-cyan-50/60 cursor-pointer flex items-center justify-between text-left transition-all"
-                      >
-                        <div>
-                          <p className="text-xs font-bold text-slate-800">{pat.name}</p>
-                          <p className="text-[10px] text-slate-400">
-                            {pat.cpf ? `CPF: ${pat.cpf} ` : ''}
-                            {pat.phone || pat.telefone ? `• Cel: ${pat.phone || pat.telefone}` : ''}
-                          </p>
+                    {filteredPatientsList.length > 0 ? (
+                      filteredPatientsList.map(pat => (
+                        <div
+                          key={pat.id || pat.name}
+                          onClick={() => {
+                            setPaciente(pat.name);
+                            setPatientSearch('');
+                            setIsPatientDropdownOpen(false);
+                          }}
+                          className="p-2.5 rounded-xl hover:bg-cyan-50/60 cursor-pointer flex items-center justify-between text-left transition-all"
+                        >
+                          <div>
+                            <p className="text-xs font-bold text-slate-800">{pat.name}</p>
+                            <p className="text-[10px] text-slate-400">
+                              {pat.cpf ? `CPF: ${pat.cpf} ` : ''}
+                              {pat.phone || pat.telefone ? `• Cel: ${pat.phone || pat.telefone}` : ''}
+                            </p>
+                          </div>
+                          <span className="text-[10px] font-black uppercase text-brand-cyan bg-cyan-50 px-2 py-0.5 rounded-md">
+                            Selecionar
+                          </span>
                         </div>
-                        <span className="text-[10px] font-black uppercase text-brand-cyan bg-cyan-50 px-2 py-0.5 rounded-md">
-                          Selecionar
-                        </span>
+                      ))
+                    ) : (
+                      <div className="p-3 text-center text-xs text-slate-500">
+                        {patientSearch ? (
+                          <div className="space-y-2">
+                            <p>Nenhum paciente encontrado com "{patientSearch}".</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewPatientName(patientSearch);
+                                setShowQuickNewPatient(true);
+                                setIsPatientDropdownOpen(false);
+                              }}
+                              className="text-brand-cyan font-bold hover:underline cursor-pointer text-xs"
+                            >
+                              + Cadastrar "{patientSearch}" agora
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5 py-1">
+                            <p className="font-bold text-slate-700">Nenhum paciente cadastrado</p>
+                            <p className="text-[11px] text-slate-400">Esta clínica ainda não possui pacientes cadastrados.</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowQuickNewPatient(true);
+                                setIsPatientDropdownOpen(false);
+                              }}
+                              className="text-brand-cyan font-bold hover:underline cursor-pointer text-xs block mx-auto pt-1"
+                            >
+                              + Cadastrar Primeiro Paciente
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
@@ -479,38 +506,50 @@ export default function AppointmentFormView({
               <h2 className="text-sm font-black uppercase text-slate-800 tracking-wide">2. Cirurgião-Dentista Responsável</h2>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {dentistList.map(dent => {
-                const isSelected = dentista === dent.name;
-                return (
-                  <div
-                    key={dent.name}
-                    onClick={() => setDentista(dent.name)}
-                    className={cn(
-                      "p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center gap-3 text-left",
-                      isSelected
-                        ? "bg-indigo-50/50 border-indigo-500/80 ring-2 ring-indigo-500/20"
-                        : "bg-slate-50/50 border-slate-200/70 hover:bg-slate-100/60"
-                    )}
-                  >
-                    <div className={cn(
-                      "w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shrink-0",
-                      isSelected ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
-                    )}>
-                      {dent.name.split(' ')[1] ? dent.name.split(' ')[1][0] : 'D'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-black text-slate-800 truncate">{dent.name}</p>
-                        {isSelected && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+            {dentistList.length === 0 ? (
+              <div className="p-5 bg-slate-50/80 border border-dashed border-slate-200 rounded-2xl text-center space-y-2">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-500 flex items-center justify-center mx-auto">
+                  <Stethoscope className="w-4 h-4" />
+                </div>
+                <p className="text-xs font-black text-slate-700">Nenhum cirurgião-dentista cadastrado</p>
+                <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
+                  Esta seção constará apenas os profissionais que o administrador da clínica cadastrar em <strong>Administração &gt; Membros da Equipe</strong>.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {dentistList.map(dent => {
+                  const isSelected = dentista === dent.name;
+                  return (
+                    <div
+                      key={dent.name}
+                      onClick={() => setDentista(dent.name)}
+                      className={cn(
+                        "p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center gap-3 text-left",
+                        isSelected
+                          ? "bg-indigo-50/50 border-indigo-500/80 ring-2 ring-indigo-500/20"
+                          : "bg-slate-50/50 border-slate-200/70 hover:bg-slate-100/60"
+                      )}
+                    >
+                      <div className={cn(
+                        "w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shrink-0",
+                        isSelected ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600"
+                      )}>
+                        {dent.name.split(' ')[1] ? dent.name.split(' ')[1][0] : 'D'}
                       </div>
-                      <p className="text-[10px] text-indigo-600 font-bold truncate">{dent.specialty}</p>
-                      <p className="text-[9px] text-slate-400">{dent.cro}</p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-black text-slate-800 truncate">{dent.name}</p>
+                          {isSelected && <Check className="w-4 h-4 text-indigo-600 shrink-0" />}
+                        </div>
+                        <p className="text-[10px] text-indigo-600 font-bold truncate">{dent.specialty}</p>
+                        <p className="text-[9px] text-slate-400">{dent.cro}</p>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Card 3: Date & Time Scheduling Grid */}

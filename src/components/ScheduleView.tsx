@@ -148,10 +148,9 @@ export default function ScheduleView({
     dentist: string;
   } | null>(null);
 
-  // Dentist list from users
+  // Dentist list from users added by clinic admin
   const dentistList = useMemo(() => {
-    const names = new Set(users.map(u => u && u.role === 'Dentista' ? u.name : null).filter(Boolean));
-    if (names.size === 0) return ['Dr. Silva', 'Dra. Maria', 'Dr. Daniel', 'Dra. Ana'];
+    const names = new Set(users.map(u => u && (u.role === 'Dentista' || u.role === 'Cirurgião-Dentista' || (u.isDentist && u.role === 'Admin')) ? u.name : null).filter(Boolean));
     return Array.from(names).sort() as string[];
   }, [users]);
 

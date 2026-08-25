@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth, 
   setPersistence, 
@@ -18,20 +18,36 @@ export const isFirebaseConfigured = !!(firebaseConfig && (firebaseConfig as any)
 
 if (isFirebaseConfigured) {
   try {
-    app = initializeApp(firebaseConfig);
-    db = initializeFirestore(app, {
-      experimentalAutoDetectLongPolling: true,
-    }, (firebaseConfig as any).firestoreDatabaseId);
+    app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    const dbId = (firebaseConfig as any).firestoreDatabaseId;
+    if (dbId) {
+      try {
+        db = initializeFirestore(app, {
+          experimentalAutoDetectLongPolling: true,
+        }, dbId);
+      } catch {
+        db = getFirestore(app, dbId);
+      }
+    } else {
+      try {
+        db = initializeFirestore(app, {
+          experimentalAutoDetectLongPolling: true,
+        });
+      } catch {
+        db = getFirestore(app);
+      }
+    }
     auth = getAuth(app);
 
     setPersistence(auth, browserLocalPersistence).catch(err => {
-      console.error("Auth persistence error:", err);
+      console.warn("Auth persistence warning:", err);
     });
   } catch (err) {
     console.error("Error setting up Firebase app:", err);
     try {
-      app = initializeApp(firebaseConfig);
-      db = getFirestore(app);
+      app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const dbId = (firebaseConfig as any).firestoreDatabaseId;
+      db = dbId ? getFirestore(app, dbId) : getFirestore(app);
       auth = getAuth(app);
     } catch (e2) {
       console.error("Fallback setup error:", e2);
@@ -42,3 +58,4 @@ if (isFirebaseConfigured) {
 }
 
 export { app, db, auth };
+

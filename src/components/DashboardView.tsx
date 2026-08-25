@@ -189,7 +189,7 @@ export default function CustomDashboardView({
     
     if (doctors.length === 0) {
       const uniqueDentists = Array.from(new Set(filteredData.map(r => r.dentista).filter(Boolean)));
-      return (uniqueDentists.length ? uniqueDentists : ['Dr. Daniel Smith', 'Dra. Maria Paula']).map((name, idx) => {
+      return uniqueDentists.map((name, idx) => {
         const activeAppt = filteredData.find(r => r.dentista === name && r.status === 'Em Atendimento');
         return {
           id: `dentist-${idx}`,
