@@ -13,6 +13,7 @@ import {
   Sparkles, 
   CheckCircle2, 
   AlertCircle, 
+  AlertTriangle,
   Send, 
   MessageSquare, 
   Plus, 
@@ -54,7 +55,8 @@ interface AppointmentFormViewProps {
   presetPatient?: string;
   isClinicalRecord?: boolean;
   clinicName?: string;
-  onQuickAddPatient?: (patientData: any) => Promise<string | null>;
+  currentUser?: any;
+  onQuickAddPatient?: (patientData: any) => Promise<boolean | string | null>;
 }
 
 export const PROCEDURES_CATALOG = [
@@ -76,6 +78,12 @@ export const PROCEDURES_CATALOG = [
   { name: 'Consulta de Emergência / Alívio de Dor', price: 200, durationMin: 90, category: 'Urgência' },
 ];
 
+export const ALL_COMMERCIAL_TIME_SLOTS = [
+  '08:00', '08:30', '09:00', '09:30', '10:00', '10:30',
+  '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',
+  '14:00', '14:30', '15:00', '15:30', '16:00', '16:30'
+];
+
 export default function AppointmentFormView({
   patients,
   data,
@@ -85,6 +93,7 @@ export default function AppointmentFormView({
   presetPatient = '',
   isClinicalRecord = false,
   clinicName = 'Oral Admin Odontologia',
+  currentUser,
   onQuickAddPatient
 }: AppointmentFormViewProps) {
   const [paciente, setPaciente] = useState(presetPatient);
@@ -101,9 +110,38 @@ export default function AppointmentFormView({
   const initialDate = getSystemInitialDate();
   const [dataVal, setDataVal] = useState(initialDate);
   const [horario, setHorario] = useState('');
+  const [slotViewMode, setSlotViewMode] = useState<'standard_1h30' | 'all_slots' | 'custom'>('standard_1h30');
   
-  // Dentist selection
-  const [dentista, setDentista] = useState('');
+  // Dentists list derived from real users with robust fallback
+  const dentistList = useMemo(() => {
+    const list = (users || [])
+      .filter(u => u && (u.role === 'Dentista' || u.role === 'Cirurgião-Dentista' || (u.isDentist && u.role === 'Admin') || u.role === 'Admin'))
+      .map(u => ({
+        id: u.id || u.username || u.name,
+        name: u.name,
+        cro: u.cro || 'CRO Ativo',
+        specialty: u.specialty || (u.role === 'Admin' ? 'Cirurgião-Dentista (Responsável)' : 'Cirurgião-Dentista')
+      }));
+
+    if (list.length === 0) {
+      list.push({
+        id: currentUser?.id || 'default-dentist',
+        name: currentUser?.name || 'Dr. Cirurgião-Dentista',
+        cro: currentUser?.cro || 'CRO Ativo',
+        specialty: currentUser?.specialty || 'Cirurgião-Dentista'
+      });
+    }
+
+    return list;
+  }, [users, currentUser]);
+
+  // Dentist selection initialized with first available dentist or currentUser
+  const [dentista, setDentista] = useState(() => {
+    if (currentUser?.name && (currentUser?.role === 'Dentista' || currentUser?.role === 'Admin' || currentUser?.role === 'Cirurgião-Dentista')) {
+      return currentUser.name;
+    }
+    return dentistList[0]?.name || '';
+  });
   
   // Procedure & Price
   const [procedimento, setProcedimento] = useState(PROCEDURES_CATALOG[0].name);
@@ -115,22 +153,10 @@ export default function AppointmentFormView({
   const [sendAutoWhatsapp, setSendAutoWhatsapp] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Dentists list derived exclusively from real users added by the clinic admin
-  const dentistList = useMemo(() => {
-    return (users || [])
-      .filter(u => u && (u.role === 'Dentista' || u.role === 'Cirurgião-Dentista' || (u.isDentist && u.role === 'Admin')))
-      .map(u => ({
-        id: u.id || u.username,
-        name: u.name,
-        cro: u.cro || 'CRO Ativo',
-        specialty: u.specialty || 'Cirurgião-Dentista'
-      }));
-  }, [users]);
-
-  // Ensure selected dentist is valid if dentistList changes
+  // Ensure dentist is selected if list loads later
   useEffect(() => {
-    if (dentista && !dentistList.some(d => d.name === dentista)) {
-      setDentista('');
+    if (!dentista && dentistList.length > 0) {
+      setDentista(dentistList[0].name);
     }
   }, [dentistList, dentista]);
 
@@ -150,11 +176,33 @@ export default function AppointmentFormView({
     ).slice(0, 15);
   }, [patients, patientSearch]);
 
-  // Occupied slots calculation for selected dentist and date (1.5h intervals)
-  const slotStatuses = useMemo(() => {
-    if (!dentista || !dataVal) return [];
-    return getOccupiedSlotsForDentist(data, dentista, dataVal);
-  }, [data, dentista, dataVal]);
+  // Occupied slots calculation for selected dentist and date
+  const standardSlotStatuses = useMemo(() => {
+    const effectiveDate = dataVal || initialDate;
+    const effectiveDentist = dentista || dentistList[0]?.name || '';
+    return getOccupiedSlotsForDentist(data, effectiveDentist, effectiveDate);
+  }, [data, dentista, dataVal, initialDate, dentistList]);
+
+  // All 30-min commercial slots calculation
+  const allSlotStatuses = useMemo(() => {
+    const effectiveDate = dataVal || initialDate;
+    const effectiveDentist = dentista || dentistList[0]?.name || '';
+    const isSelectedToday = effectiveDate === format(new Date(), 'yyyy-MM-dd');
+    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+
+    return ALL_COMMERCIAL_TIME_SLOTS.map(slot => {
+      const slotMin = timeToMinutes(slot);
+      const isPast = isSelectedToday && (slotMin <= nowMin);
+      const conflict = effectiveDentist ? findDentistScheduleConflict(data, effectiveDentist, effectiveDate, slot, undefined, 30) : null;
+
+      return {
+        slot,
+        isOccupied: !!conflict,
+        isPast,
+        conflictingPatient: conflict ? conflict.paciente : undefined
+      };
+    });
+  }, [data, dentista, dataVal, initialDate, dentistList]);
 
   const handleProcedureChange = (procName: string) => {
     setProcedimento(procName);
@@ -235,12 +283,34 @@ export default function AppointmentFormView({
 
     setIsSaving(true);
     try {
-      const patientPhone = selectedPatientObj?.phone || selectedPatientObj?.telefone || '';
+      let patientNameToSave = paciente;
+      let patientPhoneToSave = selectedPatientObj?.phone || selectedPatientObj?.telefone || '';
+
+      // If user filled in quick patient creation fields
+      if (showQuickNewPatient && newPatientName.trim()) {
+        patientNameToSave = newPatientName.trim();
+        patientPhoneToSave = newPatientPhone.trim();
+
+        if (onQuickAddPatient) {
+          try {
+            await onQuickAddPatient({
+              name: patientNameToSave,
+              phone: patientPhoneToSave,
+              cpf: newPatientCpf.trim()
+            });
+          } catch (pErr) {
+            console.warn("Aviso ao auto-cadastrar paciente na base:", pErr);
+          }
+        }
+      } else if (selectedPatientObj) {
+        patientNameToSave = selectedPatientObj.name;
+        patientPhoneToSave = selectedPatientObj.phone || selectedPatientObj.telefone || patientPhoneToSave;
+      }
       
       const payload = {
-        paciente: selectedPatientObj ? selectedPatientObj.name : paciente,
-        pacienteId: selectedPatientObj?.id,
-        telefone: patientPhone,
+        paciente: patientNameToSave,
+        pacienteId: selectedPatientObj?.id || '',
+        telefone: patientPhoneToSave,
         data: finalDate,
         horario: finalTime,
         dentista,
@@ -254,13 +324,12 @@ export default function AppointmentFormView({
       const success = await onSave(payload);
       if (success) {
         // If sendAutoWhatsapp is checked and patient has phone, trigger instant send
-        if (sendAutoWhatsapp && patientPhone) {
-          const cleanPhone = patientPhone.replace(/\D/g, '');
+        if (sendAutoWhatsapp && patientPhoneToSave) {
+          const cleanPhone = patientPhoneToSave.replace(/\D/g, '');
           const fullPhone = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
           const encoded = encodeURIComponent(whatsappPreviewMessage);
           
-          // Show confirmation toast / open direct link
-          const openDirect = window.confirm(`Agendamento realizado com sucesso! Deseja abrir o WhatsApp imediatamente para enviar a confirmação para ${selectedPatientObj?.name || paciente}?`);
+          const openDirect = window.confirm(`Agendamento realizado com sucesso para ${patientNameToSave}!\n\nDeseja abrir o WhatsApp imediatamente para enviar a confirmação da consulta?`);
           if (openDirect) {
             window.open(`https://wa.me/${fullPhone}?text=${encoded}`, '_blank');
           }
@@ -629,64 +698,162 @@ export default function AppointmentFormView({
             </div>
 
             {/* Visual Time Slot Grid */}
-            <div className="space-y-2 pt-2">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-bold text-slate-600">Grade de Horários Disponíveis (1h30):</span>
+            <div className="space-y-3 pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-700">Horários Disponíveis:</span>
+                  <div className="inline-flex p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setSlotViewMode('standard_1h30')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer",
+                        slotViewMode === 'standard_1h30' ? "bg-white text-emerald-700 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      Padrão (1h30)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlotViewMode('all_slots')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer",
+                        slotViewMode === 'all_slots' ? "bg-white text-emerald-700 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      Todos (30 min)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlotViewMode('custom')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer",
+                        slotViewMode === 'custom' ? "bg-white text-emerald-700 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      )}
+                    >
+                      Digitar Manual
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-3 text-[10px] font-bold text-slate-400">
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Livre</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400"></span> Ocupado</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-2 bg-slate-50/50 rounded-2xl border border-slate-100">
-                {slotStatuses.map(({ slot, isOccupied, isPast, conflictingPatient }) => {
-                  const isBlocked = isOccupied || isPast;
-                  const isSelected = horario === slot;
-                  const endSlot = minutesToTime(timeToMinutes(slot) + APPOINTMENT_DURATION_MINUTES);
+              {/* Slot Mode: Standard 1.5h */}
+              {slotViewMode === 'standard_1h30' && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-2 bg-slate-50/50 rounded-2xl border border-slate-100">
+                  {standardSlotStatuses.map(({ slot, isOccupied, isPast, conflictingPatient }) => {
+                    const isBlocked = isOccupied || isPast;
+                    const isSelected = horario === slot;
+                    const endSlot = minutesToTime(timeToMinutes(slot) + APPOINTMENT_DURATION_MINUTES);
 
-                  return (
-                    <button
-                      key={slot}
-                      type="button"
-                      disabled={isBlocked}
-                      onClick={() => setHorario(slot)}
-                      className={cn(
-                        "py-3 px-3 rounded-2xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer border text-center relative",
-                        isBlocked 
-                          ? "bg-rose-50/50 text-rose-400 border-rose-100 cursor-not-allowed" 
-                          : isSelected
-                            ? "bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 scale-[1.02]"
-                            : "bg-white text-slate-700 border-slate-200/80 hover:border-emerald-400 hover:bg-emerald-50/40"
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 font-mono text-sm font-black">
-                        <span>{slot}</span>
-                        <span className="text-[10px] opacity-70">às {endSlot}</span>
-                      </div>
-                      
-                      <div className="mt-1">
-                        {isOccupied ? (
-                          <span className="text-[9px] font-bold uppercase bg-rose-100/80 text-rose-700 px-2 py-0.5 rounded-md">
-                            Ocupado {conflictingPatient ? `(${conflictingPatient.split(' ')[0]})` : ''}
-                          </span>
-                        ) : isPast ? (
-                          <span className="text-[9px] font-bold uppercase bg-slate-100 text-slate-400 px-2 py-0.5 rounded-md">
-                            Horário Passado
-                          </span>
-                        ) : isSelected ? (
-                          <span className="text-[9px] font-bold uppercase bg-emerald-700 text-white px-2 py-0.5 rounded-md">
-                            ✓ Selecionado
-                          </span>
-                        ) : (
-                          <span className="text-[9px] font-bold uppercase bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-md">
-                            Disponível
-                          </span>
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        disabled={isBlocked}
+                        onClick={() => setHorario(slot)}
+                        className={cn(
+                          "py-3 px-3 rounded-2xl text-xs font-black transition-all flex flex-col items-center justify-center cursor-pointer border text-center relative",
+                          isBlocked 
+                            ? "bg-rose-50/50 text-rose-400 border-rose-100 cursor-not-allowed" 
+                            : isSelected
+                              ? "bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-600/20 scale-[1.02]"
+                              : "bg-white text-slate-700 border-slate-200/80 hover:border-emerald-400 hover:bg-emerald-50/40"
                         )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      >
+                        <div className="flex items-center gap-1.5 font-mono text-sm font-black">
+                          <span>{slot}</span>
+                          <span className="text-[10px] opacity-70">às {endSlot}</span>
+                        </div>
+                        
+                        <div className="mt-1">
+                          {isOccupied ? (
+                            <span className="text-[9px] font-bold uppercase bg-rose-100/80 text-rose-700 px-2 py-0.5 rounded-md">
+                              Ocupado {conflictingPatient ? `(${conflictingPatient.split(' ')[0]})` : ''}
+                            </span>
+                          ) : isPast ? (
+                            <span className="text-[9px] font-bold uppercase bg-slate-100 text-slate-400 px-2 py-0.5 rounded-md">
+                              Horário Passado
+                            </span>
+                          ) : isSelected ? (
+                            <span className="text-[9px] font-bold uppercase bg-emerald-700 text-white px-2 py-0.5 rounded-md">
+                              ✓ Selecionado
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold uppercase bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-md">
+                              Disponível
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Slot Mode: All 30-min intervals */}
+              {slotViewMode === 'all_slots' && (
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 p-2 bg-slate-50/50 rounded-2xl border border-slate-100">
+                  {allSlotStatuses.map(({ slot, isOccupied, isPast, conflictingPatient }) => {
+                    const isBlocked = isOccupied || isPast;
+                    const isSelected = horario === slot;
+
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        disabled={isBlocked}
+                        onClick={() => setHorario(slot)}
+                        className={cn(
+                          "py-2.5 px-2 rounded-xl text-xs font-mono font-black transition-all flex flex-col items-center justify-center cursor-pointer border text-center relative",
+                          isBlocked 
+                            ? "bg-rose-50 text-rose-300 border-rose-100 cursor-not-allowed line-through" 
+                            : isSelected
+                              ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                              : "bg-white text-slate-700 border-slate-200/80 hover:border-emerald-400 hover:bg-emerald-50/50"
+                        )}
+                      >
+                        <span>{slot}</span>
+                        <span className="text-[8px] font-sans font-bold mt-0.5 opacity-80">
+                          {isOccupied ? 'Ocupado' : isPast ? 'Expirado' : isSelected ? 'Escolhido' : 'Livre'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Slot Mode: Custom Time Entry */}
+              {slotViewMode === 'custom' && (
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Clock className="w-5 h-5 text-emerald-600" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">Definir Horário Personalizado</p>
+                      <p className="text-[10px] text-slate-400">Permite agendar em qualquer minuto dentro do expediente (08:00 às 17:00).</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="time"
+                      value={horario}
+                      min="08:00"
+                      max="17:00"
+                      onChange={e => setHorario(e.target.value)}
+                      className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none"
+                    />
+                    {horario && (
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100">
+                        Horário fixado: {horario} hrs
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -831,6 +998,18 @@ export default function AppointmentFormView({
 
             {/* Action Buttons */}
             <div className="space-y-2 pt-2">
+              {(!paciente || !horario || !dentista) && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-[10px] text-amber-800 font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>
+                    Para confirmar, informe: 
+                    {!paciente && ' [Paciente]'}
+                    {!dentista && ' [Dentista]'}
+                    {!horario && ' [Horário da Consulta]'}
+                  </span>
+                </div>
+              )}
+
               <button
                 type="button"
                 disabled={isSaving || !paciente || !horario || !dentista}

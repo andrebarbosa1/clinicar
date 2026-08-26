@@ -36,15 +36,21 @@ import {
   HeartPulse,
   Pill,
   Smile,
-  FileBadge
+  FileBadge,
+  Sliders,
+  Settings2,
+  Send
 } from 'lucide-react';
 import { format, parseISO, differenceInYears, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
-import { DentalRecord } from '../types';
+import { DentalRecord, AnamnesisCustomField, PatientAnamnesis } from '../types';
 import { cn, formatCurrency } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import AnamnesisFormBuilderModal from './AnamnesisFormBuilderModal';
+import AnamnesisPatientEditModal from './AnamnesisPatientEditModal';
+import DentalBudgetModal, { DentalBudget } from './DentalBudgetModal';
 
 interface PatientRecordViewProps {
   patientName: string;
@@ -90,7 +96,9 @@ export default function PatientRecordView({
   >('Resumo');
 
   const [showPlanDetails, setShowPlanDetails] = useState<any | null>(null);
-  const [showBudgetModal, setShowBudgetModal] = useState<any | null>(null);
+  const [showBudgetModal, setShowBudgetModal] = useState<boolean>(false);
+  const [selectedPlanForBudget, setSelectedPlanForBudget] = useState<any | null>(null);
+  const [selectedBudgetForView, setSelectedBudgetForView] = useState<DentalBudget | null>(null);
   const [isCreatingPlan, setIsCreatingPlan] = useState(false);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
@@ -102,6 +110,71 @@ export default function PatientRecordView({
     title: '',
     items: [] as { procedure: string; price: number; teeth?: string }[],
   });
+
+  // Dynamic Anamnesis Custom Fields State & Real-time Firestore Sync
+  const [customFields, setCustomFields] = useState<AnamnesisCustomField[]>([]);
+  const [showFormBuilder, setShowFormBuilder] = useState(false);
+  const [showPatientAnamnesisModal, setShowPatientAnamnesisModal] = useState(false);
+
+  const clinicOwnerId = useMemo(() => {
+    return currentUser?.parentTrialId || 
+      currentUser?.clinicId || 
+      (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
+  }, [currentUser]);
+
+  const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'SuperAdmin' || currentUser?.isSuperAdmin;
+
+  useEffect(() => {
+    if (!db || !clinicOwnerId) return;
+    const settingsRef = doc(db, 'settings', `clinic-${clinicOwnerId}`);
+    const unsub = onSnapshot(
+      settingsRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const sData = docSnap.data();
+          if (Array.isArray(sData?.anamnesisCustomFields)) {
+            setCustomFields(sData.anamnesisCustomFields);
+          }
+        }
+      },
+      (err) => {
+        console.error('Erro ao sincronizar campos de anamnese:', err);
+      }
+    );
+    return () => unsub();
+  }, [clinicOwnerId]);
+
+  const handleSaveCustomFields = async (newFields: AnamnesisCustomField[]): Promise<boolean> => {
+    try {
+      const settingsRef = doc(db, 'settings', `clinic-${clinicOwnerId}`);
+      await setDoc(settingsRef, {
+        anamnesisCustomFields: newFields,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser?.name || 'Admin'
+      }, { merge: true });
+      setCustomFields(newFields);
+      return true;
+    } catch (err: any) {
+      console.error('Erro ao salvar campos personalizados no Firestore:', err);
+      alert('Erro ao salvar configurações no Firestore: ' + (err.message || 'Erro desconhecido'));
+      return false;
+    }
+  };
+
+  const handleSavePatientAnamnesis = async (pId: string, updatedData: PatientAnamnesis): Promise<boolean> => {
+    try {
+      const patientRef = doc(db, 'patients', pId);
+      await setDoc(patientRef, {
+        anamnesis: updatedData,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+      return true;
+    } catch (err: any) {
+      console.error('Erro ao salvar anamnese do paciente:', err);
+      alert('Erro ao salvar anamnese: ' + (err.message || 'Erro desconhecido'));
+      return false;
+    }
+  };
 
   const availableProcedures = [
     { name: 'Limpeza e Profilaxia', price: 250 },
@@ -175,6 +248,253 @@ export default function PatientRecordView({
     { id: 'Orçamentos', label: 'Orçamentos', icon: DollarSign },
     { id: 'Histórico', label: 'Histórico', icon: History },
   ] as const;
+
+  // Real & Persistent Treatment Plans State
+  const [treatmentPlans, setTreatmentPlans] = useState<any[]>(() => {
+    if (Array.isArray(patient?.treatmentPlans) && patient.treatmentPlans.length > 0) {
+      return patient.treatmentPlans;
+    }
+    return [
+      {
+        id: 'plan-1',
+        title: 'Reabilitação Estética & Ortodontia',
+        date: '12/03/2024',
+        items: [
+          { procedure: 'Limpeza e Profilaxia Ultrassônica', price: 250, teeth: 'Geral' },
+          { procedure: 'Clareamento Dental a Laser / Consultório', price: 800, teeth: 'Geral' },
+          { procedure: 'Restauração em Resina Composta (2 Faces)', price: 350, teeth: 'Dente 16' },
+          { procedure: 'Coroa em Cerâmica / E-max', price: 3100, teeth: 'Dente 21' },
+        ],
+        status: 'Em Execução',
+        progress: 60,
+        total: 4500,
+        dentist: patient?.dentistaResponsavel || patient?.dentist || 'Clínico Geral'
+      },
+      {
+        id: 'plan-2',
+        title: 'Tratamento Endodôntico e Prótese',
+        date: '05/02/2024',
+        items: [
+          { procedure: 'Tratamento de Canal (Endodontia Multirradicular)', price: 1200, teeth: 'Dente 36' },
+          { procedure: 'Coroa em Cerâmica / E-max', price: 1600, teeth: 'Dente 36' },
+        ],
+        status: 'Aprovado',
+        progress: 100,
+        total: 2800,
+        dentist: patient?.dentistaResponsavel || patient?.dentist || 'Clínico Geral'
+      },
+    ];
+  });
+
+  // Real & Persistent Budgets State
+  const [budgets, setBudgets] = useState<DentalBudget[]>(() => {
+    if (Array.isArray(patient?.budgets) && patient.budgets.length > 0) {
+      return patient.budgets;
+    }
+    return [
+      {
+        id: 'orc-1',
+        budgetNumber: '2024-001',
+        planTitle: 'Reabilitação Estética & Ortodontia',
+        patientId: patient.id || patient.name,
+        patientName: patientData.name,
+        patientPhone: patientData.phone,
+        dentistName: patientData.dentist,
+        date: '2024-03-12',
+        validUntil: '2024-04-12',
+        items: [
+          { id: '1', procedure: 'Limpeza e Profilaxia Ultrassônica', teeth: 'Geral', quantity: 1, unitPrice: 250, total: 250 },
+          { id: '2', procedure: 'Clareamento Dental a Laser / Consultório', teeth: 'Geral', quantity: 1, unitPrice: 800, total: 800 },
+          { id: '3', procedure: 'Restauração em Resina Composta (2 Faces)', teeth: 'Dente 16', quantity: 1, unitPrice: 350, total: 350 },
+          { id: '4', procedure: 'Coroa em Cerâmica / E-max', teeth: 'Dente 21', quantity: 1, unitPrice: 3100, total: 3100 },
+        ],
+        subtotal: 4500,
+        discountType: 'percent',
+        discountValue: 10,
+        discountAmount: 450,
+        total: 4050,
+        paymentMethod: 'Cartão de Crédito',
+        installments: 12,
+        installmentValue: 337.50,
+        status: 'Aprovado',
+        notes: 'Incluso acompanhamento semestral e manutenção preventiva.'
+      },
+      {
+        id: 'orc-2',
+        budgetNumber: '2023-085',
+        planTitle: 'Limpeza e Restaurações Preventivas',
+        patientId: patient.id || patient.name,
+        patientName: patientData.name,
+        patientPhone: patientData.phone,
+        dentistName: patientData.dentist,
+        date: '2023-12-05',
+        validUntil: '2024-01-05',
+        items: [
+          { id: '1', procedure: 'Limpeza e Profilaxia Ultrassônica', teeth: 'Geral', quantity: 1, unitPrice: 250, total: 250 },
+          { id: '2', procedure: 'Restauração em Resina Composta (1 Face)', teeth: 'Dente 24', quantity: 1, unitPrice: 950, total: 950 },
+        ],
+        subtotal: 1200,
+        discountType: 'percent',
+        discountValue: 0,
+        discountAmount: 0,
+        total: 1200,
+        paymentMethod: 'À Vista (PIX/Dinheiro)',
+        installments: 1,
+        installmentValue: 1200,
+        status: 'Concluído',
+        notes: 'Pago à vista via PIX.'
+      },
+      {
+        id: 'orc-3',
+        budgetNumber: '2023-042',
+        planTitle: 'Endodontia e Coroa',
+        patientId: patient.id || patient.name,
+        patientName: patientData.name,
+        patientPhone: patientData.phone,
+        dentistName: patientData.dentist,
+        date: '2023-08-20',
+        validUntil: '2023-09-20',
+        items: [
+          { id: '1', procedure: 'Tratamento de Canal (Endodontia Multirradicular)', teeth: 'Dente 36', quantity: 1, unitPrice: 1600, total: 1600 },
+          { id: '2', procedure: 'Coroa em Cerâmica / E-max', teeth: 'Dente 36', quantity: 1, unitPrice: 2200, total: 2200 },
+        ],
+        subtotal: 3800,
+        discountType: 'fixed',
+        discountValue: 190,
+        discountAmount: 190,
+        total: 3610,
+        paymentMethod: 'Cartão de Crédito',
+        installments: 6,
+        installmentValue: 601.66,
+        status: 'Concluído',
+        notes: 'Tratamento concluído.'
+      },
+    ];
+  });
+
+  // Save budget handler
+  const handleSaveBudget = async (budget: DentalBudget) => {
+    setBudgets(prev => {
+      const existingIdx = prev.findIndex(b => b.id === budget.id || b.budgetNumber === budget.budgetNumber);
+      let nextBudgets: DentalBudget[];
+      if (existingIdx >= 0) {
+        nextBudgets = [...prev];
+        nextBudgets[existingIdx] = budget;
+      } else {
+        nextBudgets = [budget, ...prev];
+      }
+
+      if (db && patient?.id) {
+        setDoc(doc(db, 'patients', patient.id), {
+          budgets: nextBudgets,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn('Aviso ao sincronizar orçamento no Firestore:', err));
+      }
+
+      return nextBudgets;
+    });
+
+    // Auto-update plan status to 'Aprovado' if applicable
+    if (budget.planTitle) {
+      setTreatmentPlans(prev => {
+        const nextPlans = prev.map(p => {
+          if (p.title === budget.planTitle && p.status === 'Pendente') {
+            return { ...p, status: 'Aprovado' };
+          }
+          return p;
+        });
+        if (db && patient?.id) {
+          setDoc(doc(db, 'patients', patient.id), {
+            treatmentPlans: nextPlans,
+            updatedAt: new Date().toISOString()
+          }, { merge: true }).catch(err => console.warn('Aviso ao sincronizar planos no Firestore:', err));
+        }
+        return nextPlans;
+      });
+    }
+
+    setActiveTab('Orçamentos');
+    alert(`Orçamento #${budget.budgetNumber} gerado e salvo com sucesso!`);
+  };
+
+  const handleDeleteBudget = async (id: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir este orçamento?')) return;
+    setBudgets(prev => {
+      const nextBudgets = prev.filter(b => b.id !== id);
+      if (db && patient?.id) {
+        setDoc(doc(db, 'patients', patient.id), {
+          budgets: nextBudgets,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn('Aviso ao excluir orçamento no Firestore:', err));
+      }
+      return nextBudgets;
+    });
+  };
+
+  const handleUpdateBudgetStatus = async (id: string, newStatus: DentalBudget['status']) => {
+    setBudgets(prev => {
+      const nextBudgets = prev.map(b => b.id === id ? { ...b, status: newStatus } : b);
+      if (db && patient?.id) {
+        setDoc(doc(db, 'patients', patient.id), {
+          budgets: nextBudgets,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn('Aviso ao atualizar status no Firestore:', err));
+      }
+      return nextBudgets;
+    });
+  };
+
+  const handleDeletePlan = async (planId: string) => {
+    if (!window.confirm('Tem certeza que deseja excluir este plano de tratamento?')) return;
+    setTreatmentPlans(prev => {
+      const nextPlans = prev.filter(p => p.id !== planId);
+      if (db && patient?.id) {
+        setDoc(doc(db, 'patients', patient.id), {
+          treatmentPlans: nextPlans,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn('Aviso ao excluir plano no Firestore:', err));
+      }
+      return nextPlans;
+    });
+  };
+
+  const handleSaveNewPlan = async () => {
+    if (!newPlan.title.trim()) {
+      alert('Por favor, defina um título para o plano de tratamento');
+      return;
+    }
+    if (newPlan.items.length === 0) {
+      alert('Adicione pelo menos um procedimento ao plano');
+      return;
+    }
+
+    const calculatedTotal = newPlan.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
+    const createdPlan = {
+      id: `plan-${Date.now()}`,
+      title: newPlan.title.trim(),
+      date: format(new Date(), 'dd/MM/yyyy'),
+      items: newPlan.items,
+      status: 'Pendente',
+      progress: 0,
+      total: calculatedTotal,
+      dentist: patientData.dentist || currentUser?.name || 'Cirurgião-Dentista'
+    };
+
+    setTreatmentPlans(prev => {
+      const nextPlans = [createdPlan, ...prev];
+      if (db && patient?.id) {
+        setDoc(doc(db, 'patients', patient.id), {
+          treatmentPlans: nextPlans,
+          updatedAt: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn('Aviso ao gravar plano no Firestore:', err));
+      }
+      return nextPlans;
+    });
+
+    setIsCreatingPlan(false);
+    setNewPlan({ title: '', items: [] });
+    alert(`Plano "${createdPlan.title}" criado com sucesso! Agora você já pode clicar em "Gerar Orçamento" para definir as condições de pagamento.`);
+  };
 
   const handleWhatsApp = () => {
     if (!patientData.phone || patientData.phone === 'Não informado') {
@@ -463,63 +783,230 @@ export default function PatientRecordView({
 
         {/* 3. ANAMNESE */}
         {activeTab === 'Anamnese' && (
-          <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-6">
+          <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-8">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
               <div>
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                  <HeartPulse className="w-5 h-5 text-rose-500" />
-                  Questionário de Saúde & Anamnese
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <HeartPulse className="w-5 h-5 text-rose-500" />
+                    Questionário de Saúde & Anamnese
+                  </h3>
+                  {customFields.length > 0 && (
+                    <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-cyan-50 text-brand-cyan border border-brand-cyan/20">
+                      +{customFields.filter(f => f.active).length} Campos Personalizados
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-400 mt-1">
                   Informações de saúde essenciais para segurança em intervenções cirúrgicas e anestésicas
                 </p>
               </div>
 
-              <button
-                onClick={() => onUpdateAnamnesis(patient.id || patient.name)}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer self-start sm:self-auto shadow-sm"
-              >
-                <Edit3 className="w-4 h-4" />
-                <span>Atualizar Questionário</span>
-              </button>
-            </div>
+              <div className="flex items-center gap-2.5 flex-wrap self-start sm:self-auto">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFormBuilder(true)}
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-xs border border-slate-200"
+                    title="Definir campos e perguntas dinâmicas para a clínica no Firestore"
+                  >
+                    <Sliders className="w-4 h-4 text-brand-cyan" />
+                    <span>Editor de Campos (Admin)</span>
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 text-white font-bold">
+                      {customFields.length}
+                    </span>
+                  </button>
+                )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[
-                { label: 'Possui Alergias?', value: anamnesis.hasAllergy ? `Sim (${anamnesis.allergyDetails || 'Geral'})` : 'Não', alert: !!anamnesis.hasAllergy },
-                { label: 'Doenças Cardiovasculares?', value: anamnesis.hasHeartProblem ? 'Sim' : 'Não', alert: !!anamnesis.hasHeartProblem },
-                { label: 'Hipertensão Arterial?', value: anamnesis.hasHypertension ? 'Sim' : 'Não', alert: !!anamnesis.hasHypertension },
-                { label: 'Diabetes Mellitus?', value: anamnesis.hasDiabetes ? 'Sim' : 'Não', alert: !!anamnesis.hasDiabetes },
-                { label: 'Uso Contínuo de Medicamentos?', value: anamnesis.takesMedication ? `Sim (${anamnesis.medicationDetails || ''})` : 'Não', alert: !!anamnesis.takesMedication },
-                { label: 'Fumante / Tabagista?', value: anamnesis.isSmoker ? 'Sim' : 'Não', alert: !!anamnesis.isSmoker },
-                { label: 'Hábito de Sangramento Excessivo?', value: anamnesis.hasBleedingHistory ? 'Sim' : 'Não', alert: !!anamnesis.hasBleedingHistory },
-                { label: 'Gestante / Lactante?', value: anamnesis.isPregnant ? 'Sim' : 'Não', alert: !!anamnesis.isPregnant },
-                { label: 'Reação a Anestésicos?', value: anamnesis.hasAnesthesiaReaction ? 'Sim' : 'Não', alert: !!anamnesis.hasAnesthesiaReaction },
-              ].map((item, idx) => (
-                <div
-                  key={idx}
-                  className={cn(
-                    "p-4 rounded-2xl border transition-all",
-                    item.alert ? "bg-rose-50/60 border-rose-200 text-rose-900" : "bg-slate-50/60 border-slate-200/70 text-slate-800"
-                  )}
+                <button
+                  type="button"
+                  onClick={() => setShowPatientAnamnesisModal(true)}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm"
                 >
-                  <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">{item.label}</div>
-                  <div className="flex items-center gap-2 font-bold text-sm">
-                    {item.alert ? (
-                      <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                    ) : (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                    )}
-                    <span>{item.value}</span>
-                  </div>
-                </div>
-              ))}
+                  <Edit3 className="w-4 h-4" />
+                  <span>Atualizar Respostas</span>
+                </button>
+              </div>
             </div>
 
-            {anamnesis.generalNotes && (
-              <div className="p-5 rounded-2xl bg-amber-50/60 border border-amber-200 text-amber-900 space-y-1">
-                <div className="text-[10px] font-black uppercase tracking-wider text-amber-600">Observações Clínicas Adicionais</div>
-                <p className="text-xs leading-relaxed font-medium">{anamnesis.generalNotes}</p>
+            {/* Standard Health Questions Section */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  1. Perguntas Padrão de Saúde & Risco Cirúrgico
+                </h4>
+                <span className="text-[10px] text-slate-400 font-bold">Padrão CFO</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[
+                  { label: 'Possui Alergias?', value: anamnesis.hasAllergy ? `Sim (${anamnesis.allergyDetails || 'Geral'})` : 'Não', alert: !!anamnesis.hasAllergy },
+                  { label: 'Doenças Cardiovasculares?', value: anamnesis.hasHeartProblem ? 'Sim' : 'Não', alert: !!anamnesis.hasHeartProblem },
+                  { label: 'Hipertensão Arterial?', value: anamnesis.hasHypertension ? 'Sim' : 'Não', alert: !!anamnesis.hasHypertension },
+                  { label: 'Diabetes Mellitus?', value: anamnesis.hasDiabetes ? 'Sim' : 'Não', alert: !!anamnesis.hasDiabetes },
+                  { label: 'Uso Contínuo de Medicamentos?', value: anamnesis.takesMedication ? `Sim (${anamnesis.medicationDetails || ''})` : 'Não', alert: !!anamnesis.takesMedication },
+                  { label: 'Fumante / Tabagista?', value: anamnesis.isSmoker ? 'Sim' : 'Não', alert: !!anamnesis.isSmoker },
+                  { label: 'Hábito de Sangramento Excessivo?', value: anamnesis.hasBleedingHistory ? 'Sim' : 'Não', alert: !!anamnesis.hasBleedingHistory },
+                  { label: 'Gestante / Lactante?', value: anamnesis.isPregnant ? 'Sim' : 'Não', alert: !!anamnesis.isPregnant },
+                  { label: 'Reação a Anestésicos?', value: anamnesis.hasAnesthesiaReaction ? 'Sim' : 'Não', alert: !!anamnesis.hasAnesthesiaReaction },
+                ].map((item, idx) => (
+                  <div
+                    key={idx}
+                    className={cn(
+                      "p-4 rounded-2xl border transition-all",
+                      item.alert ? "bg-rose-50/60 border-rose-200 text-rose-900" : "bg-slate-50/60 border-slate-200/70 text-slate-800"
+                    )}
+                  >
+                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1">{item.label}</div>
+                    <div className="flex items-center gap-2 font-bold text-sm">
+                      {item.alert ? (
+                        <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      )}
+                      <span>{item.value}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Dynamic Clinic Custom Questions Section */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                    2. Perguntas Personalizadas da Clínica
+                  </h4>
+                  {customFields.length > 0 && (
+                    <span className="text-[10px] font-bold text-slate-400">
+                      ({customFields.filter(f => f.active).length} ativas)
+                    </span>
+                  )}
+                </div>
+
+                {isAdmin && customFields.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFormBuilder(true)}
+                    className="text-xs font-bold text-brand-cyan hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    <Settings2 className="w-3.5 h-3.5" />
+                    <span>Gerenciar Campos Dinâmicos</span>
+                  </button>
+                )}
+              </div>
+
+              {customFields.filter(f => f.active).length === 0 ? (
+                <div className="p-6 rounded-2xl bg-slate-50/70 border border-dashed border-slate-200 text-center space-y-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-cyan-50 text-brand-cyan flex items-center justify-center mx-auto">
+                    <Sliders className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-black text-slate-800">Nenhum campo personalizado cadastrado</p>
+                    <p className="text-[11px] text-slate-400 max-w-md mx-auto mt-0.5">
+                      O administrador da clínica pode criar perguntas clínicas adicionais (ex: anticoagulantes, bifosfonatos, ATM, anestésicos) salvas no Firestore.
+                    </p>
+                  </div>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowFormBuilder(true)}
+                      className="px-4 py-2 bg-brand-cyan hover:bg-cyan-500 text-slate-950 rounded-xl text-xs font-black uppercase tracking-wider transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-sm mt-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Abrir Editor de Formulário</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {customFields.filter(f => f.active).map((field) => {
+                    const val = anamnesis.customFields?.[field.id];
+                    const isAnswered = val !== undefined && val !== null && val !== '';
+                    const isAlert = field.isAlertIfTrue && (
+                      val === true || 
+                      val === 'Sim' || 
+                      (field.alertTriggerValue && val === field.alertTriggerValue)
+                    );
+                    
+                    let displayValue = 'Não preenchido';
+                    if (isAnswered) {
+                      if (field.type === 'boolean') {
+                        displayValue = val ? 'Sim' : 'Não';
+                      } else {
+                        displayValue = String(val);
+                      }
+                    }
+
+                    return (
+                      <div
+                        key={field.id}
+                        className={cn(
+                          "p-4 rounded-2xl border transition-all flex flex-col justify-between gap-2.5",
+                          isAlert
+                            ? "bg-rose-50/70 border-rose-200 text-rose-900"
+                            : isAnswered
+                            ? "bg-slate-50/70 border-slate-200/80 text-slate-800"
+                            : "bg-slate-50/40 border-dashed border-slate-200 text-slate-400"
+                        )}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                              {field.category || 'Personalizado'}
+                            </span>
+                            {field.isAlertIfTrue && (
+                              <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-rose-100 text-rose-700 flex items-center gap-0.5">
+                                <AlertCircle className="w-2.5 h-2.5" />
+                                Risco
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs font-bold text-slate-800 leading-snug">
+                            {field.label}
+                          </div>
+                          {field.helperText && (
+                            <div className="text-[10px] text-slate-400 mt-0.5">{field.helperText}</div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 font-bold text-xs pt-2 border-t border-slate-200/50">
+                          {isAlert ? (
+                            <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                          ) : isAnswered ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                          ) : (
+                            <Info className="w-4 h-4 text-slate-300 shrink-0" />
+                          )}
+                          <span className={cn(
+                            isAlert ? "text-rose-900 font-black" : isAnswered ? "text-slate-700" : "text-slate-400 italic"
+                          )}>
+                            {displayValue}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Notes & Complaints */}
+            {(anamnesis.chiefComplaint || anamnesis.medicalHistory || anamnesis.generalNotes) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                {anamnesis.chiefComplaint && (
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-slate-800 space-y-1">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-400">Queixa Principal</div>
+                    <p className="text-xs leading-relaxed font-medium">{anamnesis.chiefComplaint}</p>
+                  </div>
+                )}
+                {anamnesis.generalNotes && (
+                  <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200 text-amber-900 space-y-1">
+                    <div className="text-[10px] font-black uppercase tracking-wider text-amber-600">Observações Clínicas Adicionais</div>
+                    <p className="text-xs leading-relaxed font-medium">{anamnesis.generalNotes}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -686,13 +1173,19 @@ export default function PatientRecordView({
             <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800">Planos de Tratamento Odontológico</h3>
-                  <p className="text-xs text-slate-400 mt-1">Propostas de reabilitação e planejamento com estimativa de investimento</p>
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <FileBadge className="w-5 h-5 text-brand-cyan" />
+                    Planos de Tratamento Odontológico
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Planejamentos clínicos estruturados e geração instantânea de orçamentos e propostas comerciais
+                  </p>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => setIsCreatingPlan(!isCreatingPlan)}
-                  className="px-5 py-2.5 bg-brand-cyan hover:bg-cyan-500 text-slate-950 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-brand-cyan/20 self-start sm:self-auto"
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md self-start sm:self-auto"
                 >
                   <Plus className="w-4 h-4" />
                   <span>Novo Plano</span>
@@ -701,12 +1194,25 @@ export default function PatientRecordView({
 
               {/* Creator Form */}
               {isCreatingPlan && (
-                <div className="mt-6 p-6 rounded-2xl bg-slate-50 border border-slate-200 space-y-6">
+                <div className="mt-6 p-6 rounded-2xl bg-slate-50 border border-slate-200 space-y-6 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">
+                      Montar Novo Plano de Tratamento
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingPlan(false)}
+                      className="text-slate-400 hover:text-slate-600 p-1"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Título do Plano</label>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Título / Diagnóstico do Plano</label>
                     <input
                       type="text"
-                      placeholder="Ex: Reabilitação Oral com Implantes"
+                      placeholder="Ex: Reabilitação Oral com Implantes e Estética"
                       value={newPlan.title}
                       onChange={(e) => setNewPlan({ ...newPlan, title: e.target.value })}
                       className="w-full p-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
@@ -714,7 +1220,9 @@ export default function PatientRecordView({
                   </div>
 
                   <div className="space-y-3">
-                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Procedimentos Rápidos</label>
+                    <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+                      + Clique para Adicionar Procedimentos ao Plano:
+                    </label>
                     <div className="flex flex-wrap gap-2">
                       {availableProcedures.map((proc) => (
                         <button
@@ -723,12 +1231,12 @@ export default function PatientRecordView({
                           onClick={() => {
                             setNewPlan({
                               ...newPlan,
-                              items: [...newPlan.items, { procedure: proc.name, price: proc.price }],
+                              items: [...newPlan.items, { procedure: proc.name, price: proc.price, teeth: 'Geral' }],
                             });
                           }}
-                          className="px-3 py-2 bg-white hover:bg-brand-cyan hover:text-slate-950 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all flex items-center gap-2 cursor-pointer"
+                          className="px-3 py-2 bg-white hover:bg-brand-cyan hover:text-slate-950 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 transition-all flex items-center gap-2 cursor-pointer shadow-2xs"
                         >
-                          <Plus className="w-3.5 h-3.5" />
+                          <Plus className="w-3.5 h-3.5 text-brand-cyan" />
                           <span>{proc.name}</span>
                           <span className="text-[10px] font-bold text-slate-400 font-mono">({formatCurrency(proc.price)})</span>
                         </button>
@@ -738,21 +1246,27 @@ export default function PatientRecordView({
 
                   {newPlan.items.length > 0 && (
                     <div className="space-y-2">
-                      <div className="text-xs font-bold text-slate-700">Procedimentos Selecionados:</div>
+                      <div className="text-xs font-bold text-slate-700">Procedimentos Inclusos no Plano ({newPlan.items.length}):</div>
                       <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 p-2">
                         {newPlan.items.map((item, index) => (
-                          <div key={index} className="py-2 px-3 flex items-center justify-between text-xs">
-                            <span className="font-semibold text-slate-800">{item.procedure}</span>
+                          <div key={index} className="py-2.5 px-3 flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-3">
+                              <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-bold flex items-center justify-center">
+                                {index + 1}
+                              </span>
+                              <span className="font-semibold text-slate-800">{item.procedure}</span>
+                            </div>
                             <div className="flex items-center gap-3">
                               <span className="font-bold text-slate-900">{formatCurrency(item.price)}</span>
                               <button
+                                type="button"
                                 onClick={() => {
                                   setNewPlan({
                                     ...newPlan,
                                     items: newPlan.items.filter((_, i) => i !== index),
                                   });
                                 }}
-                                className="text-rose-500 hover:text-rose-700"
+                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -762,27 +1276,23 @@ export default function PatientRecordView({
                       </div>
 
                       <div className="text-right pt-2 text-sm font-black text-slate-900">
-                        Total do Plano: {formatCurrency(newPlan.items.reduce((sum, item) => sum + item.price, 0))}
+                        Total Estimado: {formatCurrency(newPlan.items.reduce((sum, item) => sum + (Number(item.price) || 0), 0))}
                       </div>
                     </div>
                   )}
 
-                  <div className="flex justify-end gap-3 pt-2">
+                  <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
                     <button
+                      type="button"
                       onClick={() => setIsCreatingPlan(false)}
-                      className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-200"
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-200 transition-colors"
                     >
                       Cancelar
                     </button>
                     <button
-                      onClick={() => {
-                        if (!newPlan.title) return alert('Por favor, defina um título para o plano');
-                        if (newPlan.items.length === 0) return alert('Adicione pelo menos um procedimento');
-                        alert(`Plano "${newPlan.title}" criado com sucesso!`);
-                        setIsCreatingPlan(false);
-                        setNewPlan({ title: '', items: [] });
-                      }}
-                      className="px-6 py-2.5 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all"
+                      type="button"
+                      onClick={handleSaveNewPlan}
+                      className="px-6 py-2.5 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-md cursor-pointer"
                     >
                       Salvar Plano de Tratamento
                     </button>
@@ -790,63 +1300,96 @@ export default function PatientRecordView({
                 </div>
               )}
 
-              {/* Existing Plans */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                {[
-                  {
-                    title: 'Reabilitação Estética & Ortodontia',
-                    date: '12/03/2024',
-                    items: 3,
-                    status: 'Em Execução',
-                    progress: 60,
-                    total: 4500,
-                  },
-                  {
-                    title: 'Tratamento Endodôntico e Prótese',
-                    date: '05/02/2024',
-                    items: 2,
-                    status: 'Aprovado',
-                    progress: 100,
-                    total: 2800,
-                  },
-                ].map((plano, i) => (
-                  <div key={i} className="p-5 rounded-2xl border border-slate-200/80 bg-slate-50/50 hover:bg-white transition-all space-y-4">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-bold text-slate-900 text-sm">{plano.title}</h4>
-                        <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-2">
-                          <span>{plano.date}</span>
-                          <span>•</span>
-                          <span>{plano.items} procedimentos</span>
+              {/* Treatment Plans Grid */}
+              {treatmentPlans.length === 0 ? (
+                <div className="py-16 text-center text-slate-400">
+                  <FileBadge className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                  <p className="text-sm font-bold text-slate-700">Nenhum plano de tratamento cadastrado</p>
+                  <p className="text-xs text-slate-400 mt-1">Clique em "Novo Plano" acima para planejar os procedimentos e gerar orçamentos.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+                  {treatmentPlans.map((plano) => (
+                    <div 
+                      key={plano.id || plano.title} 
+                      className="p-5 rounded-2xl border border-slate-200/80 bg-slate-50/50 hover:bg-white transition-all space-y-4 shadow-xs"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-sm">{plano.title}</h4>
+                          <div className="text-[10px] text-slate-400 mt-1 flex items-center gap-2">
+                            <span>{plano.date}</span>
+                            <span>•</span>
+                            <span>{plano.items?.length || 1} procedimentos</span>
+                          </div>
+                        </div>
+                        <span className={cn(
+                          "px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                          plano.status === 'Aprovado' || plano.status === 'Concluído' ? "bg-emerald-100 text-emerald-800" :
+                          plano.status === 'Em Execução' ? "bg-cyan-100 text-cyan-800" :
+                          "bg-amber-100 text-amber-800"
+                        )}>
+                          {plano.status}
+                        </span>
+                      </div>
+
+                      {/* Items list preview */}
+                      {Array.isArray(plano.items) && plano.items.length > 0 && (
+                        <div className="p-3 bg-white rounded-xl border border-slate-100 text-xs space-y-1.5">
+                          {plano.items.map((it: any, idx: number) => (
+                            <div key={idx} className="flex justify-between text-slate-600 text-[11px]">
+                              <span>• {it.procedure || it.name}</span>
+                              <span className="font-bold text-slate-800 font-mono">{formatCurrency(it.price || it.valor || 0)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Progress Bar */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-[10px] font-bold text-slate-500">
+                          <span>Progresso do Tratamento</span>
+                          <span>{plano.progress || 0}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div className="h-full bg-brand-cyan rounded-full transition-all" style={{ width: `${plano.progress || 0}%` }} />
                         </div>
                       </div>
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">
-                        {plano.status}
-                      </span>
-                    </div>
 
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[10px] font-bold text-slate-500">
-                        <span>Progresso</span>
-                        <span>{plano.progress}%</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
-                        <div className="h-full bg-brand-cyan rounded-full transition-all" style={{ width: `${plano.progress}%` }} />
-                      </div>
-                    </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
+                        <div>
+                          <p className="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Investimento Estimado</p>
+                          <p className="text-sm font-black text-slate-900">{formatCurrency(plano.total || 0)}</p>
+                        </div>
+                        
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePlan(plano.id)}
+                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                            title="Excluir Plano"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
-                      <div className="text-sm font-black text-slate-900">{formatCurrency(plano.total)}</div>
-                      <button
-                        onClick={() => setShowBudgetModal(plano)}
-                        className="px-3.5 py-1.5 bg-white border border-slate-200 hover:border-brand-cyan text-slate-700 text-xs font-bold rounded-xl transition-all"
-                      >
-                        Gerar Orçamento
-                      </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPlanForBudget(plano);
+                              setSelectedBudgetForView(null);
+                              setShowBudgetModal(true);
+                            }}
+                            className="px-4 py-2 bg-slate-900 hover:bg-brand-cyan hover:text-slate-950 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                          >
+                            <DollarSign className="w-3.5 h-3.5" />
+                            <span>Gerar Orçamento</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -856,51 +1399,154 @@ export default function PatientRecordView({
           <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
               <div>
-                <h3 className="text-lg font-bold text-slate-800">Histórico de Orçamentos</h3>
-                <p className="text-xs text-slate-400 mt-1">Orçamentos gerados e condições de pagamento acordadas</p>
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-brand-cyan" />
+                  Histórico de Orçamentos Odontológicos
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Propostas comerciais, simulações de parcelamento, termos de garantia e status de aprovação
+                </p>
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedPlanForBudget(null);
+                  setSelectedBudgetForView(null);
+                  setShowBudgetModal(true);
+                }}
+                className="px-5 py-2.5 bg-brand-cyan hover:bg-cyan-500 text-slate-950 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-brand-cyan/20 self-start sm:self-auto"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Novo Orçamento</span>
+              </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
-                  <tr>
-                    <th className="px-6 py-4">Nº Orçamento</th>
-                    <th className="px-6 py-4">Data</th>
-                    <th className="px-6 py-4">Valor Total</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4 text-right">Ação</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {[
-                    { id: '2024-001', date: '12/03/2024', value: 4500, status: 'Aprovado', color: 'bg-emerald-100 text-emerald-800' },
-                    { id: '2023-085', date: '05/12/2023', value: 1200, status: 'Concluído', color: 'bg-cyan-100 text-cyan-800' },
-                    { id: '2023-042', date: '20/08/2023', value: 3800, status: 'Concluído', color: 'bg-cyan-100 text-cyan-800' },
-                  ].map((orc) => (
-                    <tr key={orc.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-6 py-4 font-bold text-slate-800">#{orc.id}</td>
-                      <td className="px-6 py-4 text-slate-500 font-medium">{orc.date}</td>
-                      <td className="px-6 py-4 font-black text-slate-900">{formatCurrency(orc.value)}</td>
-                      <td className="px-6 py-4">
-                        <span className={cn("px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider", orc.color)}>
-                          {orc.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => alert(`Visualizando orçamento #${orc.id}`)}
-                          className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-slate-100 rounded-lg transition-all"
-                          title="Imprimir / Visualizar"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
-                      </td>
+            {budgets.length === 0 ? (
+              <div className="py-16 text-center text-slate-400">
+                <DollarSign className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                <p className="text-sm font-bold text-slate-700">Nenhum orçamento gerado ainda</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Gere um orçamento a partir da aba "Planos de Tratamento" ou clique no botão "+ Novo Orçamento" acima.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    <tr>
+                      <th className="px-6 py-4">Nº Proposta</th>
+                      <th className="px-6 py-4">Plano / Descrição</th>
+                      <th className="px-6 py-4">Data / Validade</th>
+                      <th className="px-6 py-4">Condição de Pagamento</th>
+                      <th className="px-6 py-4">Valor Final</th>
+                      <th className="px-6 py-4">Status</th>
+                      <th className="px-6 py-4 text-right">Ações</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {budgets.map((orc) => {
+                      const isApproved = orc.status === 'Aprovado';
+                      const isConcluded = orc.status === 'Concluído';
+                      const isCanceled = orc.status === 'Cancelado';
+
+                      return (
+                        <tr key={orc.id || orc.budgetNumber} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="px-6 py-4 font-bold text-slate-800">
+                            #{orc.budgetNumber}
+                          </td>
+                          <td className="px-6 py-4">
+                            <p className="font-bold text-slate-900">{orc.planTitle || 'Tratamento Odontológico'}</p>
+                            <p className="text-[10px] text-slate-400">{orc.items?.length || 1} itens inclusos</p>
+                          </td>
+                          <td className="px-6 py-4 text-slate-500 font-medium">
+                            <p>{orc.date ? (isValid(parseISO(orc.date)) ? format(parseISO(orc.date), 'dd/MM/yyyy') : orc.date) : '-'}</p>
+                            {orc.validUntil && (
+                              <p className="text-[10px] text-slate-400">
+                                Até {isValid(parseISO(orc.validUntil)) ? format(parseISO(orc.validUntil), 'dd/MM/yyyy') : orc.validUntil}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-slate-700">
+                            <p className="font-semibold">{orc.paymentMethod || 'Cartão de Crédito'}</p>
+                            {orc.installments && orc.installments > 1 && (
+                              <p className="text-[10px] text-brand-cyan font-bold font-mono">
+                                {orc.installments}x de {formatCurrency(orc.installmentValue || (orc.total / orc.installments))}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 font-black text-slate-900">
+                            <p className="text-sm text-slate-950 font-mono">{formatCurrency(orc.total)}</p>
+                            {orc.discountAmount && orc.discountAmount > 0 ? (
+                              <p className="text-[10px] text-emerald-600 font-bold">
+                                Desc: -{formatCurrency(orc.discountAmount)}
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={cn(
+                              "px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                              isApproved ? "bg-emerald-100 text-emerald-800" :
+                              isConcluded ? "bg-cyan-100 text-cyan-800" :
+                              isCanceled ? "bg-rose-100 text-rose-800" :
+                              "bg-amber-100 text-amber-800"
+                            )}>
+                              {orc.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* Open Print/View Modal */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedBudgetForView(orc);
+                                  setSelectedPlanForBudget(null);
+                                  setShowBudgetModal(true);
+                                }}
+                                className="p-2 text-slate-600 hover:text-brand-cyan hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                                title="Visualizar / Imprimir Orçamento"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+
+                              {/* WhatsApp Quick Share */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!patientData.phone || patientData.phone === 'Não informado') {
+                                    alert('O paciente não possui telefone cadastrado.');
+                                    return;
+                                  }
+                                  const cleanPhone = patientData.phone.replace(/\D/g, '');
+                                  const finalPhone = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
+                                  const msg = `Olá *${patientData.name}*! Segue a proposta do seu orçamento *#${orc.budgetNumber}* no valor total de *${formatCurrency(orc.total)}*. Ficamos à disposição para agendar!`;
+                                  window.open(`https://wa.me/${finalPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+                                }}
+                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all cursor-pointer"
+                                title="Enviar pelo WhatsApp"
+                              >
+                                <Send className="w-4 h-4" />
+                              </button>
+
+                              {/* Delete */}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteBudget(orc.id)}
+                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer"
+                                title="Excluir Orçamento"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -979,6 +1625,51 @@ export default function PatientRecordView({
             <img src={selectedImagePreview} alt="Preview" className="w-full max-h-[75vh] object-contain rounded-2xl" />
           </div>
         </div>
+      )}
+
+      {/* Admin Dynamic Anamnesis Form Builder Modal */}
+      <AnamnesisFormBuilderModal
+        isOpen={showFormBuilder}
+        onClose={() => setShowFormBuilder(false)}
+        clinicOwnerId={clinicOwnerId}
+        customFields={customFields}
+        onSaveFields={handleSaveCustomFields}
+        currentUser={currentUser}
+      />
+
+      {/* Patient Anamnesis Fill/Edit Modal */}
+      <AnamnesisPatientEditModal
+        isOpen={showPatientAnamnesisModal}
+        onClose={() => setShowPatientAnamnesisModal(false)}
+        patientName={patientData.name}
+        patientId={patient.id || patient.name}
+        anamnesis={anamnesis}
+        customFields={customFields}
+        onSaveAnamnesis={handleSavePatientAnamnesis}
+      />
+
+      {/* Dental Budget Generator & Viewer Modal */}
+      {showBudgetModal && (
+        <DentalBudgetModal
+          isOpen={showBudgetModal}
+          onClose={() => {
+            setShowBudgetModal(false);
+            setSelectedPlanForBudget(null);
+            setSelectedBudgetForView(null);
+          }}
+          initialPlan={selectedPlanForBudget}
+          initialBudget={selectedBudgetForView}
+          patient={{
+            id: patient.id || patient.name,
+            name: patientData.name,
+            phone: patientData.phone,
+            cpf: patientData.cpf,
+            email: patientData.email,
+            dentist: patientData.dentist,
+          }}
+          currentUser={currentUser}
+          onSaveBudget={handleSaveBudget}
+        />
       )}
     </div>
   );

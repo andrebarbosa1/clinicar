@@ -1305,8 +1305,8 @@ export default function ScheduleView({
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div>
                   <h3 className="text-base font-black text-slate-800">Agendamento Rápido</h3>
-                  <p className="text-xs text-slate-400">
-                    Data: {slotModal.date} às {slotModal.time}
+                  <p className="text-xs text-brand-cyan font-bold">
+                    {format(parseISO(slotModal.date), "dd 'de' MMMM", { locale: ptBR })} às {slotModal.time} hrs
                   </p>
                 </div>
                 <button
@@ -1318,6 +1318,63 @@ export default function ScheduleView({
               </div>
 
               <div className="space-y-3 text-xs font-bold text-slate-700">
+                {/* Date & Time Switcher */}
+                <div className="grid grid-cols-2 gap-2 p-2.5 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                  <div>
+                    <label className="text-[9px] uppercase font-black text-slate-400">Data da Consulta</label>
+                    <input 
+                      type="date"
+                      value={slotModal.date}
+                      onChange={e => {
+                        if (!e.target.value) return;
+                        setSlotModal({ ...slotModal, date: e.target.value });
+                      }}
+                      className="w-full mt-0.5 p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] uppercase font-black text-slate-400">Horário Escolhido</label>
+                    <input 
+                      type="time"
+                      value={slotModal.time}
+                      onChange={e => setSlotModal({ ...slotModal, time: e.target.value })}
+                      className="w-full mt-0.5 p-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 outline-none"
+                    />
+                  </div>
+
+                  {/* Quick Slots Selector */}
+                  <div className="col-span-2 space-y-1 pt-1">
+                    <span className="text-[9px] uppercase font-black text-slate-400">Horários Disponíveis da Clínica:</span>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1">
+                      {CLINIC_TIME_SLOTS.map(s => {
+                        const conflict = findDentistScheduleConflict(data, slotModal.dentist, slotModal.date, s);
+                        const isSelected = slotModal.time === s;
+                        const isTaken = !!conflict;
+
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            disabled={isTaken}
+                            onClick={() => setSlotModal({ ...slotModal, time: s })}
+                            className={cn(
+                              "py-1.5 px-1 rounded-lg text-[10px] font-mono font-black border transition-all cursor-pointer text-center",
+                              isTaken 
+                                ? "bg-rose-50 text-rose-300 border-rose-100 cursor-not-allowed line-through"
+                                : isSelected
+                                  ? "bg-brand-cyan text-white border-brand-cyan shadow-xs"
+                                  : "bg-white text-slate-700 border-slate-200 hover:border-brand-cyan/40 hover:bg-cyan-50/50"
+                            )}
+                            title={isTaken ? `Ocupado por ${conflict?.paciente}` : `Disponível às ${s}`}
+                          >
+                            {s}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label className="text-[10px] uppercase font-black text-slate-400">Nome do Paciente *</label>
                   <input 

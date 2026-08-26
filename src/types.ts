@@ -38,3 +38,44 @@ export interface MetricCard {
     isPositive: boolean;
   };
 }
+
+export type AnamnesisFieldType = 'boolean' | 'text' | 'textarea' | 'select' | 'number';
+
+export interface AnamnesisCustomField {
+  id: string;
+  label: string;
+  type: AnamnesisFieldType;
+  category?: string;
+  options?: string[];
+  placeholder?: string;
+  helperText?: string;
+  isAlertIfTrue?: boolean;
+  alertTriggerValue?: string;
+  required?: boolean;
+  active: boolean;
+  order: number;
+}
+
+export interface PatientAnamnesis {
+  hasAllergy?: boolean;
+  allergyDetails?: string;
+  hasHeartProblem?: boolean;
+  hasHypertension?: boolean;
+  hasDiabetes?: boolean;
+  takesMedication?: boolean;
+  medicationDetails?: string;
+  isSmoker?: boolean;
+  hasBleedingHistory?: boolean;
+  isPregnant?: boolean;
+  hasAnesthesiaReaction?: boolean;
+  generalNotes?: string;
+  chiefComplaint?: string;
+  medicalHistory?: string;
+  medications?: string;
+  allergies?: string;
+  smoking?: string;
+  alcohol?: string;
+  customFields?: Record<string, any>;
+  updatedAt?: string;
+  updatedBy?: string;
+}

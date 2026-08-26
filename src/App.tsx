@@ -2649,6 +2649,7 @@ export default function App() {
           onSave={handleUpdateAnamnesis}
           onBack={() => setSubPage('Prontuario')}
           patientId={selectedPatientId}
+          currentUser={currentUser}
         />
       );
     }
@@ -2664,7 +2665,9 @@ export default function App() {
           patients={patientsForUser} 
           data={filteredRecords} 
           users={users} 
+          currentUser={currentUser}
           onSave={handleCreateAppointment} 
+          onQuickAddPatient={handleCreatePatient}
           onBack={() => setSubPage(null)} 
           presetPatient={selectedPatientId}
           clinicName={clinicName}
@@ -10115,91 +10118,166 @@ function PrescriptionFormView({ onBack, onSave, patientName, users }: { onBack: 
   );
 }
 
-function AnamnesisFormView({ patientId, patients, onSave, onBack }: { patientId: string; patients: any[]; onSave: (id: string, data: any) => Promise<boolean>; onBack: () => void }) {
+function AnamnesisFormView({ patientId, patients, onSave, onBack, currentUser }: { patientId: string; patients: any[]; onSave: (id: string, data: any) => Promise<boolean>; onBack: () => void; currentUser?: any }) {
   const patient = patients.find(p => p.id === patientId || p.name === patientId);
   const anamnesis = patient?.anamnesis || {};
 
+  const clinicOwnerId = currentUser?.parentTrialId || 
+    currentUser?.clinicId || 
+    (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
+
+  const [customFields, setCustomFields] = useState<any[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, any>>(() => {
+    return anamnesis.customFields || {};
+  });
+
+  useEffect(() => {
+    if (!db || !clinicOwnerId) return;
+    const settingsRef = doc(db, 'settings', `clinic-${clinicOwnerId}`);
+    const unsub = onSnapshot(settingsRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (Array.isArray(data?.anamnesisCustomFields)) {
+          setCustomFields(data.anamnesisCustomFields);
+        }
+      }
+    }, (err) => {
+      console.error("Erro ao carregar campos personalizados na edição:", err);
+    });
+    return () => unsub();
+  }, [clinicOwnerId]);
+
   const [chiefComplaint, setChiefComplaint] = useState(anamnesis.chiefComplaint || '');
   const [medicalHistory, setMedicalHistory] = useState(anamnesis.medicalHistory || '');
-  const [medications, setMedications] = useState(anamnesis.medications || '');
-  const [allergies, setAllergies] = useState(anamnesis.allergies || '');
-  const [smoking, setSmoking] = useState(anamnesis.smoking || 'Não');
+  const [medications, setMedications] = useState(anamnesis.medications || anamnesis.medicationDetails || '');
+  const [allergies, setAllergies] = useState(anamnesis.allergies || anamnesis.allergyDetails || '');
+  const [hasAllergy, setHasAllergy] = useState(!!anamnesis.hasAllergy);
+  const [hasHeartProblem, setHasHeartProblem] = useState(!!anamnesis.hasHeartProblem);
+  const [hasHypertension, setHasHypertension] = useState(!!anamnesis.hasHypertension);
+  const [hasDiabetes, setHasDiabetes] = useState(!!anamnesis.hasDiabetes);
+  const [takesMedication, setTakesMedication] = useState(!!anamnesis.takesMedication);
+  const [hasBleedingHistory, setHasBleedingHistory] = useState(!!anamnesis.hasBleedingHistory);
+  const [isPregnant, setIsPregnant] = useState(!!anamnesis.isPregnant);
+  const [hasAnesthesiaReaction, setHasAnesthesiaReaction] = useState(!!anamnesis.hasAnesthesiaReaction);
+  const [generalNotes, setGeneralNotes] = useState(anamnesis.generalNotes || '');
+  const [smoking, setSmoking] = useState(anamnesis.smoking || (anamnesis.isSmoker ? 'Sim' : 'Não'));
   const [alcohol, setAlcohol] = useState(anamnesis.alcohol || 'Não');
   const [isSaving, setIsSaving] = useState(false);
 
+  const handleCustomFieldChange = (fieldId: string, val: any) => {
+    setCustomFieldValues(prev => ({
+      ...prev,
+      [fieldId]: val
+    }));
+  };
+
   const handleSave = async () => {
-    if (SecurityUtils.hasDangerousScript(chiefComplaint) || SecurityUtils.hasDangerousScript(medicalHistory) || SecurityUtils.hasDangerousScript(medications) || SecurityUtils.hasDangerousScript(allergies)) {
+    if (SecurityUtils.hasDangerousScript(chiefComplaint) || SecurityUtils.hasDangerousScript(medicalHistory) || SecurityUtils.hasDangerousScript(medications) || SecurityUtils.hasDangerousScript(allergies) || SecurityUtils.hasDangerousScript(generalNotes)) {
       alert('Ação bloqueada por motivos de segurança (XSS detectado).');
       return;
     }
 
     setIsSaving(true);
     const success = await onSave(patientId, {
-      chiefComplaint: SecurityUtils.limit(SecurityUtils.sanitize(chiefComplaint), 500),
+      ...anamnesis,
+      chiefComplaint: SecurityUtils.limit(SecurityUtils.sanitize(chiefComplaint), 1000),
       medicalHistory: SecurityUtils.limit(SecurityUtils.sanitize(medicalHistory), 3000),
       medications: SecurityUtils.limit(SecurityUtils.sanitize(medications), 1000),
+      medicationDetails: SecurityUtils.limit(SecurityUtils.sanitize(medications), 1000),
       allergies: SecurityUtils.limit(SecurityUtils.sanitize(allergies), 1000),
+      allergyDetails: SecurityUtils.limit(SecurityUtils.sanitize(allergies), 1000),
+      hasAllergy: hasAllergy || !!allergies.trim(),
+      hasHeartProblem,
+      hasHypertension,
+      hasDiabetes,
+      takesMedication: takesMedication || !!medications.trim(),
+      isSmoker: smoking === 'Sim' || smoking === 'Ex-fumante',
+      hasBleedingHistory,
+      isPregnant,
+      hasAnesthesiaReaction,
+      generalNotes: SecurityUtils.limit(SecurityUtils.sanitize(generalNotes), 3000),
       smoking,
       alcohol,
+      customFields: customFieldValues,
       updatedAt: new Date().toISOString()
     });
     if (success) onBack();
     setIsSaving(false);
   };
 
+  const activeCustomFields = customFields.filter(f => f.active);
+
   return (
-    <div className="max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
       <div className="flex items-center gap-4">
         <button onClick={onBack} disabled={isSaving} className="p-2 hover:bg-slate-100 rounded-full cursor-pointer transition-colors disabled:opacity-50"><ArrowLeft className="w-5 h-5 text-slate-600" /></button>
         <div>
-          <h2 className="text-xl font-bold text-slate-800">Editar Anamnese</h2>
+          <h2 className="text-xl font-bold text-slate-800">Editar Anamnese & Questionário de Saúde</h2>
           <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">{patient?.name}</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm p-8 space-y-6">
-          <div className="space-y-2">
-            <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Queixa Principal</label>
-            <textarea 
-              value={chiefComplaint} 
-              onChange={(e) => setChiefComplaint(e.target.value)} 
-              placeholder="Descreva a queixa principal do paciente..."
-              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-semibold text-slate-700 outline-none focus:border-brand-cyan/30 transition-all h-24 resize-none" 
-            />
+      <div className="space-y-6">
+        {/* Standard Questions */}
+        <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">1. Perguntas Padrão de Saúde</h3>
+            <span className="text-[10px] text-slate-400 font-bold">Padrão Odontológico</span>
           </div>
-          <div className="space-y-2">
-            <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">História Médica</label>
-            <textarea 
-              value={medicalHistory} 
-              onChange={(e) => setMedicalHistory(e.target.value)} 
-              placeholder="Doenças crônicas, cirurgias, hospitalizações..."
-              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-semibold text-slate-700 outline-none focus:border-brand-cyan/30 transition-all h-40 resize-none" 
-            />
-          </div>
-        </div>
 
-        <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm p-8 space-y-6">
-          <div className="space-y-2">
-            <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Medicações em uso</label>
-            <textarea 
-              value={medications} 
-              onChange={(e) => setMedications(e.target.value)} 
-              className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl text-sm font-semibold text-slate-700 outline-none h-24 resize-none" 
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {[
+              { label: 'Doenças Cardíacas?', state: hasHeartProblem, setter: setHasHeartProblem },
+              { label: 'Hipertensão Arterial?', state: hasHypertension, setter: setHasHypertension },
+              { label: 'Diabetes?', state: hasDiabetes, setter: setHasDiabetes },
+              { label: 'Sangramento Excessivo?', state: hasBleedingHistory, setter: setHasBleedingHistory },
+              { label: 'Gestante / Lactante?', state: isPregnant, setter: setIsPregnant },
+              { label: 'Reação a Anestésicos?', state: hasAnesthesiaReaction, setter: setHasAnesthesiaReaction },
+            ].map((item, idx) => (
+              <div key={idx} className={cn("p-3 rounded-2xl border flex items-center justify-between gap-2", item.state ? "bg-rose-50 border-rose-200" : "bg-slate-50 border-slate-200/80")}>
+                <span className="text-xs font-bold text-slate-800">{item.label}</span>
+                <button
+                  type="button"
+                  onClick={() => item.setter(!item.state)}
+                  className={cn("px-3 py-1 rounded-xl text-xs font-black transition-all cursor-pointer", item.state ? "bg-rose-600 text-white" : "bg-slate-200 text-slate-700")}
+                >
+                  {item.state ? 'SIM' : 'NÃO'}
+                </button>
+              </div>
+            ))}
           </div>
-          <div className="space-y-2">
-            <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Alergias</label>
-            <textarea 
-              value={allergies} 
-              onChange={(e) => setAllergies(e.target.value)} 
-              className="w-full p-4 bg-rose-50/50 border border-rose-100/50 rounded-2xl text-sm font-bold text-rose-600 outline-none h-24 resize-none" 
-            />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+            <div className="space-y-2">
+              <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Medicações em uso contínuo</label>
+              <textarea 
+                value={medications} 
+                onChange={(e) => {
+                  setMedications(e.target.value);
+                  setTakesMedication(!!e.target.value.trim());
+                }} 
+                placeholder="Informe medicamentos, dosagens e horários..."
+                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-700 outline-none h-20 resize-none focus:border-brand-cyan" 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Alergias conhecidas</label>
+              <textarea 
+                value={allergies} 
+                onChange={(e) => {
+                  setAllergies(e.target.value);
+                  setHasAllergy(!!e.target.value.trim());
+                }} 
+                placeholder="Medicamentos, látex, alimentos, etc..."
+                className="w-full p-3 bg-rose-50/50 border border-rose-200 rounded-2xl text-xs font-bold text-rose-700 outline-none h-20 resize-none focus:border-rose-400" 
+              />
+            </div>
           </div>
+
           <div className="grid grid-cols-2 gap-4">
              <div className="space-y-2">
                <label className="text-[8px] uppercase font-bold text-slate-400 tracking-widest ml-1">Tabagismo</label>
-               <select value={smoking} onChange={(e) => setSmoking(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 outline-none">
+               <select value={smoking} onChange={(e) => setSmoking(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none">
                  <option value="Não">Não</option>
                  <option value="Sim">Sim</option>
                  <option value="Ex-fumante">Ex-fumante</option>
@@ -10207,7 +10285,7 @@ function AnamnesisFormView({ patientId, patients, onSave, onBack }: { patientId:
              </div>
              <div className="space-y-2">
                <label className="text-[8px] uppercase font-bold text-slate-400 tracking-widest ml-1">Etilismo</label>
-               <select value={alcohol} onChange={(e) => setAlcohol(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-700 outline-none">
+               <select value={alcohol} onChange={(e) => setAlcohol(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none">
                  <option value="Não">Não</option>
                  <option value="Social">Social</option>
                  <option value="Frequente">Frequente</option>
@@ -10215,12 +10293,138 @@ function AnamnesisFormView({ patientId, patients, onSave, onBack }: { patientId:
              </div>
           </div>
         </div>
+
+        {/* Dynamic Clinic Custom Fields */}
+        {activeCustomFields.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm p-6 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">2. Perguntas Personalizadas da Clínica</h3>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-cyan-50 text-brand-cyan border border-brand-cyan/20">
+                  {activeCustomFields.length} campos dinâmicos
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {activeCustomFields.map((field) => {
+                const val = customFieldValues[field.id];
+                const isAlert = field.isAlertIfTrue && (val === true || val === 'Sim' || (field.alertTriggerValue && val === field.alertTriggerValue));
+
+                return (
+                  <div key={field.id} className={cn("p-4 rounded-2xl border transition-all space-y-2 bg-slate-50/50", isAlert ? "border-rose-300 bg-rose-50/40" : "border-slate-200")}>
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-slate-800">
+                        {field.label}
+                        {field.required && <span className="text-rose-500 ml-1">*</span>}
+                      </label>
+                      {field.category && (
+                        <span className="text-[9px] font-bold text-slate-400 uppercase">{field.category}</span>
+                      )}
+                    </div>
+
+                    {field.helperText && <p className="text-[10px] text-slate-400">{field.helperText}</p>}
+
+                    {field.type === 'boolean' && (
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleCustomFieldChange(field.id, true)}
+                          className={cn("flex-1 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer", val === true ? (field.isAlertIfTrue ? "bg-rose-600 text-white" : "bg-brand-cyan text-slate-950 font-black") : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100")}
+                        >
+                          SIM
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCustomFieldChange(field.id, false)}
+                          className={cn("flex-1 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer", val === false ? "bg-slate-800 text-white" : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-100")}
+                        >
+                          NÃO
+                        </button>
+                      </div>
+                    )}
+
+                    {field.type === 'select' && (
+                      <select
+                        value={val || ''}
+                        onChange={(e) => handleCustomFieldChange(field.id, e.target.value)}
+                        className="w-full text-xs font-bold p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                      >
+                        <option value="">Selecione uma opção...</option>
+                        {(field.options || []).map((opt: string) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    )}
+
+                    {field.type === 'text' && (
+                      <input
+                        type="text"
+                        value={val || ''}
+                        onChange={(e) => handleCustomFieldChange(field.id, e.target.value)}
+                        placeholder={field.placeholder || 'Digite a resposta...'}
+                        className="w-full text-xs font-medium p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                      />
+                    )}
+
+                    {field.type === 'number' && (
+                      <input
+                        type="number"
+                        value={val ?? ''}
+                        onChange={(e) => handleCustomFieldChange(field.id, e.target.value)}
+                        placeholder={field.placeholder || 'Informe o número...'}
+                        className="w-full text-xs font-medium p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                      />
+                    )}
+
+                    {field.type === 'textarea' && (
+                      <textarea
+                        value={val || ''}
+                        onChange={(e) => handleCustomFieldChange(field.id, e.target.value)}
+                        placeholder={field.placeholder || 'Observações e detalhes clínicos...'}
+                        className="w-full text-xs font-medium p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800 h-20 resize-none"
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Complaints and Medical History */}
+        <div className="bg-white border border-slate-200 rounded-[32px] shadow-sm p-6 sm:p-8 space-y-6">
+          <div className="border-b border-slate-100 pb-3">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">3. Queixa Principal & Histórico Geral</h3>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">Queixa Principal</label>
+              <textarea 
+                value={chiefComplaint} 
+                onChange={(e) => setChiefComplaint(e.target.value)} 
+                placeholder="Descreva a queixa principal do paciente..."
+                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-700 outline-none focus:border-brand-cyan transition-all h-28 resize-none" 
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[9px] uppercase font-bold text-slate-400 tracking-widest ml-1">História Médica & Cirúrgica Geral</label>
+              <textarea 
+                value={medicalHistory} 
+                onChange={(e) => setMedicalHistory(e.target.value)} 
+                placeholder="Doenças crônicas, cirurgias, hospitalizações..."
+                className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-700 outline-none focus:border-brand-cyan transition-all h-28 resize-none" 
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="flex justify-end gap-4 pb-12">
-        <button onClick={onBack} className="px-8 py-3 text-slate-400 text-[10px] font-black uppercase tracking-widest hover:text-slate-600 transition-all">Descartar</button>
-        <button onClick={handleSave} disabled={isSaving} className="px-10 py-3 bg-brand-cyan text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-xl shadow-brand-cyan/20 hover:scale-[1.02] active:scale-95 transition-all">
-          {isSaving ? 'Salvando...' : 'Salvar Alterações'}
+        <button onClick={onBack} className="px-8 py-3 text-slate-400 text-[10px] font-black uppercase tracking-widest hover:text-slate-600 transition-all cursor-pointer">Descartar</button>
+        <button onClick={handleSave} disabled={isSaving} className="px-10 py-3 bg-brand-cyan text-slate-950 text-[10px] font-black uppercase tracking-widest rounded-xl shadow-xl shadow-brand-cyan/20 hover:scale-[1.02] active:scale-95 transition-all cursor-pointer disabled:opacity-50">
+          {isSaving ? 'Salvando...' : 'Salvar Alterações no Prontuário'}
         </button>
       </div>
     </div>
