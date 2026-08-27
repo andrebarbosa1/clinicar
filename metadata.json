@@ -1,5 +1,5 @@
 {
-  "name": "OdontoDash - Dental Analytics",
+  "name": "Clinica odonto - Dental Analytics",
   "description": "Professional dental dashboard for tracking procedures, billing, and clinic performance.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
