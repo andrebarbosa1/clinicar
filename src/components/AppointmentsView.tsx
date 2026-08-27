@@ -24,7 +24,8 @@ import {
   Phone,
   Check,
   XCircle,
-  PlayCircle
+  PlayCircle,
+  Globe
 } from 'lucide-react';
 import { format, isToday, isYesterday, isTomorrow, parseISO, isValid, isThisWeek, isThisMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -391,13 +392,20 @@ export default function AppointmentsView({
                               {record.paciente.charAt(0).toUpperCase()}
                             </div>
                             <div className="min-w-0">
-                              <span 
-                                onClick={() => onOpenChart && onOpenChart(record.paciente)}
-                                className="text-xs font-bold text-slate-800 hover:text-brand-cyan transition-colors cursor-pointer block truncate max-w-[200px]"
-                                title="Abrir Prontuário"
-                              >
-                                {record.paciente}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span 
+                                  onClick={() => onOpenChart && onOpenChart(record.paciente)}
+                                  className="text-xs font-bold text-slate-800 hover:text-brand-cyan transition-colors cursor-pointer block truncate max-w-[180px]"
+                                  title="Abrir Prontuário"
+                                >
+                                  {record.paciente}
+                                </span>
+                                {(record.viaPortal || record.origem?.toLowerCase().includes('portal') || (record as any).canal?.toLowerCase().includes('portal')) && (
+                                  <span className="inline-flex items-center gap-1 text-[9px] font-bold text-cyan-700 bg-cyan-50 border border-cyan-200/80 px-1.5 py-0.2 rounded shrink-0">
+                                    <Globe className="w-2.5 h-2.5 text-brand-cyan" /> Portal
+                                  </span>
+                                )}
+                              </div>
                               <span className="text-[10px] text-slate-400 font-mono">ID: {String(record.id).slice(-4)}</span>
                             </div>
                           </div>
@@ -509,12 +517,19 @@ export default function AppointmentsView({
                             {record.paciente.charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <h3 
-                              onClick={() => onOpenChart && onOpenChart(record.paciente)}
-                              className="text-xs font-bold text-slate-800 hover:text-brand-cyan cursor-pointer truncate max-w-[150px]"
-                            >
-                              {record.paciente}
-                            </h3>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h3 
+                                onClick={() => onOpenChart && onOpenChart(record.paciente)}
+                                className="text-xs font-bold text-slate-800 hover:text-brand-cyan cursor-pointer truncate max-w-[140px]"
+                              >
+                                {record.paciente}
+                              </h3>
+                              {(record.viaPortal || record.origem?.toLowerCase().includes('portal') || (record as any).canal?.toLowerCase().includes('portal')) && (
+                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold text-cyan-700 bg-cyan-50 border border-cyan-200/80 px-1 py-0.2 rounded shrink-0">
+                                  <Globe className="w-2.5 h-2.5 text-brand-cyan" /> Portal
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-slate-400">Dr(a). {record.dentista || 'Geral'}</p>
                           </div>
                         </div>

@@ -61,7 +61,7 @@ try {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+  const PORT = 3000;
 
   // Security Middleware to block sensitive paths and files
   app.use((req, res, next) => {

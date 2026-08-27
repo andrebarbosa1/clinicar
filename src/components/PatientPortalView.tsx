@@ -64,6 +64,9 @@ export default function PatientPortalView({
   const [patientNameInput, setPatientNameInput] = useState<string>('');
   const [patientPhoneInput, setPatientPhoneInput] = useState<string>('');
   const [patientCpfInput, setPatientCpfInput] = useState<string>('');
+  const [patientEmailInput, setPatientEmailInput] = useState<string>('');
+  const [lastBookedDoctor, setLastBookedDoctor] = useState<string>('');
+  const [lastBookedPatientName, setLastBookedPatientName] = useState<string>('');
   const [bookingSuccess, setBookingSuccess] = useState<boolean>(false);
 
   // Copied Pix notification state
@@ -93,12 +96,16 @@ export default function PatientPortalView({
 
   const handleConfirmBooking = (e: React.FormEvent) => {
     e.preventDefault();
-    const finalPatientName = currentPatient.id !== 'guest' ? currentPatient.name : (patientNameInput || 'Novo Paciente');
+    const finalPatientName = currentPatient.id !== 'guest' ? currentPatient.name : (patientNameInput.trim() || 'Novo Paciente');
+    const finalPhone = currentPatient.id !== 'guest' ? (currentPatient.phone || (currentPatient as any).telefone || '') : patientPhoneInput.trim();
+    const finalCpf = currentPatient.id !== 'guest' ? (currentPatient.cpf || '') : patientCpfInput.trim();
+    const finalEmail = currentPatient.id !== 'guest' ? (currentPatient.email || '') : patientEmailInput.trim();
+    const patientId = currentPatient.id !== 'guest' ? currentPatient.id : `pat-${Date.now()}`;
     
     const newAppointment = {
       id: `booking-${Date.now()}`,
       paciente: finalPatientName,
-      pacienteId: currentPatient.id !== 'guest' ? currentPatient.id : `patient-${Date.now()}`,
+      pacienteId: patientId,
       dentista: selectedDoctor,
       procedimento: selectedSpecialty,
       data: selectedDate,
@@ -106,8 +113,17 @@ export default function PatientPortalView({
       status: 'Agendado',
       statusPagamento: 'Pendente',
       valor: 200,
-      origem: 'Portal do Paciente (Online)'
+      origem: 'Portal do Paciente',
+      viaPortal: true,
+      canal: 'Portal Online',
+      telefone: finalPhone,
+      cpf: finalCpf,
+      email: finalEmail,
+      observacao: `Agendado via Portal do Paciente Online para o(a) Dr(a). ${selectedDoctor}`
     };
+
+    setLastBookedDoctor(selectedDoctor);
+    setLastBookedPatientName(finalPatientName);
 
     if (onBookAppointment) {
       onBookAppointment(newAppointment);
@@ -218,22 +234,29 @@ export default function PatientPortalView({
                 <div className="w-16 h-16 rounded-full bg-emerald-500 text-white flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30">
                   <CheckCircle2 className="w-8 h-8" />
                 </div>
-                <div>
-                  <h3 className="text-xl font-black text-emerald-900">Consulta Solicitada com Sucesso!</h3>
-                  <p className="text-xs text-emerald-700 max-w-md mx-auto mt-1 leading-relaxed">
-                    Seu agendamento para <strong>{selectedSpecialty}</strong> com <strong>{selectedDoctor}</strong> no dia <strong>{selectedDate} às {selectedTimeSlot}</strong> foi confirmado e inserido na agenda da clínica!
+                <div className="space-y-2">
+                  <h3 className="text-xl font-black text-emerald-900">Consulta Agendada com Sucesso!</h3>
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-100 text-cyan-900 border border-cyan-300 text-xs font-black">
+                    <Globe className="w-3.5 h-3.5 text-cyan-700" />
+                    Agendamento Realizado via Portal do Paciente
+                  </div>
+                  <p className="text-xs text-emerald-800 max-w-lg mx-auto leading-relaxed">
+                    O paciente <strong>{lastBookedPatientName || currentPatient.name}</strong> já está <strong>cadastrado no sistema</strong> e vinculado ao(à) profissional <strong>{lastBookedDoctor || selectedDoctor}</strong> para a especialidade <strong>{selectedSpecialty}</strong> no dia <strong>{selectedDate} às {selectedTimeSlot}</strong>.
                   </p>
                 </div>
                 <div className="pt-2 flex flex-wrap justify-center gap-3">
                   <button
-                    onClick={() => setActiveTab('appointments')}
-                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-colors"
+                    onClick={() => {
+                      setBookingSuccess(false);
+                      setActiveTab('appointments');
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-colors cursor-pointer"
                   >
                     Ver Minhas Consultas
                   </button>
                   <button
                     onClick={() => setBookingSuccess(false)}
-                    className="px-5 py-2.5 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100/50 transition-colors"
+                    className="px-5 py-2.5 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100/50 transition-colors cursor-pointer"
                   >
                     Novo Agendamento
                   </button>
@@ -269,7 +292,7 @@ export default function PatientPortalView({
                 {/* Doctor Selection */}
                 <div>
                   <label className="block text-xs font-black uppercase text-slate-400 tracking-wider mb-2">
-                    2. Escolha o Cirurgião-Dentista
+                    2. Escolha o Cirurgião-Dentista / Médico Responsável
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     {(doctorsList.length > 0 ? doctorsList : ['Dra. Carolina Mendes', 'Dr. Rafael Costa', 'Dra. Beatriz Santos']).map((docName) => (
@@ -332,8 +355,11 @@ export default function PatientPortalView({
                 {/* Guest Patient Information if not logged in as existing */}
                 {currentPatient.id === 'guest' && (
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-                    <h5 className="text-xs font-black uppercase text-slate-600">Seus Dados de Contato</h5>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="flex items-center justify-between">
+                      <h5 className="text-xs font-black uppercase text-slate-600">Seus Dados de Cadastro & Contato</h5>
+                      <span className="text-[10px] text-brand-cyan font-bold bg-cyan-50 px-2 py-0.5 rounded-full border border-cyan-200">Cadastro Automático no Portal</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                       <div>
                         <label className="block text-[10px] font-bold text-slate-500 mb-1">Nome Completo *</label>
                         <input
@@ -353,6 +379,16 @@ export default function PatientPortalView({
                           value={patientPhoneInput}
                           onChange={(e) => setPatientPhoneInput(e.target.value)}
                           placeholder="(11) 99999-9999"
+                          className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-xl p-2.5 text-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">E-mail</label>
+                        <input
+                          type="email"
+                          value={patientEmailInput}
+                          onChange={(e) => setPatientEmailInput(e.target.value)}
+                          placeholder="seu@email.com"
                           className="w-full text-xs font-semibold bg-white border border-slate-200 rounded-xl p-2.5 text-slate-800"
                         />
                       </div>
@@ -420,31 +456,42 @@ export default function PatientPortalView({
 
           {patientRecords.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {patientRecords.map((rec) => (
-                <div key={rec.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:shadow-md transition-all space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black text-brand-cyan">{rec.procedimento}</span>
-                    <span className={cn(
-                      "text-[10px] font-bold px-2 py-0.5 rounded-full",
-                      rec.status === 'Realizado' ? "bg-emerald-100 text-emerald-800" :
-                      rec.status === 'Agendado' ? "bg-blue-100 text-blue-800" :
-                      "bg-slate-200 text-slate-700"
-                    )}>
-                      {rec.status}
-                    </span>
-                  </div>
-                  
-                  <div className="text-xs text-slate-600 space-y-1">
-                    <p><strong>Dentista:</strong> {rec.dentista}</p>
-                    <p><strong>Data:</strong> {rec.data} às {rec.horario || '09:00'}</p>
-                    {rec.valor && <p><strong>Valor:</strong> R$ {Number(rec.valor).toFixed(2)}</p>}
-                  </div>
+              {patientRecords.map((rec) => {
+                const isViaPortal = Boolean(rec.viaPortal || rec.origem?.toLowerCase().includes('portal') || (rec as any).canal?.toLowerCase().includes('portal'));
+                return (
+                  <div key={rec.id} className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:shadow-md transition-all space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-black text-brand-cyan">{rec.procedimento}</span>
+                        {isViaPortal && (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300">
+                            <Globe className="w-2.5 h-2.5" /> Via Portal
+                          </span>
+                        )}
+                      </div>
+                      <span className={cn(
+                        "text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0",
+                        rec.status === 'Realizado' ? "bg-emerald-100 text-emerald-800" :
+                        rec.status === 'Agendado' ? "bg-blue-100 text-blue-800" :
+                        "bg-slate-200 text-slate-700"
+                      )}>
+                        {rec.status}
+                      </span>
+                    </div>
+                    
+                    <div className="text-xs text-slate-600 space-y-1">
+                      <p><strong>Dentista Responsável:</strong> {rec.dentista}</p>
+                      <p><strong>Data:</strong> {rec.data} às {rec.horario || '09:00'}</p>
+                      <p><strong>Canal de Origem:</strong> {isViaPortal ? 'Portal do Paciente (Online)' : (rec.origem || 'Presencial / Recepção')}</p>
+                      {rec.valor && <p><strong>Valor:</strong> R$ {Number(rec.valor).toFixed(2)}</p>}
+                    </div>
 
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-400">Status financeiro: <strong className="text-slate-700">{rec.statusPagamento || 'Pendente'}</strong></span>
+                    <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Status financeiro: <strong className="text-slate-700">{rec.statusPagamento || 'Pendente'}</strong></span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="text-center py-12 text-slate-400">

@@ -87,8 +87,10 @@ export default function MessagesView({
       "Bom dia, {primeiro_nome}! ☀️ Lembramos que sua consulta na {clinica} é HOJE às {horario} com Dr(a). {dentista}.\n\nEstamos preparando tudo para receber você com muito carinho. Até logo!",
     pos_atendimento: localStorage.getItem('odonto_tpl_pos_atendimento') ||
       "Olá, {primeiro_nome}! Como você está se sentindo após o procedimento de {procedimento} realizado hoje na {clinica}?\n\nQualquer desconforto ou dúvida, nossa equipe e o(a) Dr(a). {dentista} estão à sua disposição! Desejamos uma excelente recuperação.",
+    agendamento_online: localStorage.getItem('odonto_tpl_agendamento_online') ||
+      "Olá, {primeiro_nome}! 👋\n\nSegue o link para você agendar sua consulta online na clínica {clinica} com Dr(a). {dentista}:\n\n🔗 {link_agendamento}\n\nBasta clicar no link e escolher o melhor dia e horário para você. Qualquer dúvida estamos à disposição! 🦷✨",
     retorno: localStorage.getItem('odonto_tpl_retorno') || 
-      "Olá, {primeiro_nome}! Já se passaram 6 meses desde seu último atendimento na clínica {clinica}. Recomendamos agendar seu retorno preventivo para manter seu sorriso saudável! Vamos agendar?",
+      "Olá, {primeiro_nome}! Já se passaram 6 meses desde seu último atendimento na clínica {clinica}. Recomendamos agendar seu retorno preventivo para manter seu sorriso saudável! Acesse o link para agendar: {link_agendamento}",
     aniversario: localStorage.getItem('odonto_tpl_aniversario') || 
       "Olá, {primeiro_nome}! 🎉 Toda a equipe da clínica {clinica} deseja a você um feliz aniversário repleto de saúde, alegrias e muitos motivos para sorrir! Parabéns!"
   });
@@ -141,6 +143,14 @@ export default function MessagesView({
       ? format(parseISO(params.date), "dd/MM/yyyy")
       : "Data combinada";
 
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const queryParams = new URLSearchParams();
+    queryParams.set('booking', 'true');
+    if (clinicName) queryParams.set('clinic', clinicName);
+    if (params.dentista) queryParams.set('doctor', params.dentista);
+    const bookingUrl = `${origin}${pathname}?${queryParams.toString()}`;
+
     return text
       .replace(/{paciente}/g, params.patientName || 'Paciente')
       .replace(/{primeiro_nome}/g, firstName)
@@ -148,6 +158,7 @@ export default function MessagesView({
       .replace(/{horario}/g, params.horario || 'Horário agendado')
       .replace(/{dentista}/g, params.dentista || 'Cirurgião-Dentista')
       .replace(/{procedimento}/g, params.procedimento || 'Procedimento')
+      .replace(/{link_agendamento}/g, bookingUrl)
       .replace(/{clinica}/g, clinicName);
   };
 
@@ -988,6 +999,7 @@ export default function MessagesView({
               {[
                 { key: 'confirmacao_24h', label: 'Confirmação 24h' },
                 { key: 'lembrete_hoje', label: 'Lembrete do Dia' },
+                { key: 'agendamento_online', label: '🔗 Link Autoagendamento' },
                 { key: 'pos_atendimento', label: 'Pós-Atendimento' },
                 { key: 'retorno', label: 'Retorno 6 Meses' },
                 { key: 'aniversario', label: 'Aniversário' }
@@ -1022,8 +1034,13 @@ export default function MessagesView({
             <div className="p-3 bg-cyan-50/50 rounded-2xl border border-cyan-100 space-y-1.5 text-[11px]">
               <span className="font-bold text-brand-cyan block">Tags Dinâmicas Disponíveis:</span>
               <div className="flex flex-wrap gap-1.5 text-[10px] font-mono">
-                {['{primeiro_nome}', '{paciente}', '{data}', '{horario}', '{dentista}', '{procedimento}', '{clinica}'].map(tag => (
-                  <span key={tag} className="bg-white border border-cyan-200 px-2 py-0.5 rounded text-slate-700 font-bold">
+                {['{primeiro_nome}', '{paciente}', '{data}', '{horario}', '{dentista}', '{procedimento}', '{link_agendamento}', '{clinica}'].map(tag => (
+                  <span 
+                    key={tag} 
+                    onClick={() => setCurrentTemplateText(prev => prev + ' ' + tag)}
+                    className="bg-white border border-cyan-200 hover:border-cyan-400 hover:bg-cyan-50 px-2 py-0.5 rounded text-slate-700 font-bold cursor-pointer transition-colors"
+                    title="Clique para inserir no texto"
+                  >
                     {tag}
                   </span>
                 ))}

@@ -37,7 +37,8 @@ import {
   Cake,
   ExternalLink,
   ShieldCheck,
-  Eye
+  Eye,
+  Globe
 } from 'lucide-react';
 import { format, parseISO, isValid, isWithinInterval, startOfMonth, differenceInMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -496,6 +497,11 @@ export default function PatientsView({
                           <p className="text-[10px] text-slate-400 font-normal mt-0.5">
                             {p.cpf ? `CPF: ${p.cpf}` : 'Sem CPF'}
                           </p>
+                          {(p.origem?.toLowerCase().includes('portal') || p.viaPortal) && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-cyan-700 bg-cyan-50 border border-cyan-200/80 px-1.5 py-0.2 rounded mt-0.5">
+                              <Globe className="w-2.5 h-2.5 text-brand-cyan" /> Via Portal
+                            </span>
+                          )}
                           {p.allergies && (
                             <span className="inline-flex items-center gap-1 text-[9px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.2 rounded mt-0.5">
                               <AlertTriangle className="w-2.5 h-2.5" /> {p.allergies}
@@ -659,6 +665,11 @@ export default function PatientsView({
                       <p className="text-[10px] text-slate-400">
                         {p.cpf ? `CPF: ${p.cpf}` : 'Sem CPF'}
                       </p>
+                      {(p.origem?.toLowerCase().includes('portal') || p.viaPortal) && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold text-cyan-700 bg-cyan-50 border border-cyan-200/80 px-1.5 py-0.5 rounded-md mt-1">
+                          <Globe className="w-2.5 h-2.5 text-brand-cyan" /> Via Portal
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -674,6 +685,13 @@ export default function PatientsView({
                     <span className="text-[10px] text-slate-400 font-bold">WhatsApp:</span>
                     <span className="font-bold">{p.phone || p.telefone || 'Não informado'}</span>
                   </div>
+
+                  {p.dentistaResponsavel && (
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="text-[10px] text-slate-400 font-bold">Dentista:</span>
+                      <span className="font-bold text-slate-700 truncate max-w-[140px]">{p.dentistaResponsavel}</span>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between text-slate-600">
                     <span className="text-[10px] text-slate-400 font-bold">Próx. Consulta:</span>
@@ -774,6 +792,7 @@ export default function PatientsView({
                 <label className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Escolha o Modelo:</label>
                 <div className="flex flex-wrap gap-1.5">
                   {[
+                    { id: 'agendamento_online', label: '🔗 Link de Autoagendamento' },
                     { id: 'lembrete', label: 'Lembrete de Consulta' },
                     { id: 'retorno', label: 'Retorno Preventivo' },
                     { id: 'aniversario', label: 'Felicitações 🎂' }
@@ -783,7 +802,22 @@ export default function PatientsView({
                       onClick={() => {
                         setWhatsappTemplate(t.id as any);
                         const fn = (whatsappModalPatient.name || 'Paciente').split(' ')[0];
-                        if (t.id === 'lembrete') {
+                        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+                        const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+                        const params = new URLSearchParams();
+                        params.set('booking', 'true');
+                        if (clinicName) params.set('clinic', clinicName);
+                        if (whatsappModalPatient.dentistaResponsavel) {
+                          params.set('doctor', whatsappModalPatient.dentistaResponsavel);
+                        }
+                        const bookingUrl = `${origin}${pathname}?${params.toString()}`;
+
+                        if (t.id === 'agendamento_online') {
+                          const docText = whatsappModalPatient.dentistaResponsavel ? ` com Dr(a). ${whatsappModalPatient.dentistaResponsavel}` : '';
+                          setCustomMessageText(
+                            `Olá, *${fn}*! 👋\n\nSegue o link para você escolher o melhor dia e horário para seu agendamento na clínica *${clinicName}*${docText}:\n\n🔗 ${bookingUrl}\n\nBasta acessar o link e confirmar sua consulta em instantes. Qualquer dúvida estamos à disposição! 🦷✨`
+                          );
+                        } else if (t.id === 'lembrete') {
                           setCustomMessageText(
                             `Olá, *${fn}*! 👋 Lembramos que você tem consulta agendada na clínica *${clinicName}* para o dia ${whatsappModalPatient.upcomingApptDate || 'previsto'} às ${whatsappModalPatient.upcomingApptTime || 'horário marcado'}. Responda SIM para confirmar sua presença! 🦷`
                           );
@@ -793,7 +827,7 @@ export default function PatientsView({
                           );
                         } else {
                           setCustomMessageText(
-                            `Olá, *${fn}*! Aqui é da clínica *${clinicName}*. Gostaria de convidá-lo(a) para agendar uma avaliação preventiva e limpeza. Vamos marcar um horário?`
+                            `Olá, *${fn}*! Aqui é da clínica *${clinicName}*. Gostaria de convidá-lo(a) para agendar uma avaliação preventiva e limpeza. Vamos marcar um horário? Acesse: ${bookingUrl}`
                           );
                         }
                       }}
@@ -891,8 +925,21 @@ export default function PatientsView({
                 </div>
 
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-1">
-                  <span className="text-[10px] font-black uppercase text-slate-400">Dentista Preferencial</span>
+                  <span className="text-[10px] font-black uppercase text-slate-400">Dentista / Médico Responsável</span>
                   <p className="font-bold text-slate-800">{detailPatient.dentistaResponsavel || 'Geral da Clínica'}</p>
+                </div>
+
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-1 sm:col-span-2">
+                  <span className="text-[10px] font-black uppercase text-slate-400">Canal de Origem</span>
+                  <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                    {detailPatient.origem?.toLowerCase().includes('portal') || detailPatient.viaPortal ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-bold text-cyan-800 bg-cyan-50 px-2.5 py-1 rounded-xl border border-cyan-200">
+                        <Globe className="w-3.5 h-3.5 text-brand-cyan" /> Agendado / Cadastrado via Portal do Paciente
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-600">{detailPatient.origem || 'Recepção / Presencial'}</span>
+                    )}
+                  </p>
                 </div>
               </div>
 

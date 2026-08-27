@@ -155,6 +155,9 @@ import RadiographyAIView from './components/RadiographyAIView';
 import PatientPortalView from './components/PatientPortalView';
 import WhatsAppChatbotView from './components/WhatsAppChatbotView';
 import TreatmentPlanAIModal from './components/TreatmentPlanAIModal';
+import PublicBookingView from './components/PublicBookingView';
+import LoginView from './components/LoginView';
+import ShareBookingModal from './components/ShareBookingModal';
 import {
   CLINIC_TIME_SLOTS,
   CLINIC_OPEN_TIME,
@@ -656,6 +659,10 @@ export default function App() {
   const [users, setUsers] = useState<any[]>(INITIAL_USERS);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isPublicBooking, setIsPublicBooking] = useState(false);
+  const [bookingClinicId, setBookingClinicId] = useState<string | undefined>(undefined);
+  const [bookingDoctor, setBookingDoctor] = useState<string | undefined>(undefined);
+  const [bookingClinicName, setBookingClinicName] = useState<string | undefined>(undefined);
+  const [showShareBookingModal, setShowShareBookingModal] = useState(false);
   const [confirmApptId, setConfirmApptId] = useState<string | null>(null);
   const [reschedulePreFill, setReschedulePreFill] = useState<any | null>(null);
 
@@ -685,6 +692,12 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       if (params.get('booking') === 'true') {
         setIsPublicBooking(true);
+        const cId = params.get('clinicId') || params.get('trialOwnerId');
+        const doc = params.get('doctor') || params.get('dentista');
+        const cName = params.get('clinicName');
+        if (cId) setBookingClinicId(cId);
+        if (doc) setBookingDoctor(doc);
+        if (cName) setBookingClinicName(cName);
       }
       const apptId = params.get('confirmAppt');
       if (apptId) {
@@ -1542,23 +1555,82 @@ export default function App() {
     const finalDate = normalized.date;
     const finalTime = normalized.time;
 
-    const matchedPatient = findPatientByRobustMatch(newAppt.paciente, patients);
-    const patientPhone = newAppt.telefone || matchedPatient?.phone;
+    const trimmedPatientName = (newAppt.paciente || '').trim();
+    const matchedPatient = findPatientByRobustMatch(trimmedPatientName, patients);
+    let finalPatientId = newAppt.pacienteId || matchedPatient?.id;
+    const patientPhone = newAppt.telefone || newAppt.phone || matchedPatient?.phone || '';
+    const isFromPortal = Boolean(newAppt.viaPortal || newAppt.origem?.toLowerCase().includes('portal') || newAppt.canal?.toLowerCase().includes('portal'));
+
+    // Garante que o paciente esteja cadastrado no sistema vinculado ao m√©dico/dentista selecionado
+    try {
+      if (!matchedPatient) {
+        finalPatientId = finalPatientId || `pat-${Date.now()}`;
+        const newPatientData: any = {
+          id: finalPatientId,
+          name: trimmedPatientName,
+          email: newAppt.email || '',
+          phone: patientPhone,
+          cpf: newAppt.cpf || '',
+          dentistaResponsavel: newAppt.dentista, // Vincula ao m√©dico/dentista selecionado no portal
+          origem: isFromPortal ? 'Portal do Paciente' : (newAppt.origem || 'Agenda'),
+          canal: isFromPortal ? 'Portal Online' : (newAppt.canal || 'Recep√ß√£o'),
+          viaPortal: isFromPortal,
+          status: 'Ativo',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        if (trialId) {
+          newPatientData.trialOwnerId = trialId;
+        }
+        console.log('[handleCreateAppointment] Auto-cadastrando novo paciente via agendamento:', newPatientData);
+        await setDoc(doc(db, 'patients', finalPatientId), newPatientData, { merge: true });
+      } else {
+        finalPatientId = matchedPatient.id;
+        const needsUpdate = !matchedPatient.dentistaResponsavel || isFromPortal || (newAppt.telefone && !matchedPatient.phone);
+        if (needsUpdate) {
+          const updatedPatientData: any = {
+            dentistaResponsavel: matchedPatient.dentistaResponsavel || newAppt.dentista,
+            updatedAt: new Date().toISOString()
+          };
+          if (newAppt.telefone && !matchedPatient.phone) {
+            updatedPatientData.phone = newAppt.telefone;
+          }
+          if (newAppt.cpf && !matchedPatient.cpf) {
+            updatedPatientData.cpf = newAppt.cpf;
+          }
+          if (newAppt.email && !matchedPatient.email) {
+            updatedPatientData.email = newAppt.email;
+          }
+          if (isFromPortal && !matchedPatient.origem) {
+            updatedPatientData.origem = 'Portal do Paciente';
+            updatedPatientData.canal = 'Portal Online';
+            updatedPatientData.viaPortal = true;
+          }
+          await setDoc(doc(db, 'patients', matchedPatient.id), updatedPatientData, { merge: true });
+        }
+      }
+    } catch (patSyncErr) {
+      console.warn('[handleCreateAppointment] Aviso ao sincronizar paciente no Firestore:', patSyncErr);
+    }
 
     const record: DentalRecord = {
       id: `rec-new-${Date.now()}`,
       data: finalDate,
       horario: finalTime,
-      paciente: newAppt.paciente,
+      paciente: trimmedPatientName,
+      pacienteId: finalPatientId || undefined,
       telefone: patientPhone || '',
       procedimento: newAppt.procedimento || 'Avalia√ß√£o',
       dentista: newAppt.dentista,
       status: 'Agendado',
       statusPagamento: 'Pendente',
       valor: Number(newAppt.valor) || 0,
-      observacao: newAppt.observacao || '',
+      observacao: newAppt.observacao || (isFromPortal ? 'Agendamento realizado via Portal do Paciente Online' : ''),
+      origem: isFromPortal ? 'Portal do Paciente' : (newAppt.origem || 'Agenda'),
+      viaPortal: isFromPortal,
+      canal: isFromPortal ? 'Portal Online' : (newAppt.canal || 'Presencial'),
       isQuickEvent: newAppt.isQuickEvent || false,
-      createdBy: newAppt.createdBy || ''
+      createdBy: newAppt.createdBy || (isFromPortal ? 'Portal do Paciente' : '')
     } as any;
 
     if (trialId) {
@@ -2405,14 +2477,20 @@ export default function App() {
           onBack={() => {
             setIsPublicBooking(false);
             setReschedulePreFill(null);
+            if (typeof window !== 'undefined' && window.history.pushState) {
+              const newUrl = window.location.pathname;
+              window.history.pushState({}, '', newUrl);
+            }
           }} 
           users={users} 
           data={data} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
-          clinicName={clinicName}
+          clinicName={bookingClinicName || clinicName}
           clinicLogo={clinicLogo}
           footerText={footerText}
+          clinicId={bookingClinicId || currentUser?.clinicId || currentUser?.trialOwnerId}
+          targetDoctor={bookingDoctor}
           initialFormData={reschedulePreFill}
         />
         {renderLegal()}
@@ -2555,7 +2633,6 @@ export default function App() {
         <LoginView 
           users={users} 
           onLogin={handleLogin} 
-          onOpenBooking={() => setIsPublicBooking(true)} 
           onPrivacyPolicy={() => setShowPrivacyPolicy(true)}
           onTerms={() => setShowTermsOfUse(true)}
           clinicName={clinicName}
@@ -2803,6 +2880,8 @@ export default function App() {
           }}
           users={users}
           currentUser={currentUser}
+          clinicName={clinicName}
+          clinicId={currentUser?.clinicId || currentUser?.trialOwnerId || currentUser?.id || '1'}
         />;
       case 'Consultas':
         return <AppointmentsView 
@@ -3061,10 +3140,7 @@ export default function App() {
           paymentStatuses={paymentStatuses}
           doctorsList={doctorsList}
           onOnlineBookingClick={() => {
-            const url = window.location.origin + window.location.pathname + '?booking=true';
-            navigator.clipboard.writeText(url);
-            alert('Link de agendamento online copiado para o seu clipboard!');
-            setIsPublicBooking(true);
+            setShowShareBookingModal(true);
           }}
         />
 
@@ -4005,6 +4081,14 @@ export default function App() {
         footerText={footerText}
       />
 
+      <ShareBookingModal
+        isOpen={showShareBookingModal}
+        onClose={() => setShowShareBookingModal(false)}
+        clinicName={clinicName}
+        clinicId={currentUser?.clinicId || currentUser?.trialOwnerId || currentUser?.id || '1'}
+        users={users}
+        currentUser={currentUser}
+      />
       {renderLegal()}
       </div>
     </div>
@@ -10449,4961 +10533,142 @@ function ClinicalEvolutionFormView({ onBack, onSave, patientName, users }: { onB
       dentista: dentist,
       procedimento: procedure,
       data: format(new Date(), 'yyyy-MM-dd'),
-      valor: Number(value),
-      observacao: evolution
-    });
-    if (success) onBack();
-    setIsSaving(false);
-  };
-
-  return (
-    <div className="max-w-4xl mx-auto space-y-10 animate-in fade-in slide-in-from-right-6 duration-700 pb-20">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-5">
-          <button onClick={onBack} disabled={isSaving} className="p-3 bg-white border border-slate-200 rounded-2xl cursor-pointer hover:bg-slate-50 transition-all disabled:opacity-50 shadow-sm">
-            <ArrowLeft className="w-5 h-5 text-slate-600" />
-          </button>
-          <div>
-            <span className="text-[10px] font-black text-brand-cyan uppercase tracking-[0.2em] mb-1 block leading-none">Registro Cl√≠nico Eletr√¥nico</span>
-            <h2 className="text-2xl font-black text-slate-800 tracking-tight leading-none mb-1">Nova Evolu√ß√£o de Paciente</h2>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none">{patientName}</p>
-          </div>
-        </div>
-        
-        <div className="hidden sm:flex items-center gap-4 px-6 py-3 bg-slate-900 rounded-2xl shadow-xl shadow-slate-900/10 border border-white/5">
-           <Activity className="w-4 h-4 text-brand-cyan animate-pulse" />
-           <span className="text-[9px] font-black text-white uppercase tracking-[0.2em]">Sess√£o de Escrita Ativa</span>
-        </div>
-      </div>
-
-      <div className="bg-white border border-slate-200 rounded-[40px] shadow-2xl shadow-slate-200/50 overflow-hidden relative">
-        {isSaving && (
-          <div className="absolute inset-0 bg-white/80 z-20 flex items-center justify-center backdrop-blur-md">
-            <div className="flex flex-col items-center gap-5">
-              <div className="relative">
-                <div className="w-20 h-20 border-4 border-slate-100 border-t-brand-cyan rounded-full animate-spin" />
-                <Activity className="w-8 h-8 text-brand-cyan absolute top-1/2 left-1/2 -translate-y-1/2 -translate-x-1/2" />
-              </div>
-              <span className="text-[10px] font-black text-slate-900 uppercase tracking-[0.3em] animate-pulse">Sincronizando com Prontu√°rio...</span>
-            </div>
-          </div>
-        )}
-
-        <div className="p-10 space-y-10">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-3">
-              <label className="text-[10px] uppercase font-black text-slate-400 tracking-widest ml-1">Dentista Autor da Nota</label>
-              <div className="relative">
-                <User className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 pointer-events-none" />
-                <select 
-                  value={dentist} 
-                  onChange={(e) => setDentist(e.target.value)} 
-                  className="w-full pl-12 pr-4 py-4 bg-slate-50/50 border border-slate-100 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all appearance-none cursor-pointer"
-                >
-                  <option value="">Selecione o profissional respons√°vel</option>
-                  {users.map(u => u.role === 'Dentista' && <option key={u.id} value={u.name}>{u.name}</option>)}
-                </select>
-                <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 pointer-events-none" />
-              </div>
-            </div>
-            <div className="space-y-3">
-              <label className="text-[10px] uppercase font-black text-slate-400 tracking-widest ml-1">Procedimento Realizado</label>
-              <div className="relative">
-                <Stethoscope className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 pointer-events-none" />
-                <input 
-                  value={procedure}
-                  onChange={(e) => setProcedure(SecurityUtils.sanitizeLettersOnly(e.target.value))}
-                  className="w-full pl-12 pr-4 py-4 bg-slate-50/50 border border-slate-100 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all"
-                  placeholder="Ex: Restaura√ß√£o Resinosa, Endodontia, etc."
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex justify-between items-center px-1">
-              <label className="text-[10px] uppercase font-black text-slate-400 tracking-widest ml-1">Evolu√ß√£o Cl√≠nica Detalhada</label>
-              <div className="flex items-center gap-2 bg-brand-cyan/5 px-3 py-1.5 rounded-full border border-brand-cyan/10">
-                <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan animate-pulse"></div>
-                <span className="text-[8px] font-black text-brand-cyan uppercase tracking-widest">Protocolo de Seguran√ßa Ativo</span>
-              </div>
-            </div>
-            <textarea 
-              value={evolution} 
-              onChange={(e) => setEvolution(e.target.value)} 
-              placeholder="Descreva aqui o estado cl√≠nico, procedimentos t√©cnicos, materiais espec√≠ficos, intercorr√™ncias e orienta√ß√µes p√≥s-operat√≥rias..."
-              className="w-full p-8 bg-slate-50/50 border border-slate-100 rounded-[32px] text-sm font-bold text-slate-700 outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all min-h-[400px] resize-none leading-relaxed placeholder:text-slate-300" 
-            />
-          </div>
-
-          <div className="flex flex-col md:flex-row items-center justify-between gap-8 pt-6 border-t border-slate-50">
-             <div className="space-y-3 w-full md:w-64">
-               <label className="text-[10px] uppercase font-black text-slate-400 tracking-widest ml-1">Lan√ßamento Financeiro (R$)</label>
-               <input 
-                 type="number"
-                 value={value}
-                 onChange={(e) => setValue(e.target.value)}
-                 className="w-full p-4 bg-slate-50/50 border border-slate-100 rounded-2xl text-lg font-black text-brand-cyan outline-none focus:bg-white focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan transition-all"
-               />
-             </div>
-             
-             <div className="flex items-center gap-4 w-full md:w-auto">
-               <button 
-                 onClick={onBack} 
-                 className="flex-1 md:flex-none px-10 py-5 text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] hover:text-slate-600 transition-all rounded-2xl border-2 border-transparent hover:bg-slate-50"
-               >
-                 Descartar
-               </button>
-               <button 
-                 onClick={handleSave} 
-                 disabled={isSaving}
-                 className="flex-1 md:flex-none px-12 py-5 bg-slate-900 text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-2xl shadow-2xl shadow-slate-900/20 hover:bg-brand-cyan transition-all flex items-center justify-center gap-3 active:scale-[0.98]"
-               >
-                 <CheckCircle2 className="w-5 h-5" />
-                 Gerar Registro Oficial
-               </button>
-             </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AdminView({ 
-  users, 
-  onAddUser, 
-  onUpdateUser,
-  onDeleteUser,
-  currentUser,
-  clinicName,
-  clinicLogo,
-  footerText,
-  providerPhone,
-  providerName,
-  onUpdateSettings,
-  onResetDatabase,
-  deferredPrompt,
-  onInstallPWA,
-  data,
-  patients,
-  documents,
-  onRestore,
-  adminTab,
-  setAdminTab
-}: { 
-  users: any[]; 
-  onAddUser: (u: any) => Promise<boolean>; 
-  onUpdateUser: (id: string, u: any) => Promise<boolean>;
-  onDeleteUser: (id: string) => Promise<boolean>;
-  currentUser: any;
-  clinicName: string;
-  clinicLogo: string | null;
-  footerText: string;
-  providerPhone: string;
-  providerName: string;
-  onUpdateSettings: (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => Promise<void>;
-  onResetDatabase?: () => Promise<void>;
-  deferredPrompt: any;
-  onInstallPWA: () => void;
-  data: any[];
-  patients: any[];
-  documents: any[];
-  onRestore: (data: any) => Promise<void>;
-  adminTab?: 'users' | 'settings' | 'backup';
-  setAdminTab?: (tab: 'users' | 'settings' | 'backup') => void;
-}) {
-  const [showAddUser, setShowAddUser] = useState(false);
-  const [editingUser, setEditingUser] = useState<any>(null);
-  const [userToDelete, setUserToDelete] = useState<any>(null);
-  const [userToUnlock, setUserToUnlock] = useState<any>(null);
-  
-  const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState('Dentista');
-  const [newUserUsername, setNewUserUsername] = useState('');
-  const [newUserPassword, setNewUserPassword] = useState('123');
-  const [newUserEmail, setNewUserEmail] = useState('');
-  const [newUserPhone, setNewUserPhone] = useState('');
-  const [newUserModules, setNewUserModules] = useState<string[]>(['Dashboard', 'Agenda', 'Pacientes']);
-  
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [internalTab, setInternalTab] = useState<'users' | 'settings' | 'backup'>('users');
-  const activeTab = adminTab || internalTab;
-  const setActiveTab = setAdminTab || setInternalTab;
-
-  const AVAILABLE_MODULES = ['Dashboard', 'Agenda', 'Pacientes', 'Retorno', 'Mensagens', 'Financeiro', 'Administra√ß√£o', 'Documentos'];
-
-  const toggleModule = (module: string, currentModules: string[], setter: (m: string[]) => void) => {
-    if (currentModules.includes(module)) {
-      setter(currentModules.filter(m => m !== module));
-    } else {
-      setter([...currentModules, module]);
-    }
-  };
-
-  return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-left-2 duration-300">
-      
-      {/* Redesigned Admin Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200/80">
-        <div>
-          <span className="text-[10px] font-black text-sky-500 uppercase tracking-widest block mb-1">√Årea de Administra√ß√£o</span>
-          <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Gest√£o Estrat√©gica</h2>
-          <p className="text-slate-500 text-xs font-medium">Controle de acessos, par√¢metros globais da cl√≠nica, seguran√ßa e c√≥pias de seguran√ßa.</p>
-        </div>
-        
-        <div className="flex bg-slate-200/50 p-1 rounded-xl shadow-inner overflow-x-auto no-scrollbar w-full sm:w-auto self-start sm:self-center gap-1">
-          <button 
-            type="button"
-            onClick={() => setActiveTab('users')}
-            className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
-              activeTab === 'users' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
-            )}
-          >
-            Usu√°rios
-          </button>
-          <button 
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
-              activeTab === 'settings' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
-            )}
-          >
-            Configura√ß√µes
-          </button>
-          <button 
-            type="button"
-            onClick={() => setActiveTab('backup')}
-            className={cn(
-              "px-4 py-2 text-[10px] font-bold uppercase rounded-lg transition-all shrink-0 cursor-pointer",
-              activeTab === 'backup' ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-800"
-            )}
-          >
-            Backup
-          </button>
-        </div>
-      </div>
-
-      <div className="min-h-[500px]">
-        {activeTab === 'backup' && (
-          <BackupView 
-            data={data}
-            patients={patients}
-            users={users}
-            documents={documents}
-            clinicName={clinicName}
-            onRestore={onRestore}
-          />
-        )}
-        {activeTab === 'settings' && (
-          <SettingsView 
-            clinicName={clinicName} 
-            clinicLogo={clinicLogo}
-            footerText={footerText}
-            providerPhone={providerPhone}
-            providerName={providerName}
-            onUpdateSettings={onUpdateSettings} 
-            onResetDatabase={onResetDatabase}
-            isAdmin={currentUser?.role?.toLowerCase() === 'admin'}
-            deferredPrompt={deferredPrompt}
-            onInstallPWA={onInstallPWA}
-          />
-        )}
-        
-        {activeTab === 'users' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 space-y-6">
-              {showAddUser && (
-                <section className="bg-white border-2 border-brand-cyan p-6 space-y-4 shadow-xl animate-in zoom-in-95 duration-200 rounded-2xl">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-brand-cyan">Novo Usu√°rio</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Nome</label>
-                      <input 
-                        type="text" 
-                        value={newUserName}
-                        onChange={(e) => setNewUserName(SecurityUtils.limit(SecurityUtils.sanitizeLettersOnly(e.target.value), 80))}
-                        placeholder="Nome completo"
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg" 
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Cargo</label>
-                      <select 
-                        value={newUserRole}
-                        onChange={(e) => setNewUserRole(e.target.value)}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg cursor-pointer"
-                      >
-                        <option>Admin</option>
-                        <option>Dentista</option>
-                        <option>Recepcionista</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">E-mail</label>
-                      <input 
-                        type="email" 
-                        value={newUserEmail}
-                        onChange={(e) => setNewUserEmail(SecurityUtils.sanitizeEmail(e.target.value))}
-                        placeholder="email@clinica.com"
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg" 
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Telefone</label>
-                      <input 
-                        type="tel" 
-                        value={newUserPhone}
-                        onChange={(e) => setNewUserPhone(SecurityUtils.maskPhone(e.target.value))}
-                        placeholder="(00) 00000-0000"
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg" 
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Login</label>
-                      <input 
-                        type="text" 
-                        value={newUserUsername}
-                        onChange={(e) => setNewUserUsername(SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 30))}
-                        placeholder="usuario.acesso"
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg" 
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Senha</label>
-                      <input 
-                        type="password" 
-                        value={newUserPassword}
-                        onChange={(e) => setNewUserPassword(SecurityUtils.limit(e.target.value, 20))}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-brand-cyan outline-none rounded-lg" 
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 block ml-1">M√≥dulos Acess√≠veis</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {AVAILABLE_MODULES.map(m => (
-                        <label key={m} className={cn(
-                          "flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all",
-                          newUserModules.includes(m) ? "bg-brand-cyan/10 border-brand-cyan/30 text-brand-cyan font-bold" : "bg-slate-50 border-slate-100 text-slate-400"
-                        )}>
-                          <input 
-                            type="checkbox" 
-                            checked={newUserModules.includes(m)}
-                            onChange={() => toggleModule(m, newUserModules, setNewUserModules)}
-                            className="hidden"
-                          />
-                          <span className="text-[10px] uppercase truncate">{m}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end gap-3 pt-2">
-                    <button 
-                      onClick={() => setShowAddUser(false)} 
-                      className="px-4 py-2 text-[10px] uppercase font-bold text-slate-400 hover:text-slate-600 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      disabled={isSubmitting}
-                      onClick={async () => { 
-                        if(newUserName && newUserUsername && newUserPassword) { 
-                          if (SecurityUtils.hasDangerousScript(newUserName) || SecurityUtils.hasDangerousScript(newUserUsername) || SecurityUtils.hasDangerousScript(newUserEmail)) {
-                            alert('A√ß√£o bloqueada por motivos de seguran√ßa (XSS detectado).');
-                            return;
-                          }
-
-                          if (newUserEmail && !SecurityUtils.isValidEmail(newUserEmail)) {
-                            alert('E-mail inv√°lido.');
-                            return;
-                          }
-
-                          setIsSubmitting(true);
-                          try {
-                            const success = await onAddUser({ 
-                              name: newUserName, 
-                              role: newUserRole, 
-                              username: newUserUsername.toLowerCase().trim(), 
-                              password: newUserPassword,
-                              email: newUserEmail,
-                              phone: newUserPhone,
-                              modules: newUserModules.join(', ')
-                            }); 
-                            
-                            if (success) {
-                              setNewUserName(''); 
-                              setNewUserUsername(''); 
-                              setNewUserPassword('123'); 
-                              setNewUserEmail('');
-                              setNewUserPhone('');
-                              setNewUserModules(['Dashboard', 'Agenda', 'Pacientes']);
-                              setShowAddUser(false); 
-                            }
-                          } finally {
-                            setIsSubmitting(false);
-                          }
-                        }
-                      }}
-                      className="px-6 py-2 bg-brand-cyan text-white text-[10px] font-bold uppercase rounded-lg shadow-md hover:translate-y-[-1px] transition-all disabled:opacity-50"
-                    >
-                      {isSubmitting ? 'Salvando...' : 'Cadastrar'}
-                    </button>
-                  </div>
-                </section>
-              )}
-
-              {editingUser && (
-                <section className="bg-white border-2 border-emerald-500 p-6 space-y-4 shadow-xl animate-in zoom-in-95 duration-200 rounded-2xl">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-emerald-600">Editar Usu√°rio: {editingUser.name}</h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Nome</label>
-                      <input 
-                        type="text" 
-                        value={editingUser.name}
-                        onChange={(e) => setEditingUser({...editingUser, name: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 80)})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Cargo</label>
-                      <select 
-                        value={editingUser.role}
-                        onChange={(e) => setEditingUser({...editingUser, role: e.target.value})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg cursor-pointer"
-                      >
-                        <option>Admin</option>
-                        <option>Dentista</option>
-                        <option>Recepcionista</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">E-mail</label>
-                      <input 
-                        type="email" 
-                        value={editingUser.email || ''}
-                        onChange={(e) => setEditingUser({...editingUser, email: SecurityUtils.sanitizeEmail(e.target.value)})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Telefone</label>
-                      <input 
-                        type="tel" 
-                        value={editingUser.phone || ''}
-                        onChange={(e) => setEditingUser({...editingUser, phone: SecurityUtils.maskPhone(e.target.value)})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Usu√°rio (Login)</label>
-                      <input 
-                        type="text" 
-                        value={editingUser.username || ''}
-                        onChange={(e) => setEditingUser({...editingUser, username: SecurityUtils.limit(e.target.value.toLowerCase().trim(), 30)})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg font-mono" 
-                        placeholder="nome.usuario"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase font-bold text-slate-400">Nova Senha</label>
-                      <input 
-                        type="password" 
-                        value={editingUser.password || ''}
-                        onChange={(e) => setEditingUser({...editingUser, password: e.target.value})}
-                        className="w-full p-2 bg-slate-50 border border-slate-100 text-sm focus:border-emerald-500 outline-none rounded-lg" 
-                        placeholder="Senha de acesso"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[9px] uppercase font-bold text-slate-400 block ml-1">M√≥dulos Acess√≠veis</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {AVAILABLE_MODULES.map(m => {
-                        const currentModules = (editingUser.modules || '').split(', ').filter(Boolean);
-                        const isChecked = currentModules.includes(m);
-                        return (
-                          <label key={m} className={cn(
-                            "flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all",
-                            isChecked ? "bg-emerald-50 border-emerald-200 text-emerald-600 font-bold" : "bg-slate-50 border-slate-100 text-slate-400"
-                          )}>
-                            <input 
-                              type="checkbox" 
-                              checked={isChecked}
-                              onChange={() => {
-                                let newModules;
-                                if (isChecked) {
-                                  newModules = currentModules.filter(mod => mod !== m);
-                                } else {
-                                  newModules = [...currentModules, m];
-                                }
-                                setEditingUser({ ...editingUser, modules: newModules.join(', ') });
-                              }}
-                              className="hidden"
-                            />
-                            <span className="text-[10px] uppercase truncate">{m}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end gap-3 pt-2">
-                    <button 
-                      onClick={() => setEditingUser(null)} 
-                      className="px-4 py-2 text-[10px] uppercase font-bold text-slate-400 hover:text-slate-600 transition-colors"
-                    >
-                      Cancelar
-                    </button>
-                    <button 
-                      disabled={isSubmitting}
-                      onClick={async () => { 
-                        if (SecurityUtils.hasDangerousScript(editingUser.name) || SecurityUtils.hasDangerousScript(editingUser.email) || SecurityUtils.hasDangerousScript(editingUser.username)) {
-                          alert('A√ß√£o bloqueada por motivos de seguran√ßa (XSS detectado).');
-                          return;
-                        }
-                        if (editingUser.email && !SecurityUtils.isValidEmail(editingUser.email)) {
-                          alert('E-mail inv√°lido.');
-                          return;
-                        }
-                        setIsSubmitting(true);
-                        try {
-                          const success = await onUpdateUser(editingUser.id, editingUser); 
-                          if (success) {
-                            alert('Usu√°rio atualizado com sucesso!');
-                            setEditingUser(null);
-                          }
-                        } finally {
-                          setIsSubmitting(false);
-                        }
-                      }}
-                      className="px-6 py-2 bg-emerald-500 text-white text-[10px] font-bold uppercase rounded-lg shadow-md hover:translate-y-[-1px] transition-all disabled:opacity-50"
-                    >
-                      {isSubmitting ? 'Salvando...' : 'Atualizar'}
-                    </button>
-                  </div>
-                </section>
-              )}
-
-              <section className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden">
-                <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex justify-between items-center">
-                  <h3 className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Base de Acesso</h3>
-                  <button 
-                    onClick={() => setShowAddUser(true)}
-                    className="text-[10px] font-bold bg-slate-900 text-white px-4 py-2 rounded-lg tracking-widest uppercase hover:bg-brand-cyan transition-all shadow-sm"
-                  >
-                    + Novo Usu√°rio
-                  </button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-50/50 text-[9px] font-bold text-slate-400 uppercase border-b border-slate-100">
-                      <tr>
-                        <th className="px-6 py-4">Nome</th>
-                        <th className="px-6 py-4">Cargo / Contato</th>
-                        <th className="px-6 py-4">Acesso</th>
-                        <th className="px-6 py-4 text-center">A√ß√µes</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-xs font-mono text-slate-600 divide-y divide-slate-50">
-                      {users.map(u => (
-                        <tr key={u.id} className="hover:bg-slate-50/50 transition-colors group">
-                          <td className="px-6 py-4">
-                            <div className="font-sans font-bold text-slate-800 flex items-center gap-2 flex-wrap">
-                              {u.name}
-                              {u.isNonExistent && (
-                                <span className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 text-slate-400 text-[7px] font-bold rounded uppercase tracking-wider">
-                                  Inexistente
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[9px] text-slate-400 font-mono">@{u.username}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="mb-1.5 flex flex-wrap gap-1.5 items-center">
-                              <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-600 text-[8px] font-black uppercase rounded shadow-sm">
-                                {u.role}
-                              </span>
-                              {u.blocked ? (
-                                <span className="px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-600 text-[8px] font-black uppercase rounded shadow-sm flex items-center gap-1 animate-pulse">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
-                                  Bloqueado ({u.isNonExistent ? "3/3" : "5/5"})
-                                </span>
-                              ) : u.loginAttempts && u.loginAttempts > 0 ? (
-                                <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-600 text-[8px] font-black uppercase rounded shadow-sm">
-                                  Erros: {u.loginAttempts}/{u.isNonExistent ? 3 : 5}
-                                </span>
-                              ) : (
-                                <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-600 text-[8px] font-black uppercase rounded shadow-sm">
-                                  {u.isNonExistent ? "Inexistente Limpo" : "Ativo"}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[9px] text-slate-400 font-sans">
-                              {u.email && <div>{u.email}</div>}
-                              {u.phone && <div>{u.phone}</div>}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-[9px] text-slate-400 font-sans">{u.modules}</td>
-                          <td className="px-6 py-4 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              {(u.blocked || (u.loginAttempts && u.loginAttempts > 0)) && (
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setUserToUnlock(u);
-                                  }}
-                                  className="p-2 text-rose-500 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
-                                  title="Desbloquear Usu√°rio"
-                                >
-                                  <Unlock className="w-4 h-4" />
-                                </button>
-                              )}
-                              {!u.isNonExistent && (
-                                <button 
-                                  onClick={() => setEditingUser(u)}
-                                  className="p-2 text-slate-400 hover:text-brand-cyan hover:bg-brand-cyan/5 rounded-lg transition-all"
-                                  title="Editar Usu√°rio"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </button>
-                              )}
-                              <button 
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setUserToDelete(u);
-                                }}
-                                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
-                                title="Excluir Usu√°rio"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            </div>
-
-            <div className="space-y-6">
-              <section className="bg-white border border-slate-200 p-6 rounded-2xl space-y-4 shadow-sm">
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase border-b border-slate-50 pb-2 tracking-widest">Diagn√≥stico</h3>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center text-[10px] font-mono">
-                    <span className="text-emerald-500 font-bold">Cloud Sync Ativa</span>
-                    <Activity className="w-3 h-3 text-emerald-500" />
-                  </div>
-                  <div className="flex justify-between items-center text-[10px] font-mono">
-                    <span className="text-slate-500 uppercase">Usu√°rios Ativos</span>
-                    <span className="text-slate-800 font-bold">{users.length}</span>
-                  </div>
-                </div>
-              </section>
-
-              <section className="bg-slate-900 p-6 rounded-2xl text-white space-y-4 shadow-xl relative overflow-hidden group">
-                <div className="absolute top-[-20%] right-[-10%] opacity-10 rotate-12 group-hover:rotate-45 transition-transform duration-1000">
-                  <Shield className="w-32 h-32" />
-                </div>
-                <h4 className="text-xs font-bold uppercase tracking-widest text-brand-cyan">Infraestrutura</h4>
-                <p className="text-[10px] text-slate-400 leading-relaxed font-sans">Sistema rodando em ambiente seguro. Backups redundantes ativos.</p>
-              </section>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <AnimatePresence>
-        {userToDelete && (
-          <ConfirmUserDeleteModal 
-            user={userToDelete}
-            onCancel={() => setUserToDelete(null)}
-            onConfirm={async () => {
-              const id = userToDelete.id;
-              setUserToDelete(null);
-              await onDeleteUser(id);
-            }}
-          />
-        )}
-        {userToUnlock && (
-          <ConfirmUserUnlockModal 
-            user={userToUnlock}
-            onCancel={() => setUserToUnlock(null)}
-            onConfirm={async () => {
-              const u = userToUnlock;
-              setUserToUnlock(null);
-              const updatedUser = { ...u, blocked: false, loginAttempts: 0 };
-              const success = await onUpdateUser(u.id, updatedUser);
-              if (success) {
-                try {
-                  // Clear the distributed database temporary lockout key
-                  await deleteDoc(doc(db, 'login_attempts', u.username.trim().toLowerCase()));
-                } catch (err) {
-                  console.warn("Failed reset of login attempts collection doc:", err);
-                }
-              }
-            }}
-          />
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function ConfirmUserUnlockModal({ user, onConfirm, onCancel }: { user: any, onConfirm: () => void, onCancel: () => void }) {
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 text-slate-900">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onCancel}
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm shadow-none"
-      />
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden relative z-[210] border border-emerald-100 p-6"
-      >
-        <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4">
-            <Unlock className="w-8 h-8 text-emerald-500 animate-bounce" />
-          </div>
-          <h3 className="text-lg font-bold text-slate-900 mb-2">Desbloquear Usu√°rio?</h3>
-          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-            Deseja restaurar o acesso e zerar as tentativas incorretas de login de <span className="font-bold text-slate-800">{user?.isNonExistent ? `@${user?.username}` : user?.name}</span>?
-          </p>
-          <div className="flex gap-3 w-full">
-            <button 
-              onClick={onCancel}
-              className="flex-1 py-3 text-slate-500 font-bold bg-slate-50 rounded-xl hover:bg-slate-100 transition-all text-xs uppercase tracking-widest cursor-pointer"
-            >
-              Cancelar
-            </button>
-            <button 
-              onClick={onConfirm}
-              className="flex-1 py-3 bg-emerald-500 text-white font-bold rounded-xl hover:bg-emerald-600 transition-all text-xs uppercase tracking-widest shadow-lg shadow-emerald-200 cursor-pointer"
-            >
-              Desbloquear
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function ConfirmUserDeleteModal({ user, onConfirm, onCancel }: { user: any, onConfirm: () => void, onCancel: () => void }) {
-  return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 text-slate-900">
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={onCancel}
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm shadow-none"
-      />
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden relative z-[210] border border-rose-100 p-6"
-      >
-        <div className="flex flex-col items-center text-center">
-          <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center mb-4">
-            <Trash2 className="w-8 h-8 text-rose-500" />
-          </div>
-          <h3 className="text-lg font-bold text-slate-900 mb-2">Excluir Usu√°rio?</h3>
-          <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-            Tem certeza que deseja excluir permanentemente o acesso de <span className="font-bold text-slate-800">{user?.name}</span>? 
-            Esta a√ß√£o remover√° o login do usu√°rio do sistema.
-          </p>
-          <div className="flex gap-3 w-full">
-            <button 
-              onClick={onCancel}
-              className="flex-1 py-3 text-slate-500 font-bold bg-slate-50 rounded-xl hover:bg-slate-100 transition-all text-xs uppercase tracking-widest cursor-pointer"
-            >
-              Cancelar
-            </button>
-            <button 
-              onClick={onConfirm}
-              className="flex-1 py-3 bg-rose-500 text-white font-bold rounded-xl hover:bg-rose-600 transition-all text-xs uppercase tracking-widest shadow-lg shadow-rose-200 cursor-pointer"
-            >
-              Excluir
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-
-function MetricCard({ label, value, description, icon, trend }: {
-  label: string;
-  value: string | number;
-  description: string;
-  icon?: React.ReactNode;
-  trend?: number;
-}) {
-  return (
-    <div className="bg-white p-4 border border-slate-200 shadow-sm relative overflow-hidden group hover:border-brand-cyan transition-colors">
-      <div className="absolute top-0 left-0 w-1 h-full bg-brand-cyan opacity-20 group-hover:opacity-100 transition-opacity" />
-      <div className="flex justify-between items-start mb-2">
-        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{label}</span>
-        <div className="p-1 bg-slate-50 rounded text-slate-400">
-          {icon}
-        </div>
-      </div>
-      <div className="text-2xl font-mono font-bold text-slate-800 tracking-tighter">{value}</div>
-      <div className="flex items-center gap-2 mt-2">
-        {trend !== undefined && (
-          <span className={cn(
-            "text-[9px] font-bold flex items-center gap-0.5 px-1.5 py-0.5 rounded-full",
-            trend > 0 ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
-          )}>
-            {trend > 0 ? <Plus className="w-2 h-2" /> : <Minus className="w-2 h-2" />}
-            {Math.abs(trend)}%
-          </span>
-        )}
-        <span className="text-[9px] text-slate-400 font-medium italic">{description}</span>
-      </div>
-    </div>
-  );
-}
-
-function LoginView({ 
-  users, 
-  onLogin, 
-  onOpenBooking,
-  onPrivacyPolicy,
-  onTerms,
-  clinicName,
-  clinicLogo,
-  footerText,
-  onOpenFreeTrial,
-  onInstallPWA,
-  deferredPrompt
-}: { 
-  users: any[]; 
-  onLogin: (user: any) => void; 
-  onOpenBooking: () => void;
-  onPrivacyPolicy: () => void;
-  onTerms: () => void;
-  clinicName: string;
-  clinicLogo: string | null;
-  footerText: string;
-  onOpenFreeTrial?: () => void;
-  onInstallPWA?: () => void;
-  deferredPrompt?: any;
-}) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lockout, setLockout] = useState(SecurityUtils.getLockoutStatus());
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const status = SecurityUtils.getLockoutStatus();
-      setLockout(status);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    
-    // Sanitize credentials before checking (strip @, /, ., leading/trailing spaces)
-    let cleanUsername = username.trim().toLowerCase().replace(/^[@\/.\s#]+/, '');
-    const cleanPassword = password.trim();
-
-    const isSuperAdminCandidate = 
-      cleanUsername === 'administrador' || 
-      cleanUsername === 'suporte@odontodash.com.br' || 
-      cleanUsername === 'superadmin' || 
-      cleanUsername === 'admin' ||
-      cleanUsername === 'master';
-
-    // If it's a SuperAdmin master candidate, reset any local lockouts immediately
-    if (isSuperAdminCandidate) {
-      SecurityUtils.resetBruteForce();
-      setLockout({ isLocked: false, remaining: 0 });
-    } else {
-      // Layer 1: Local Device Lockout for standard users
-      if (lockout.isLocked) {
-        setError(`Seu dispositivo est√° bloqueado devido a m√∫ltiplas tentativas malsucedidas de login. Tente de novo em ${lockout.remaining}s.`);
-        return;
-      }
-
-      // Layer 1.5: Firestore Device Lockout
-      try {
-        const devLock = await SecurityUtils.checkDeviceLockout();
-        if (devLock.isLocked) {
-          setError(`Este dispositivo foi temporariamente bloqueado ap√≥s exceder o limite de tentativas de login incorretas no sistema. Tente de novo em ${devLock.remaining}s.`);
-          return;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    if (!username || !password) {
-      setError('Preencha todos os campos.');
-      return;
-    }
-
-    setIsLoading(true);
-
-    // Layer 2: Find matching user in the system
-    const matchedUser = users.find(u => {
-      const dbUsername = (u.username || "").toString().trim().toLowerCase().replace(/^[@\/.\s#]+/, '');
-      const dbEmail = (u.email || "").toString().trim().toLowerCase();
-      return dbUsername === cleanUsername || dbEmail === cleanUsername;
-    });
-
-    // Check block status (SuperAdmin is always recoverable)
-    if (matchedUser && matchedUser.blocked === true && !isSuperAdminCandidate) {
-      if (matchedUser.isNonExistent) {
-        setError(`Acesso bloqueado definitivamente. A conta inexistente de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas. Entre em contato com o administrador para liberar o seu acesso.`);
-      } else {
-        setError(`Acesso bloqueado definitivamente. A conta de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas. Entre em contato com o administrador para liberar o seu acesso.`);
-      }
-      setIsLoading(false);
-      return;
-    }
-
-    // Layer 3: Check database lockout for standard accounts
-    if (!isSuperAdminCandidate) {
-      try {
-        const dbLockout = await SecurityUtils.checkFirestoreLockout(cleanUsername);
-        if (dbLockout.isLocked) {
-          setError(`Esta conta ("${cleanUsername}") encontra-se bloqueada temporariamente para conter ataques de for√ßa bruta. Tente de novo em ${dbLockout.remaining}s.`);
-          setIsLoading(false);
-          return;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    
-    // Simulate server security check
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    // Verify authentication credentials
-    let user: any = null;
-    let isCorrectPassword = false;
-
-    if (isSuperAdminCandidate) {
-      const isMasterPassword = cleanPassword === '123' || cleanPassword === 'admin' || cleanPassword === 'admin123' || cleanPassword === 'master123' || cleanPassword === '123456';
-      const dbPassword = (matchedUser?.password || "").toString().trim();
-      
-      if (isMasterPassword || (dbPassword && dbPassword === cleanPassword)) {
-        isCorrectPassword = true;
-        user = {
-          ...(matchedUser || INITIAL_USERS.find(u => u.username === 'administrador') || {}),
-          id: matchedUser?.id || 'super-admin-01',
-          name: matchedUser?.name || 'Suporte OdontoDash',
-          role: 'SuperAdmin',
-          modules: 'Todos',
-          username: 'administrador',
-          password: cleanPassword,
-          email: matchedUser?.email || 'suporte@odontodash.com.br',
-          blocked: false,
-          loginAttempts: 0
-        };
-      }
-    } else if (cleanUsername === 'ana.admin' || cleanUsername === 'andreb202121@gmail.com') {
-      const isDefaultAna = cleanPassword === '123';
-      const dbPassword = (matchedUser?.password || "").toString().trim();
-      if (isDefaultAna || (dbPassword && dbPassword === cleanPassword)) {
-        isCorrectPassword = true;
-        user = matchedUser || INITIAL_USERS.find(u => u.username === 'ana.admin') || {
-          id: '1',
-          name: 'Dra. Ana Silveira',
-          role: 'Admin',
-          modules: 'Todos',
-          username: 'ana.admin',
-          password: cleanPassword,
-          email: 'andreb202121@gmail.com',
-          blocked: false,
-          loginAttempts: 0
-        };
-      }
-    } else if (matchedUser && !matchedUser.isNonExistent) {
-      const dbPassword = (matchedUser.password || "").toString().trim();
-      if (dbPassword === cleanPassword) {
-        isCorrectPassword = true;
-        user = matchedUser;
-      }
-    }
-
-    if (user && isCorrectPassword) {
-      SecurityUtils.recordAttempt(true);
-      await SecurityUtils.recordAttemptFirestore(cleanUsername, true);
-      await SecurityUtils.recordAttemptFirestore('administrador', true);
-      await SecurityUtils.recordDeviceAttempt(true);
-
-      // Clean consecutive failed login attempts and unblock in database
-      try {
-        if (db && user.id) {
-          const userRef = doc(db, 'users', user.id);
-          await setDoc(userRef, {
-            ...user,
-            loginAttempts: 0,
-            blocked: false,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-        }
-      } catch (err) {
-        console.warn("Failed reset of login attempts inside users collection:", err);
-      }
-
-      try {
-        await onLogin(user);
-      } catch (e: any) {
-        setError(e.message || "Erro durante o login.");
-        setIsLoading(false);
-      }
-    } else {
-      SecurityUtils.recordAttempt(false);
-      await SecurityUtils.recordAttemptFirestore(cleanUsername, false);
-      await SecurityUtils.recordDeviceAttempt(false);
-      const updatedLocalLockout = SecurityUtils.getLockoutStatus();
-      setLockout(updatedLocalLockout);
-
-      if (isSuperAdminCandidate) {
-        setError('Senha incorreta para a conta de Super Administrador do Painel Master. Use a senha padr√£o "123".');
-      } else if (matchedUser) {
-        if (matchedUser.isNonExistent) {
-          try {
-            const userRef = doc(db, 'users', matchedUser.id);
-            const currentAttempts = (matchedUser.loginAttempts || 0) + 1;
-            const isBlockedDefinitively = currentAttempts >= 3;
-
-            await setDoc(userRef, {
-              loginAttempts: currentAttempts,
-              blocked: isBlockedDefinitively,
-              updatedAt: new Date().toISOString()
-            }, { merge: true });
-
-            if (isBlockedDefinitively) {
-              setError(`Acesso bloqueado definitivamente. A conta inexistente de "@${cleanUsername}" foi bloqueada por excesso de tentativas de login incorretas.`);
-            } else {
-              const remaining = 3 - currentAttempts;
-              setError(`A conta de usu√°rio "@${cleanUsername}" n√£o existe no sistema. Restam ${remaining} de 3 tentativas.`);
-            }
-          } catch (err) {
-            setError('Credenciais inv√°lidas.');
-          }
-        } else {
-          try {
-            const userRef = doc(db, 'users', matchedUser.id);
-            const currentAttempts = (matchedUser.loginAttempts || 0) + 1;
-            const isBlockedDefinitively = currentAttempts >= 5;
-
-            await setDoc(userRef, {
-              loginAttempts: currentAttempts,
-              blocked: isBlockedDefinitively,
-              updatedAt: new Date().toISOString()
-            }, { merge: true });
-
-            if (isBlockedDefinitively) {
-              setError(`Acesso bloqueado definitivamente. A conta de "@${cleanUsername}" errou a senha 5 vezes consecutivas e foi bloqueada. Apenas um administrador poder√° desbloquear.`);
-            } else {
-              const remaining = 5 - currentAttempts;
-              setError(`Senha incorreta para "@${cleanUsername}". Restam ${remaining} de 5 tentativas.`);
-            }
-          } catch (err) {
-            setError('Credenciais inv√°lidas.');
-          }
-        }
-      } else {
-        // Mock non existent
-        try {
-          const mockUserId = `nonexistent_${cleanUsername}`;
-          await setDoc(doc(db, 'users', mockUserId), {
-            id: mockUserId,
-            name: `Conta Inexistente`,
-            username: cleanUsername,
-            role: 'Inexistente',
-            modules: 'Nenhum',
-            isNonExistent: true,
-            loginAttempts: 1,
-            blocked: false,
-            updatedAt: new Date().toISOString()
-          });
-          setError(`A conta de usu√°rio "@${cleanUsername}" n√£o existe no sistema.`);
-        } catch (err) {
-          setError('Credenciais inv√°lidas.');
-        }
-      }
-      setIsLoading(false);
-    }
-  };
-
-  const handleQuickSuperAdminRestore = async () => {
-    setIsLoading(true);
-    setError(null);
-    setUsername('administrador');
-    setPassword('123');
-    
-    SecurityUtils.resetBruteForce();
-    setLockout({ isLocked: false, remaining: 0 });
-    
-    const superAdminUser = {
-      id: 'super-admin-01',
-      name: 'Suporte OdontoDash (Super Admin)',
-      role: 'SuperAdmin',
-      modules: 'Todos',
-      username: 'administrador',
-      password: '123',
-      email: 'suporte@odontodash.com.br',
-      blocked: false,
-      loginAttempts: 0
-    };
-
-    try {
-      if (db) {
-        await SecurityUtils.recordAttemptFirestore('administrador', true);
-        await SecurityUtils.recordAttemptFirestore('@administrador', true);
-        await SecurityUtils.recordDeviceAttempt(true);
-        await setDoc(doc(db, 'users', 'super-admin-01'), superAdminUser, { merge: true });
-        await deleteDoc(doc(db, 'login_attempts', 'administrador')).catch(() => {});
-        await deleteDoc(doc(db, 'login_attempts', '@administrador')).catch(() => {});
-      }
-    } catch (e) {
-      console.warn("Restore firestore super admin sync:", e);
-    }
-
-    try {
-      await onLogin(superAdminUser);
-    } catch (e: any) {
-      setError(e.message || "Erro ao autenticar painel master.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const firstWord = (clinicName.split(' ')[0] || 'odonto').toLowerCase();
-  const restWords = (clinicName.split(' ').slice(1).join(' ') || 'dash').toLowerCase();
-
-  return (
-    <div className="h-screen w-screen bg-[#f8fafc] flex flex-row relative font-sans overflow-hidden select-none">
-      {/* LEFT COLUMN: Welcome Banner & Clinic Statistics Presentation (CEO Format) */}
-      <div className="hidden md:flex md:w-[50%] lg:w-[55%] xl:w-[60%] bg-[#0f172a] h-full relative flex-col justify-between p-12 overflow-hidden shrink-0">
-        {/* Decorative Grid and Ambient Lights */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none z-1" />
-        <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[50%] rounded-full bg-[#3b82f6]/10 blur-[120px] pointer-events-none z-1" />
-        <div className="absolute -bottom-[20%] -right-[10%] w-[60%] h-[50%] rounded-full bg-cyan-500/10 blur-[120px] pointer-events-none z-1" />
-        
-        {/* Full Bleed Image Background with Premium Blur and Color Overlay */}
-        <div className="absolute inset-0 z-0">
-          <img 
-            src="https://images.unsplash.com/photo-1629909613654-28e377c37b09?auto=format&fit=crop&q=80&w=1200" 
-            alt={`Cl√≠nica ${clinicName || 'OdontoPro'}`} 
-            className="w-full h-full object-cover opacity-35"
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/85 to-slate-900/60" />
-        </div>
-
-        {/* Content Top: Clinic Branding */}
-        <div className="relative z-10 flex items-center gap-3">
-          {clinicLogo ? (
-            <img 
-              src={clinicLogo} 
-              alt={clinicName || 'OdontoPro'} 
-              referrerPolicy="no-referrer" 
-              className="h-9 max-h-9 object-contain" 
-            />
-          ) : (
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center shadow-md">
-              <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path 
-                  d="M12 2C8.5 2 6 4 5.5 8C5.2 10.5 5.8 12.5 6.5 14.5C7.2 16.5 8 19 8 21C8 21.6 8.4 22 9 22C9.6 22 10 21.5 10.5 20C11 18.5 11.5 17.5 12 17.5C12.5 17.5 13 18.5 13.5 20C14 21.5 14.4 22 15 22C15.6 22 16 21.6 16 21C16 19 16.8 16.5 17.5 14.5C18.2 12.5 18.8 10.5 18.5 8C18 4 15.5 2 12 2Z" 
-                  fill="currentColor"
-                />
-              </svg>
-            </div>
-          )}
-          <div>
-            <div className="text-sm font-extrabold text-white tracking-widest uppercase">{clinicName || 'OdontoPro'}</div>
-            <div className="text-[10px] text-cyan-400 font-bold tracking-wider uppercase">Painel Executivo ERP</div>
-          </div>
-        </div>
-
-        {/* Content Middle: Big CEO Catchy Headline and Live Indicators */}
-        <div className="relative z-10 max-w-lg my-auto space-y-8 text-left">
-          <div className="space-y-3">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-sky-500/10 text-sky-400 border border-sky-500/20">
-              <Sparkles className="w-3 h-3" /> Gest√£o Inteligente de Cl√≠nicas
-            </span>
-            <h1 className="text-3xl lg:text-4xl xl:text-5xl font-light tracking-tight text-white leading-tight">
-              Uma √∫nica plataforma. <br />
-              <span className="font-semibold text-sky-400">Decis√µes mais inteligentes.</span>
-            </h1>
-            <p className="text-xs lg:text-sm text-slate-300 font-normal leading-relaxed">
-              O <strong className="font-bold text-white">{clinicName || 'OdontoPro'}</strong> centraliza faturamento financeiro, prontu√°rios de pacientes, relat√≥rios em tempo real e agendamentos inteligentes em um ambiente integrado de alta performance.
-            </p>
-          </div>
-
-          {/* Premium CEO Dashboard Indicators */}
-          <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-800/60">
-            <div className="bg-slate-900/40 backdrop-blur-xs p-4 rounded-2xl border border-white/5 space-y-1">
-              <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">Disponibilidade Geral</div>
-              <div className="text-lg font-bold text-white flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>99.98%</span>
-              </div>
-              <p className="text-[9px] text-slate-500">SLA monitorado por TI</p>
-            </div>
-
-            <div className="bg-slate-900/40 backdrop-blur-xs p-4 rounded-2xl border border-white/5 space-y-1">
-              <div className="text-slate-400 text-[10px] font-bold uppercase tracking-wider">Seguran√ßa de Dados</div>
-              <div className="text-lg font-bold text-sky-400">AES-256</div>
-              <p className="text-[9px] text-slate-500">Criptografia de prontu√°rios</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Content Bottom: Status and System Version */}
-        <div className="relative z-10 flex items-center justify-between border-t border-slate-800/40 pt-6 text-[10px] text-slate-400 uppercase tracking-widest font-semibold">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-            </span>
-            <span>Datacenter Ativo & Seguro</span>
-          </div>
-          <div>Enterprise v26.4</div>
-        </div>
-      </div>
-
-      {/* RIGHT COLUMN: Interactive Form panel spanning full height */}
-      <div className="w-full md:w-[50%] lg:w-[45%] xl:w-[40%] bg-white h-full flex flex-col justify-between p-8 sm:p-12 md:p-16 overflow-y-auto relative z-20 shadow-2xl shrink-0">
-        
-        {/* Top Spacer or logo on mobile */}
-        <div className="flex md:hidden items-center gap-3 justify-center mb-6">
-          {clinicLogo ? (
-            <img 
-              src={clinicLogo} 
-              alt={clinicName || 'OdontoPro'} 
-              referrerPolicy="no-referrer" 
-              className="h-10 max-h-10 object-contain" 
-            />
-          ) : (
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center shadow-sm">
-              <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path 
-                  d="M12 2C8.5 2 6 4 5.5 8C5.2 10.5 5.8 12.5 6.5 14.5C7.2 16.5 8 19 8 21C8 21.6 8.4 22 9 22C9.6 22 10 21.5 10.5 20C11 18.5 11.5 17.5 12 17.5C12.5 17.5 13 18.5 13.5 20C14 21.5 14.4 22 15 22C15.6 22 16 21.6 16 21C16 19 16.8 16.5 17.5 14.5C18.2 12.5 18.8 10.5 18.5 8C18 4 15.5 2 12 2Z" 
-                  fill="currentColor"
-                />
-              </svg>
-            </div>
-          )}
-          <span className="text-xl font-bold text-slate-800 tracking-tight">
-            {clinicName || 'OdontoPro'}
-          </span>
-        </div>
-
-        {/* Hidden spacer on desktop to push form to center */}
-        <div className="hidden md:block h-6" />
-
-        {/* Main form container */}
-        <motion.form 
-          onSubmit={handleSubmit}
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.4, delay: 0.1 }}
-          className="w-full max-w-md mx-auto space-y-6 text-left flex flex-col justify-center my-auto"
-        >
-          {/* Main titles */}
-          <div className="space-y-1">
-            <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Acesse sua Conta</h2>
-            <p className="text-xs text-slate-400 font-medium">Insira suas credenciais corporativas abaixo</p>
-          </div>
-
-          {/* Form fields */}
-          <div className="space-y-4">
-            {/* Username/Email Input */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Usu√°rio ou E-mail</label>
-              <div className="relative group/input">
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#4a8cd4] transition-colors">
-                  <Mail className="w-4 h-4" />
-                </div>
-                <input 
-                  type="text" 
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  disabled={isLoading}
-                  className="w-full text-xs pl-12 pr-4 py-3.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 focus:border-[#4a8cd4] rounded-xl text-slate-800 outline-none focus:ring-4 focus:ring-[#4a8cd4]/5 transition-all placeholder:text-slate-400 placeholder:font-medium shadow-xs"
-                  placeholder="exemplo@clinicamoderna.com.br"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            {/* Password Input */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Senha de Acesso</label>
-                <button 
-                  type="button" 
-                  onClick={() => alert("Para redefinir sua senha, solicite ao administrador da sua cl√≠nica ou utilize a senha cadastrada.")} 
-                  className="text-xs text-[#4a8cd4] hover:underline font-bold"
-                >
-                  Esqueceu a senha?
-                </button>
-              </div>
-              <div className="relative group/input">
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within/input:text-[#4a8cd4] transition-colors">
-                  <Lock className="w-4 h-4" />
-                </div>
-                <input 
-                  type={showPassword ? "text" : "password"} 
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isLoading}
-                  className="w-full text-xs pl-12 pr-12 py-3.5 bg-slate-50 hover:bg-slate-100/50 focus:bg-white border border-slate-200 focus:border-[#4a8cd4] rounded-xl text-slate-800 outline-none focus:ring-4 focus:ring-[#4a8cd4]/5 transition-all placeholder:text-slate-400 placeholder:font-medium shadow-xs"
-                  placeholder="Digite sua senha"
-                />
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors cursor-pointer"
-                >
-                  {showPassword ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Remember Me checkbox */}
-          <div className="flex items-center text-xs font-bold text-slate-500">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input 
-                type="checkbox" 
-                className="rounded border-slate-300 text-[#4a8cd4] focus:ring-[#4a8cd4]/20 h-4 w-4 cursor-pointer" 
-              />
-              <span>Manter sess√£o ativa neste dispositivo</span>
-            </label>
-          </div>
-
-          {/* Error Message Area */}
-          <AnimatePresence>
-            {error && (
-              <motion.div 
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -5 }}
-                className="bg-rose-50 border border-rose-100 text-rose-700 text-xs p-3 rounded-xl font-medium leading-relaxed w-full space-y-2 shadow-xs"
-              >
-                <div className="flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-                {error.toLowerCase().includes('administrador') && (
-                  <button
-                    type="button"
-                    onClick={handleQuickSuperAdminRestore}
-                    className="w-full mt-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 transition-colors"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    <span>Desbloquear e Acessar Painel Master Agora</span>
-                  </button>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Submit Button */}
-          <button 
-            type="submit"
-            disabled={isLoading}
-            className="w-full bg-gradient-to-r from-[#4a8cd4] to-[#3b82f6] hover:from-[#3d7cc4] hover:to-[#2563eb] text-white border-0 rounded-xl py-3.5 px-4 text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2 shadow-[0_4px_14px_rgba(59,130,246,0.25)] hover:shadow-[0_6px_20px_rgba(59,130,246,0.35)] disabled:opacity-45 select-none text-center"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-white" />
-                <span>Validando Acesso Executivo...</span>
-              </>
-            ) : (
-              <span>Entrar no Sistema</span>
-            )}
-          </button>
-
-          {/* Divider */}
-          <div className="relative my-2">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-100"></div>
-            </div>
-            <div className="relative flex justify-center text-[10px] uppercase">
-              <span className="bg-white px-3 text-slate-400 font-extrabold tracking-wider">ou continue com</span>
-            </div>
-          </div>
-
-          {/* Social Login: Microsoft */}
-          <button 
-            type="button"
-            onClick={() => alert("O login com Microsoft est√° em processo de homologa√ß√£o pela TI.")}
-            className="w-full bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl py-3 px-4 text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2.5 shadow-xs"
-          >
-            <div className="grid grid-cols-2 gap-[2px] w-3.5 h-3.5">
-              <div className="bg-[#f25022] w-1.5 h-1.5"></div>
-              <div className="bg-[#7fba00] w-1.5 h-1.5"></div>
-              <div className="bg-[#00a4ef] w-1.5 h-1.5"></div>
-              <div className="bg-[#ffb900] w-1.5 h-1.5"></div>
-            </div>
-            <span>Conta Microsoft Corporativa</span>
-          </button>
-
-          {/* Bottom registration link */}
-          <div className="text-center text-[12px] font-medium text-slate-500 pt-1">
-            <span>Deseja implantar para sua cl√≠nica? </span>
-            <button 
-              type="button" 
-              onClick={onOpenFreeTrial} 
-              className="text-[#4a8cd4] hover:underline font-extrabold cursor-pointer"
-            >
-              Iniciar Teste Gr√°tis
-            </button>
-          </div>
-        </motion.form>
-
-        {/* Footer actions and copyright */}
-        <div className="space-y-6 pt-6 border-t border-slate-100 w-full max-w-md mx-auto">
-          {/* Shortcuts */}
-          <div className="flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-[10px] font-bold text-slate-500 tracking-wider uppercase select-none">
-            {onInstallPWA && (
-              <button 
-                type="button" 
-                onClick={onInstallPWA} 
-                className="hover:text-cyan-600 transition-colors cursor-pointer flex items-center gap-1 shrink-0"
-                title="Instalar aplicativo localmente no computador ou celular"
-              >
-                <Monitor className="w-3.5 h-3.5 text-cyan-600" />
-                <span>Instalar Inst√¢ncia / App (PWA)</span>
-              </button>
-            )}
-            {onInstallPWA && <span className="text-slate-200 shrink-0">‚Ä¢</span>}
-            <button 
-              type="button" 
-              onClick={onOpenBooking} 
-              className="hover:text-cyan-600 transition-colors cursor-pointer flex items-center gap-1 shrink-0"
-            >
-              <Calendar className="w-3.5 h-3.5 text-[#2a4f72]" />
-              <span>Agendamento de Pacientes</span>
-            </button>
-          </div>
-
-          {/* Copyright policies */}
-          <div className="text-center select-none text-[9px] text-slate-400 font-bold uppercase tracking-widest flex flex-col items-center gap-1.5 sm:flex-row sm:gap-3 justify-center">
-            <span>Copyright ¬© 2026 {clinicName}</span>
-            <span className="hidden sm:inline text-slate-200">‚Ä¢</span>
-            <div className="flex gap-2">
-              <button type="button" onClick={onPrivacyPolicy} className="hover:text-slate-500 transition-colors cursor-pointer">
-                Privacidade
-              </button>
-              <span className="text-slate-200">‚Ä¢</span>
-              <button type="button" onClick={onTerms} className="hover:text-slate-500 transition-colors cursor-pointer">
-                Termos
-              </button>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: DentalRecord['status'] }) {
-  const styles: Record<string, string> = {
-    'Realizado': 'text-emerald-600',
-    'Agendado': 'text-blue-500',
-    'Pendente': 'text-amber-600',
-    'Cancelado': 'text-rose-600',
-    'Em Atendimento': 'text-brand-cyan animate-pulse',
-    'Conclu√≠do': 'text-emerald-500'
-  };
-
-  return (
-    <span className={cn(
-      "text-[10px] font-bold uppercase tracking-tighter font-sans flex items-center gap-1",
-      styles[status || 'Pendente']
-    )}>
-      {status === 'Em Atendimento' && <div className="w-1.5 h-1.5 rounded-full bg-brand-cyan" />}
-      {status}
-    </span>
-  );
-}
-
-function PublicBookingView({ 
-  onBack, 
-  users, 
-  data,
-  onPrivacyPolicy,
-  onTerms,
-  clinicName,
-  clinicLogo,
-  footerText,
-  initialFormData
-}: { 
-  onBack: () => void; 
-  users: any[]; 
-  data: DentalRecord[];
-  onPrivacyPolicy: () => void;
-  onTerms: () => void;
-  clinicName: string;
-  clinicLogo: string | null;
-  footerText: string;
-  initialFormData?: {
-    dentista?: string;
-    data?: string;
-    horario?: string;
-    paciente?: string;
-    telefone?: string;
-    procedimento?: string;
-  };
-}) {
-  const minDate = getSystemInitialDate();
-
-  const [step, setStep] = useState(() => initialFormData ? 2 : 1);
-  const [bookingData, setBookingData] = useState({
-    dentista: initialFormData?.dentista || '',
-    data: initialFormData?.data || minDate,
-    horario: initialFormData?.horario || '',
-    paciente: initialFormData?.paciente || '',
-    telefone: initialFormData?.telefone || '',
-    procedimento: initialFormData?.procedimento || 'Consulta Inicial'
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
-
-  const doctors = useMemo(() => users.filter(u => u.role === 'Dentista'), [users]);
-  
-  const timeSlots = CLINIC_TIME_SLOTS;
-
-  const handleSubmit = async () => {
-    const trimmedName = (bookingData.paciente || '').trim();
-    const words = trimmedName.split(/\s+/).filter(Boolean);
-
-    if (!trimmedName || !bookingData.telefone || !bookingData.dentista || !bookingData.horario) {
-      alert('Por favor, preencha todos os campos.');
-      return;
-    }
-
-    const normalized = normalizeAppointmentDateTime(bookingData.data, bookingData.horario);
-    const finalDate = normalized.date;
-    const finalTime = normalized.time;
-
-    const selectedDateTime = parseISO(`${finalDate}T${finalTime}`);
-    const now = new Date();
-    const bufferMinutes = 15;
-    if (selectedDateTime < new Date(now.getTime() - bufferMinutes * 60000)) {
-      alert('O hor√°rio selecionado j√° passou. Por favor, escolha um hor√°rio futuro.');
-      setStep(2);
-      return;
-    }
-
-    if (trimmedName.length < 3) {
-      alert('O seu nome deve conter no m√≠nimo 3 caracteres.');
-      return;
-    }
-
-    if (words.length < 2) {
-      alert('Por favor, preencha seu nome e sobrenome.');
-      return;
-    }
-
-    if (SecurityUtils.hasDangerousScript(trimmedName) || SecurityUtils.hasDangerousScript(bookingData.telefone)) {
-      alert('A√ß√£o bloqueada por seguran√ßa (XSS detectado).');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      let finalPatientId = '';
-      try {
-        console.log("[PortalBooking] Buscando pacientes para verificar duplicados...");
-        const patientsSnap = await getDocs(collection(db, 'patients'));
-        const patientsList = patientsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        const existingPatient = findPatientByRobustMatch(trimmedName, patientsList);
-
-        if (!existingPatient) {
-          finalPatientId = `pat-${Date.now()}`;
-          console.log("[PortalBooking] Paciente n√£o cadastrado. Criando registro para o paciente:", finalPatientId);
-          const patientData = {
-            id: finalPatientId,
-            name: trimmedName,
-            email: '',
-            phone: bookingData.telefone || '',
-            cpf: '',
-            dentistaResponsavel: bookingData.dentista || '',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          await setDoc(doc(db, 'patients', finalPatientId), patientData);
-        } else {
-          finalPatientId = existingPatient.id;
-          console.log("[PortalBooking] Paciente j√° cadastrado:", existingPatient.name);
-          const needsUpdate = !existingPatient.phone || !existingPatient.dentistaResponsavel;
-          if (needsUpdate) {
-            const updatedPatientData = {
-              phone: existingPatient.phone || bookingData.telefone || '',
-              dentistaResponsavel: existingPatient.dentistaResponsavel || bookingData.dentista || '',
-              updatedAt: new Date().toISOString()
-            };
-            await setDoc(doc(db, 'patients', existingPatient.id), updatedPatientData, { merge: true });
-          }
-        }
-      } catch (patientAutoErr) {
-        console.error("[PortalBooking] Erro ao cadastrar paciente automaticamente:", patientAutoErr);
-      }
-
-      const id = `booking-${Date.now()}`;
-      const record: DentalRecord = {
-        id,
-        data: finalDate,
-        horario: finalTime,
-        paciente: trimmedName,
-        pacienteId: finalPatientId || undefined,
-        telefone: bookingData.telefone,
-        procedimento: bookingData.procedimento,
-        dentista: bookingData.dentista,
-        status: 'Pendente',
-        statusPagamento: 'Pendente',
-        valor: 150
-      };
-      
-      const conflict = findDentistScheduleConflict(data, record.dentista, finalDate, finalTime);
-
-      if (conflict) {
-        alert('Este hor√°rio j√° foi preenchido ou colide com outra consulta deste profissional. Por favor, selecione outro hor√°rio.');
-        setStep(2);
-        return;
-      }
-
-      await setDoc(doc(db, 'records', id), record);
-      setIsSuccess(true);
-    } catch (e) {
-      console.error(e);
-      alert('Erro ao agendar. Tente novamente.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (isSuccess) {
-    return (
-      <div className="min-h-screen bg-white md:bg-slate-50 flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
-        {/* Background blobs */}
-        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-cyan/5 blur-[100px] pointer-events-none rounded-full" />
-        <div className="absolute bottom-0 left-0 w-96 h-96 bg-blue-500/5 blur-[100px] pointer-events-none rounded-full" />
-
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white md:rounded-[40px] md:shadow-2xl md:shadow-slate-200/50 p-8 md:p-12 text-center max-w-lg w-full md:border border-slate-100 relative z-10"
-        >
-          <div className="w-24 h-24 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto mb-8 rotate-3">
-            <CheckCircle2 className="w-12 h-12 text-emerald-500 -rotate-3" />
-          </div>
-          <h2 className="text-3xl font-black text-slate-900 mb-4 tracking-tight">Tudo pronto!</h2>
-          <p className="text-slate-500 text-base leading-relaxed mb-10">
-            Sua solicita√ß√£o de agendamento foi enviada. Nossa equipe entrar√° em contato via WhatsApp 
-            <span className="font-bold text-slate-800"> ({bookingData.telefone})</span> para confirmar seu hor√°rio.
-          </p>
-          <button 
-            onClick={onBack}
-            className="w-full py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98]"
-          >
-            Voltar para a home
-          </button>
-        </motion.div>
-        
-        <div className="mt-12 text-center relative z-10">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mb-4">Ambiente Seguro por ClinicalGate</p>
-          <Footer onPrivacyPolicy={onPrivacyPolicy} onTerms={onTerms} footerText={footerText} />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {/* Dynamic Header */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-slate-100 sticky top-0 z-50 py-4 px-6">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-             {clinicLogo ? (
-              <img src={clinicLogo} alt={clinicName} className="h-8 md:h-10 w-auto object-contain" />
-            ) : (
-              <h1 className="text-lg md:text-xl font-bold text-slate-800 tracking-tighter">
-                {clinicName} <span className="text-brand-cyan font-normal">Agendamento</span>
-              </h1>
-            )}
-          </div>
-          <div className="hidden md:flex items-center gap-2">
-            {[1, 2, 3].map((s) => (
-              <div 
-                key={s} 
-                className={cn(
-                  "w-8 h-1 rounded-full transition-all duration-500",
-                  step === s ? "bg-brand-cyan w-12" : (step > s ? "bg-emerald-400" : "bg-slate-100")
-                )} 
-              />
-            ))}
-          </div>
-          <button 
-            onClick={onBack}
-            className="text-xs font-bold text-slate-400 hover:text-brand-cyan uppercase tracking-widest transition-colors flex items-center gap-2"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="hidden sm:inline">Sair</span>
-          </button>
-        </div>
-      </header>
-
-      <main className="flex-1 flex items-center justify-center p-4 py-8 md:py-16">
-        <div className="w-full max-w-4xl">
-          <div className="text-center mb-8 md:mb-12">
-            <h2 className="text-2xl md:text-4xl font-black text-slate-900 tracking-tight mb-2">
-              {step === 1 && "Com qual profissional deseja agendar?"}
-              {step === 2 && "Quando voc√™ prefere vir?"}
-              {step === 3 && "S√≥ mais alguns detalhes..."}
-            </h2>
-            <p className="text-slate-500 text-sm md:text-base">
-              Passo {step} de 3 ‚Äî {step === 1 ? "Escolha do Especialista" : step === 2 ? "Dia e Hor√°rio" : "Confirma√ß√£o"}
-            </p>
-          </div>
-
-          <div className="bg-white md:rounded-[40px] shadow-2xl shadow-slate-200/40 p-6 md:p-12 border border-white relative overflow-hidden">
-            {/* Background pattern */}
-            <div className="absolute top-0 right-0 p-12 opacity-[0.03] pointer-events-none">
-              <Calendar className="w-64 h-64 text-slate-900" />
-            </div>
-
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={step}
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                transition={{ duration: 0.3 }}
-              >
-                {step === 1 && (
-                  <div className="space-y-8">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {doctors.map(doc => (
-                        <button
-                          key={doc.id}
-                          onClick={() => setBookingData(prev => ({ ...prev, dentista: doc.name }))}
-                          className={cn(
-                            "p-6 rounded-[32px] border-2 text-left transition-all relative group flex flex-col items-center text-center overflow-hidden",
-                            bookingData.dentista === doc.name 
-                              ? "border-brand-cyan bg-brand-cyan/[0.03] shadow-2xl shadow-brand-cyan/10 ring-1 ring-brand-cyan/20" 
-                              : "border-slate-50 hover:border-slate-200 bg-white hover:shadow-xl hover:shadow-slate-200/40"
-                          )}
-                        >
-                          {/* Selection Indicator */}
-                          <div className={cn(
-                            "absolute -top-12 -right-12 w-24 h-24 bg-brand-cyan transition-transform duration-500 rounded-full",
-                            bookingData.dentista === doc.name ? "translate-x-0 translate-y-0" : "translate-x-full translate-y-full"
-                          )}>
-                            <CheckCircle2 className="absolute bottom-6 left-6 w-5 h-5 text-white" />
-                          </div>
-
-                          <div className={cn(
-                            "relative w-24 h-24 rounded-3xl flex items-center justify-center text-3xl font-black mb-6 transition-all duration-500",
-                            bookingData.dentista === doc.name 
-                              ? "bg-brand-cyan text-white shadow-2xl shadow-brand-cyan/40 scale-110" 
-                              : "bg-slate-50 text-slate-300 group-hover:bg-slate-100 group-hover:text-brand-cyan"
-                          )}>
-                            {doc.name[0]}
-                          </div>
-
-                          <div className="space-y-2 relative z-10">
-                            <p className="text-xl font-black text-slate-900 tracking-tight">{doc.name}</p>
-                            <div className="flex flex-col gap-2 items-center">
-                              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
-                                {doc.specialty || 'Cirurgi√£o-Dentista'}
-                              </span>
-                              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                                <span className="text-[10px] font-black uppercase tracking-widest">Dispon√≠vel</span>
-                              </div>
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                    
-                    <div className="flex justify-center pt-4">
-                      <button 
-                        disabled={!bookingData.dentista}
-                        onClick={() => setStep(2)}
-                        className="w-full max-w-sm py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
-                      >
-                        Continuar para data e hora
-                        <ChevronRight className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {step === 2 && (
-                  <div className="space-y-10">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-                      <div className="space-y-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-brand-cyan/10 rounded-xl flex items-center justify-center">
-                            <Calendar className="w-5 h-5 text-brand-cyan" />
-                          </div>
-                          <h3 className="text-xl font-bold text-slate-900">Selecione o melhor dia</h3>
-                        </div>
-                        <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100">
-                          <input 
-                            id="booking-date"
-                            type="date" 
-                            min={minDate}
-                            value={bookingData.data}
-                            onChange={(e) => {
-                              const newData = e.target.value;
-                              if (!newData) return;
-                              
-                              const dateObj = parseISO(newData);
-                              const day = getDay(dateObj);
-
-                              if (day === 0 || day === 6) {
-                                alert("Desculpe, a cl√≠nica n√£o realiza atendimentos aos s√°bados e domingos. Por favor, escolha um dia √∫til de segunda a sexta.");
-                                e.target.value = bookingData.data; // Reset visually
-                                return;
-                              }
-
-                              setBookingData(prev => {
-                                const newBookingData = { ...prev, data: newData };
-                                if (newData === format(new Date(), 'yyyy-MM-dd') && prev.horario) {
-                                  if (prev.horario < format(new Date(), 'HH:mm')) {
-                                    newBookingData.horario = '';
-                                  }
-                                }
-                                return newBookingData;
-                              });
-                            }}
-                            className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all font-bold text-slate-800"
-                          />
-                          <p className="mt-4 text-xs text-slate-500 flex items-center gap-2 px-1">
-                            <Info className="w-3.5 h-3.5 text-brand-cyan" />
-                            Atendimentos de Segunda a Sexta das 08h √†s 17h.
-                          </p>
-                          <p className="mt-2 text-xs text-slate-500 flex items-center gap-2 px-1">
-                            <Calendar className="w-3.5 h-3.5" />
-                            Exibindo hor√°rios para {format(parseISO(bookingData.data), "eeee, dd 'de' MMMM", { locale: ptBR })}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="space-y-6">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center">
-                            <Clock className="w-5 h-5 text-indigo-500" />
-                          </div>
-                          <h3 className="text-xl font-bold text-slate-900">Hor√°rios dispon√≠veis</h3>
-                        </div>
-                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 bg-slate-50 p-6 rounded-[32px] border border-slate-100">
-                          {timeSlots.map(time => {
-                            const conflict = findDentistScheduleConflict(data, bookingData.dentista, bookingData.data, time);
-                            const isTaken = !!conflict;
-
-                            const isTodaySelected = bookingData.data === format(new Date(), 'yyyy-MM-dd');
-                            const isPast = isTodaySelected && time <= format(new Date(), 'HH:mm');
-                            const endSlot = minutesToTime(timeToMinutes(time) + APPOINTMENT_DURATION_MINUTES);
-                            
-                            return (
-                              <button
-                                key={time}
-                                disabled={isTaken || isPast}
-                                onClick={() => setBookingData(prev => ({ ...prev, horario: time }))}
-                                className={cn(
-                                  "py-3 px-2 text-xs font-black rounded-2xl border transition-all flex flex-col items-center justify-center gap-0.5",
-                                  bookingData.horario === time
-                                    ? "bg-brand-cyan text-white border-brand-cyan shadow-lg shadow-brand-cyan/20 scale-105 z-10"
-                                    : (isTaken || isPast)
-                                      ? "bg-slate-100/50 text-slate-300 border-transparent cursor-not-allowed grayscale"
-                                      : "bg-white text-slate-600 border-white hover:border-brand-cyan hover:shadow-md"
-                                )}
-                              >
-                                <span>{time}</span>
-                                <span className="text-[9px] opacity-70 font-normal">√†s {endSlot}</span>
-                                {isTaken && <span className="text-[7px] uppercase font-black tracking-wider text-rose-500/80">Ocupado</span>}
-                                {isPast && !isTaken && <span className="text-[7px] uppercase opacity-50">Passou</span>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
-                      <button 
-                        onClick={() => setStep(1)}
-                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
-                      >
-                        Voltar
-                      </button>
-                      <button 
-                        disabled={!bookingData.horario}
-                        onClick={() => setStep(3)}
-                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
-                      >
-                        Pr√≥ximo passo
-                        <ChevronRight className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {step === 3 && (
-                  <div className="space-y-10">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-                      <div className="space-y-8">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center">
-                            <User className="w-5 h-5 text-emerald-500" />
-                          </div>
-                          <h3 className="text-xl font-bold text-slate-900">Seus dados para contato</h3>
-                        </div>
-
-                        <div className="space-y-6 bg-slate-50 p-8 rounded-[40px] border border-slate-100">
-                          <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
-                            <input 
-                              type="text"
-                              placeholder="Como devemos lhe chamar?"
-                              value={bookingData.paciente}
-                              onChange={(e) => setBookingData(prev => ({ ...prev, paciente: SecurityUtils.limit(SecurityUtils.sanitize(e.target.value), 100) }))}
-                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-bold placeholder:font-normal"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">WhatsApp / Telefone</label>
-                            <input 
-                              type="tel"
-                              placeholder="(00) 00000-0000"
-                              value={bookingData.telefone}
-                              onChange={(e) => setBookingData(prev => ({ ...prev, telefone: SecurityUtils.maskPhone(e.target.value) }))}
-                              className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-brand-cyan/5 focus:border-brand-cyan transition-all text-slate-800 font-mono font-bold placeholder:font-normal"
-                            />
-                          </div>
-                          <div className="flex items-start gap-3 p-4 bg-blue-50/50 border border-blue-100 rounded-2xl">
-                             <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                             <p className="text-[10px] text-blue-600 leading-relaxed font-medium">
-                              Ao finalizar, voc√™ autoriza o contato de nossa equipe via WhatsApp para confirma√ß√£o definitiva do seu hor√°rio.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-8">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
-                            <ClipboardList className="w-5 h-5 text-amber-500" />
-                          </div>
-                          <h3 className="text-xl font-bold text-slate-900">Resumo da solicita√ß√£o</h3>
-                        </div>
-
-                        <div className="bg-slate-900 rounded-[48px] p-8 text-white relative overflow-hidden shadow-2xl shadow-slate-900/40 border border-white/5">
-                          {/* Design accents */}
-                          <div className="absolute top-0 right-0 w-32 h-32 bg-brand-cyan/10 blur-[60px] pointer-events-none" />
-                          <div className="absolute bottom-0 left-0 w-24 h-24 bg-blue-500/10 blur-[40px] pointer-events-none" />
-                          
-                          {/* Ticket edge pattern visual */}
-                          <div className="absolute left-0 top-1/2 -ml-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
-                          <div className="absolute right-0 top-1/2 -mr-2 w-4 h-8 bg-white rounded-full -translate-y-1/2 hidden lg:block" />
-
-                          <div className="space-y-8 relative z-10">
-                            <div className="pb-6 border-b border-white/10 text-center">
-                              <p className="text-[10px] text-white/30 uppercase font-black tracking-[0.3em] mb-3">Profissional Selecionado</p>
-                              <div className="flex items-center justify-center gap-4">
-                                <div className="w-12 h-12 bg-brand-cyan rounded-2xl flex items-center justify-center text-xl font-black">
-                                  {bookingData.dentista[0]}
-                                </div>
-                                <p className="text-2xl font-black text-white tracking-tight">{bookingData.dentista}</p>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
-                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">Data Marcada</p>
-                                <p className="text-lg font-black text-brand-cyan">{format(parseISO(bookingData.data), 'dd/MM')}</p>
-                                <p className="text-[9px] text-white/50 font-bold">{format(parseISO(bookingData.data), 'yyyy')}</p>
-                              </div>
-                              <div className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-1 backdrop-blur-sm">
-                                <p className="text-[8px] text-white/30 uppercase font-black tracking-widest">In√≠cio Previsto</p>
-                                <p className="text-lg font-black text-brand-cyan">{bookingData.horario}</p>
-                                <p className="text-[9px] text-white/50 font-bold">Hor√°rio Local</p>
-                              </div>
-                            </div>
-
-                            <div className="pt-2">
-                                <div className="flex items-center justify-between px-2">
-                                  <p className="text-[10px] text-white/30 uppercase font-black tracking-widest">Procedimento</p>
-                                  <span className="w-2 h-2 rounded-full bg-brand-cyan animate-pulse" />
-                                </div>
-                                <div className="mt-2 p-4 rounded-2xl bg-white/5 border border-white/5 flex items-center gap-3">
-                                  <Stethoscope className="w-4 h-4 text-brand-cyan" />
-                                  <p className="text-sm font-bold">Primeira Avalia√ß√£o Cl√≠nica</p>
-                                </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-4 pt-6">
-                      <button 
-                        onClick={() => setStep(2)}
-                        className="flex-1 py-5 text-slate-400 font-black text-sm uppercase tracking-widest border-2 border-slate-100 rounded-2xl hover:bg-slate-50 transition-all active:scale-[0.98]"
-                      >
-                        Voltar
-                      </button>
-                      <button 
-                        disabled={isSubmitting || !bookingData.paciente || !bookingData.telefone}
-                        onClick={handleSubmit}
-                        className="flex-[2] py-5 bg-brand-cyan text-white font-black text-sm uppercase tracking-widest rounded-2xl disabled:opacity-50 hover:bg-brand-cyan/90 transition-all shadow-xl shadow-brand-cyan/20 active:scale-[0.98] flex items-center justify-center gap-3"
-                      >
-                        {isSubmitting ? (
-                          <motion.div 
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                            className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
-                          />
-                        ) : (
-                          <>
-                            <CheckCircle2 className="w-5 h-5" />
-                            Finalizar agora
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          <p className="text-center text-slate-400 text-[10px] mt-12 uppercase tracking-[0.3em] font-black opacity-40">
-            ClinicalGate Security Protocol 2.0
-          </p>
-        </div>
-      </main>
-
-      <footer className="py-12 bg-white border-t border-slate-100 px-6">
-        <div className="max-w-4xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
-           <div className="text-center md:text-left">
-            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest italic">{footerText}</p>
-          </div>
-          <div className="flex gap-8">
-            <button 
-              onClick={onPrivacyPolicy} 
-              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
-            >
-              Privacidade
-            </button>
-            <button 
-              onClick={onTerms} 
-              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-cyan transition-colors"
-            >
-              Termos
-            </button>
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-cyan/50">Brasil</span>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-function EmailModal({ 
-  patientName, 
-  onClose, 
-  onSave 
-}: { 
-  patientName: string; 
-  onClose: () => void; 
-  onSave: (name: string, email: string) => Promise<void> 
-}) {
-  const [email, setEmail] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!email || !SecurityUtils.isValidEmail(email)) {
-      alert('Por favor, insira um e-mail v√°lido.');
-      return;
-    }
-    if (SecurityUtils.hasDangerousScript(email)) {
-      alert('A√ß√£o bloqueada: Conte√∫do perigoso detectado.');
-      return;
-    }
-    setIsSaving(true);
-    try {
-      await onSave(patientName, email);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200"
-      >
-        <div className="bg-brand-cyan p-6 text-white">
-          <div className="flex items-center gap-3">
-            <Mail className="w-6 h-6" />
-            <h3 className="text-lg font-bold">Cadastrar E-mail</h3>
-          </div>
-          <p className="text-cyan-50 text-xs mt-1">O e-mail √© necess√°rio para enviar lembretes autom√°ticos.</p>
-        </div>
-
-        <div className="p-8 space-y-6 relative">
-          {isSaving && (
-            <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center backdrop-blur-[1px]">
-              <Activity className="w-8 h-8 text-brand-cyan animate-spin" />
-            </div>
-          )}
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase font-bold text-slate-400">Paciente</label>
-            <div className="text-slate-800 font-bold">{patientName}</div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] uppercase font-bold text-slate-400">Endere√ßo de E-mail</label>
-            <div className="relative group">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-              <input 
-                autoFocus
-                disabled={isSaving}
-                type="email"
-                placeholder="exemplo@email.com"
-                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-cyan/20 focus:border-brand-cyan outline-none transition-all disabled:opacity-50"
-                value={email}
-                onChange={(e) => setEmail(SecurityUtils.sanitizeEmail(e.target.value))}
-                onKeyDown={(e) => e.key === 'Enter' && email && handleSave()}
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-3 pt-4">
-            <button 
-              disabled={isSaving}
-              onClick={onClose}
-              className="flex-1 px-4 py-3 rounded-xl border border-slate-200 text-slate-500 font-bold text-sm hover:bg-slate-50 transition-colors"
-            >
-              Cancelar
-            </button>
-            <button 
-              disabled={!email || !email.includes('@') || isSaving}
-              onClick={handleSave}
-              className="flex-1 px-4 py-3 rounded-xl bg-brand-cyan text-white font-bold text-sm shadow-lg shadow-brand-cyan/20 hover:translate-y-[-2px] active:translate-y-0 transition-all disabled:opacity-50 disabled:translate-y-0"
-            >
-              {isSaving ? 'Salvando...' : 'Salvar e Enviar'}
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-// --- LEGAL COMPONENTS ---
-
-function PrivacyPolicyModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
-      >
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800">Pol√≠tica de Privacidade</h2>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">√öltima atualiza√ß√£o: Maio 2026</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-            <X className="w-6 h-6 text-slate-400" />
-          </button>
-        </div>
-        <div className="p-8 overflow-y-auto text-slate-600 text-sm leading-relaxed space-y-6">
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">1. Coleta de Dados</h3>
-            <p>Coletamos dados pessoais como nome, e-mail, telefone e CPF para fins exclus√≠vos de agendamento e presta√ß√£o de servi√ßos odontol√≥gicos em nossa cl√≠nica.</p>
-          </section>
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">2. Uso das Informa√ß√µes</h3>
-            <p>Suas informa√ß√µes s√£o utilizadas para:</p>
-            <ul className="list-disc ml-5 mt-2 space-y-1">
-              <li>Confirmar agendamentos via WhatsApp ou E-mail.</li>
-              <li>Manter seu hist√≥rico cl√≠nico (prontu√°rio) atualizado.</li>
-              <li>Processar pagamentos e emiss√£o de recibos.</li>
-            </ul>
-          </section>
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">3. Prote√ß√£o de Dados (LGPD)</h3>
-            <p>Em conformidade com a LGPD, garantimos que seus dados s√£o armazenados de forma segura e n√£o s√£o compartilhados com terceiros para fins de marketing sem seu consentimento expl√≠cito.</p>
-          </section>
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">4. Contato do DPO (Encarregado de Dados)</h3>
-            <p>Para d√∫vidas sobre seus dados, entre em contato com nosso DPO atrav√©s do e-mail: <strong>dpo@clinica-odonto.com</strong> ou pelo telefone da cl√≠nica.</p>
-          </section>
-        </div>
-        <div className="p-6 border-t border-slate-100 bg-slate-50/50 text-right">
-          <button 
-            onClick={onClose}
-            className="px-8 py-3 bg-brand-cyan text-white font-bold rounded-xl shadow-lg shadow-brand-cyan/20 hover:scale-105 active:scale-95 transition-all"
-          >
-            Entendido
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function KeyboardShortcutsModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  if (!isOpen) return null;
-
-  const shortcuts = [
-    { keys: ['Ctrl', 'H'], label: 'In√≠cio / Dashboard', desc: 'Acessa a vis√£o geral dos indicadores e metas da cl√≠nica.' },
-    { keys: ['Ctrl', 'A'], label: 'Agenda / Calend√°rio', desc: 'Abre a visualiza√ß√£o do calend√°rio de consultas.' },
-    { keys: ['Ctrl', 'P'], label: 'Base de Pacientes', desc: 'Acessa a listagem geral com pesquisa dos pacientes cadastrados.' },
-    { keys: ['Ctrl', 'N'], label: 'Novo Paciente', desc: 'Abre diretamente o formul√°rio de cadastro de paciente.' },
-    { keys: ['Ctrl', 'B'], label: 'Nova Consulta (Booking)', desc: 'Abre diretamente a tela de novo agendamento de consulta.' },
-    { keys: ['Ctrl', 'M'], label: 'Central de Mensagens', desc: 'Gerencie e simule envios de WhatsApp.' },
-    { keys: ['Ctrl', 'F'], label: 'M√≥dulo Financeiro', desc: 'Acessa faturamentos, receitas e fluxo de caixa.' },
-    { keys: ['Ctrl', 'K'], label: 'Guia de Atalhos', desc: 'Abra ou feche este guia de atalhos a qualquer momento.' },
-  ];
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/65 backdrop-blur-xs z-[99999] flex items-center justify-center p-4 shadow-2xl animate-in fade-in duration-200" id="shortcut-modal">
-      <div className="bg-white rounded-[24px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-100">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 to-slate-850 text-white p-5 flex items-center justify-between border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="bg-brand-cyan/25 p-2 rounded-xl text-brand-cyan">
-              <Keyboard className="w-5 h-5 animate-pulse" />
-            </div>
-            <div className="text-left">
-              <h3 className="font-bold text-sm tracking-wide">Atalhos de Teclado</h3>
-              <p className="text-[10px] text-slate-300">Navegue com velocidade e agilidade no OdontoDash</p>
-            </div>
-          </div>
-          <button 
-            type="button" 
-            onClick={onClose} 
-            className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all cursor-pointer select-none"
-            aria-label="Fechar"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Shortcuts List */}
-        <div className="p-5 max-h-[60vh] overflow-y-auto space-y-4">
-          <p className="text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-3 leading-relaxed text-left">
-            üí° <strong>DICA DO PRO:</strong> Os modificadores funcionam tanto com a tecla <strong>Control (Ctrl)</strong> quanto no macOS com a tecla <strong>Command (‚åò)</strong>. Atalhos s√£o bloqueados dinamicamente quando voc√™ est√° escrevendo em campos de digita√ß√£o para garantir sua escrita!
-          </p>
-
-          <div className="divide-y divide-slate-100 text-left">
-            {shortcuts.map((shortcut, idx) => (
-              <div key={idx} className="py-2.5 flex items-center justify-between gap-4">
-                <div className="flex flex-col min-w-0">
-                  <span className="text-xs font-bold text-slate-800 leading-normal flex items-center gap-1.5">
-                    {shortcut.label}
-                  </span>
-                  <span className="text-[10px] text-slate-400 leading-normal truncate">
-                    {shortcut.desc}
-                  </span>
-                </div>
-                <div className="flex gap-1 shrink-0">
-                  {shortcut.keys.map((k, kIdx) => (
-                    <kbd 
-                      key={kIdx} 
-                      className="px-2 py-1 bg-slate-100 text-[#0f172a] text-[10px] font-black tracking-wide rounded-md border border-slate-300 shadow-xs font-mono uppercase"
-                    >
-                      {k === 'Ctrl' ? 'Ctrl / ‚åò' : k}
-                    </kbd>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="bg-slate-50 px-5 py-4 border-t border-slate-100 flex items-center justify-between">
-          <span className="text-[10px] text-slate-400 font-medium">Use <strong className="font-black text-slate-600">Ctrl + K</strong> em qualquer lugar do sistema</span>
-          <button 
-            type="button" 
-            onClick={onClose} 
-            className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[11px] font-bold hover:bg-slate-800 transition-all cursor-pointer active:scale-95 shadow-sm"
-          >
-            Entendido
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TermsOfUseModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[1000] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
-      >
-        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <div>
-            <h2 className="text-xl font-bold text-slate-800">Termos de Uso</h2>
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Vig√™ncia: 2026</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-            <X className="w-6 h-6 text-slate-400" />
-          </button>
-        </div>
-        <div className="p-8 overflow-y-auto text-slate-600 text-sm leading-relaxed space-y-6">
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">1. Aceita√ß√£o dos Termos</h3>
-            <p>Ao utilizar este sistema de agendamento, voc√™ concorda em fornecer informa√ß√µes ver√≠dicas e atualizadas.</p>
-          </section>
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">2. Agendamentos</h3>
-            <p>As solicita√ß√µes feitas online s√£o pr√©-agendamentos e dependem de confirma√ß√£o manual pela nossa equipe de recep√ß√£o.</p>
-          </section>
-          <section>
-            <h3 className="text-slate-800 font-bold mb-2">3. Cancelamentos</h3>
-            <p>Solicitamos que cancelamentos sejam feitos com pelo menos 24 horas de anteced√™ncia para permitir que outros pacientes utilizem o hor√°rio.</p>
-          </section>
-        </div>
-        <div className="p-4 border-t border-slate-100 flex justify-end">
-          <button 
-            onClick={onClose}
-            className="px-6 py-2 bg-slate-100 text-slate-600 font-bold rounded-lg hover:bg-slate-200 transition-colors"
-          >
-            Fechar
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function CookieBanner({ onAccept, onDecline }: { onAccept: () => void, onDecline: () => void }) {
-  return (
-    <motion.div 
-      initial={{ y: 100, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      className="fixed bottom-6 left-6 right-6 md:left-auto md:max-w-md bg-white rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-slate-100 p-6 z-[999]"
-    >
-      <div className="flex items-start gap-4">
-        <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center shrink-0">
-          <ShieldCheck className="w-6 h-6 text-indigo-500" />
-        </div>
-        <div className="flex-1">
-          <h4 className="text-sm font-bold text-slate-800 mb-1">N√≥s respeitamos sua privacidade</h4>
-          <p className="text-xs text-slate-500 leading-relaxed">
-            Utilizamos cookies para melhorar sua experi√™ncia de agendamento e seguran√ßa do site. Ao continuar, voc√™ concorda com nossa pol√≠tica.
-          </p>
-        </div>
-      </div>
-      <div className="flex gap-3 mt-6">
-        <button 
-          onClick={onAccept}
-          className="flex-1 py-3 bg-brand-cyan text-white text-xs font-bold rounded-xl shadow-lg shadow-brand-cyan/20 hover:bg-brand-cyan/90 transition-all"
-        >
-          Aceitar Cookies
-        </button>
-        <button 
-          onClick={onDecline}
-          className="flex-1 py-3 bg-slate-50 text-slate-500 text-xs font-bold rounded-xl border border-slate-100 hover:bg-slate-100 transition-all"
-        >
-          Recusar
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-function Footer({ 
-  onPrivacyPolicy, 
-  onTerms,
-  footerText
-}: { 
-  onPrivacyPolicy: () => void; 
-  onTerms: () => void;
-  footerText: string;
-}) {
-  return (
-    <footer className="mt-auto py-4 px-4 border-t border-slate-100 bg-white/50 backdrop-blur-sm w-full">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-        <div className="text-center md:text-left">
-          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1 italic">{footerText}</p>
-        </div>
-        
-        <div className="flex flex-wrap justify-center gap-6">
-          <button 
-            type="button"
-            onClick={onPrivacyPolicy}
-            className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors"
-          >
-            Pol√≠tica de Privacidade
-          </button>
-          <button 
-            type="button"
-            onClick={onTerms}
-            className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors"
-          >
-            Termos de Uso
-          </button>
-          <a href="#" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors">Seguran√ßa</a>
-          <a href="#" className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-brand-cyan transition-colors">Ajuda</a>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
-            <Shield className="w-4 h-4 text-emerald-500" />
-          </div>
-          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter text-left">Site Protegido por <br/> ClinicalGate Security</span>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
-interface FreeTrialDetails {
-  fullName: string;
-  clinicName: string;
-  email: string;
-  phone: string;
-  plan: string;
-  specialty: string;
-  username: string;
-  password: string;
-  cpf: string;
-  selectedModules?: string[];
-}
-
-const TRIAL_AVAILABLE_MODULES = [
-  { id: 'Dashboard', name: 'Dashboard & M√©tricas', desc: 'KPIs, gr√°ficos de faturamento e fluxo', category: 'Essencial' },
-  { id: 'Agenda', name: 'Agenda & Consultas', desc: 'Agendamento interativo multi-cadeiras', category: 'Cl√≠nico' },
-  { id: 'Pacientes', name: 'Gest√£o de Pacientes', desc: 'Ficha cl√≠nica completa e anamnese', category: 'Cl√≠nico' },
-  { id: 'Documentos', name: 'Documentos & Prontu√°rios', desc: 'Atestados, receitas e evolu√ß√µes', category: 'Cl√≠nico' },
-  { id: 'Retorno', name: 'Retornos Preventivos', desc: 'Lembretes p√≥s-consulta e fideliza√ß√£o', category: 'Fideliza√ß√£o' },
-  { id: 'Mensagens', name: 'Mensagens & WhatsApp', desc: 'Automa√ß√µes e confirma√ß√µes de hor√°rio', category: 'Comunica√ß√£o' },
-  { id: 'Estoque', name: 'Controle de Estoque', desc: 'Insumos, alertas e movimenta√ß√µes', category: 'Gest√£o' },
-  { id: 'Financeiro', name: 'Financeiro & Caixa', desc: 'Contas pagar/receber, DRE e recibos', category: 'Gest√£o' },
-  { id: 'Administra√ß√£o', name: 'Administra√ß√£o & Equipe', desc: 'Controle de dentistas e configura√ß√µes', category: 'Gest√£o' }
-];
-
-// Complex Mathematical CPF Validation algorithm (Brazilian format)
-const isValidCPFMathematic = (cpf: string): boolean => {
-  const cleanCPF = cpf.replace(/\D/g, '');
-  if (cleanCPF.length !== 11) return false;
-  if (/^(\d)\1{10}$/.test(cleanCPF)) return false; // Exclude equal sequences like 111.111.111-11
-  
-  let sum = 0;
-  for (let i = 0; i < 9; i++) {
-    sum += parseInt(cleanCPF.charAt(i)) * (10 - i);
-  }
-  let rev = 11 - (sum % 11);
-  if (rev === 10 || rev === 11) rev = 0;
-  if (rev !== parseInt(cleanCPF.charAt(9))) return false;
-  
-  sum = 0;
-  for (let i = 0; i < 10; i++) {
-    sum += parseInt(cleanCPF.charAt(i)) * (11 - i);
-  }
-  rev = 11 - (sum % 11);
-  if (rev === 10 || rev === 11) rev = 0;
-  if (rev !== parseInt(cleanCPF.charAt(10))) return false;
-  
-  return true;
-};
-
-// Check for emojis or forbidden characters
-const hasEmojisOrSpecialChars = (val: string, type: 'name' | 'clinic' | 'username' | 'password' | 'email') => {
-  // Regex to detect emojis
-  const emojiRegex = /[\uD800-\uDBFF][\uDC00-\uDFFF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2000-\u3300]|\ud83e[\udd00-\udfff]/g;
-  if (emojiRegex.test(val)) return true;
-
-  if (type === 'name') {
-    // Letters, standard Portuguese accents, spaces and dots only
-    const nameRegex = /^[a-zA-Z√°√†√¢√£√©√®√™√≠√Ø√≥√¥√µ√∂√∫√ß√±√Å√Ä√Ç√É√â√à√ä√ç√è√ì√î√ï√ñ√ö√á√ë\s.]+$/;
-    return !nameRegex.test(val);
-  }
-
-  if (type === 'clinic') {
-    // Alphanumeric with special accents, spaces, digits, dots, hyphens, and standard symbols
-    const clinicRegex = /^[a-zA-Z0-9√°√†√¢√£√©√®√™√≠√Ø√≥√¥√µ√∂√∫√ß√±√Å√Ä√Ç√É√â√à√ä√ç√è√ì√î√ï√ñ√ö√á√ë\s.\-&,]+$/;
-    return !clinicRegex.test(val);
-  }
-
-  if (type === 'username') {
-    // Alphanumeric, dot, underscore, dash. (No spaces, no weird symbols)
-    const usernameRegex = /^[a-zA-Z0-9.\-_]+$/;
-    return !usernameRegex.test(val);
-  }
-
-  if (type === 'email') {
-    const emailRegex = /^[a-zA-Z0-9._%\-+]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
-    return !emailRegex.test(val);
-  }
-
-  if (type === 'password') {
-    const forbidden = /[<>\\]/;
-    return forbidden.test(val);
-  }
-
-  return false;
-};
-
-function FreeTrialView({
-  onBack,
-  onStartTrial,
-  clinicLogo,
-  footerText
-}: {
-  onBack: () => void;
-  onStartTrial: (details: FreeTrialDetails) => Promise<void>;
-  clinicLogo: string | null;
-  footerText: string;
-}) {
-  const [fullName, setFullName] = useState('');
-  const [clinicName, setClinicName] = useState('mbsolucoes');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [cpf, setCpf] = useState('');
-  const [plan, setPlan] = useState('Pro'); // Default Pro
-  const [specialty, setSpecialty] = useState('Geral');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [selectedModules, setSelectedModules] = useState<string[]>(
-    TRIAL_AVAILABLE_MODULES.map(m => m.id)
-  );
-  const [modulePreset, setModulePreset] = useState<'all' | 'clinic' | 'management' | 'custom'>('all');
-  
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [isBlockedByFingerprint, setIsBlockedByFingerprint] = useState(false);
-  const [successCredentials, setSuccessCredentials] = useState<FreeTrialDetails | null>(null);
-
-  const handleSelectPreset = (preset: 'all' | 'clinic' | 'management' | 'custom') => {
-    setModulePreset(preset);
-    setError(null);
-    if (preset === 'all') {
-      setSelectedModules(TRIAL_AVAILABLE_MODULES.map(m => m.id));
-    } else if (preset === 'clinic') {
-      setSelectedModules(['Dashboard', 'Agenda', 'Pacientes', 'Documentos', 'Mensagens']);
-    } else if (preset === 'management') {
-      setSelectedModules(['Dashboard', 'Agenda', 'Estoque', 'Financeiro', 'Administra√ß√£o']);
-    }
-  };
-
-  const handleToggleModule = (modId: string) => {
-    setModulePreset('custom');
-    setError(null);
-    if (selectedModules.includes(modId)) {
-      if (selectedModules.length <= 1) {
-        setError('Selecione ao menos 1 m√≥dulo para sua experi√™ncia de teste.');
-        return;
-      }
-      setSelectedModules(selectedModules.filter(id => id !== modId));
-    } else {
-      setSelectedModules([...selectedModules, modId]);
-    }
-  };
-
-  useEffect(() => {
-    // Client-side anti-abuse tracking: verify persistent LocalStorage and cookies
-    const getCookie = (name: string) => {
-      const value = `; ${document.cookie}`;
-      const parts = value.split(`; ${name}=`);
-      if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
-      return null;
-    };
-
-    let hasLocalBlock = false;
-    try {
-      const storedStatus = localStorage.getItem('_sys_clinic_engine_state_');
-      if (storedStatus) {
-        const parsed = JSON.parse(storedStatus);
-        if (parsed && parsed.hasCompletedTrial === true) {
-          hasLocalBlock = true;
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-
-    if (hasLocalBlock || getCookie('_odontodash_trial_block') === 'true') {
-      setIsBlockedByFingerprint(true);
-      setError('Aviso de Seguran√ßa: Este dispositivo j√° utilizou um per√≠odo de teste gr√°tis (Trial) do OdontoDash.');
-    }
-  }, []);
-
-  const steps = [
-    "Validando dados cadastrais e consultando integridade do CPF...",
-    "Buscando duplicidades de conta no banco de dados central...",
-    "Instanciando ambientes seguros em sandbox regulacionada LGPD...",
-    "Disparando chaves de ativa√ß√£o via WhatsApp e E-mail de destino..."
-  ];
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    // Filter/validate fields are filled
-    if (!fullName.trim() || !clinicName.trim() || !email.trim() || !phone.trim() || !username.trim() || !password.trim() || !cpf.trim()) {
-      setError('Por favor, preencha todos os campos obrigat√≥rios do formul√°rio.');
-      return;
-    }
-
-    // Mathematically validate the CPF
-    if (!isValidCPFMathematic(cpf)) {
-      setError('CPF inv√°lido. Por favor, insira um CPF matematicamente v√°lido para ativar sua conta de teste.');
-      return;
-    }
-
-    // Emojis and Special Character limits verification
-    if (hasEmojisOrSpecialChars(fullName, 'name')) {
-      setError('O Nome Completo n√£o deve conter emojis ou caracteres especiais (use apenas letras, acentos e espa√ßos).');
-      return;
-    }
-    if (hasEmojisOrSpecialChars(clinicName, 'clinic')) {
-      setError('O Nome da Cl√≠nica n√£o deve conter emojis ou caracteres especiais complexos.');
-      return;
-    }
-    if (hasEmojisOrSpecialChars(username, 'username')) {
-      setError('O Nome de Usu√°rio n√£o deve conter espa√ßos, emojis ou caracteres especiais inv√°lidos (permitido: letras, n√∫meros, ponto, h√≠fen e subscrito).');
-      return;
-    }
-    if (hasEmojisOrSpecialChars(email, 'email')) {
-      setError('E-mail institucional inv√°lido. Verifique se digitou corretamente sem espa√ßos ou s√≠mbolos com emojis.');
-      return;
-    }
-    if (hasEmojisOrSpecialChars(password, 'password')) {
-      setError('A Senha n√£o deve conter emojis ou caracteres especiais de c√≥digo (<, >, \\).');
-      return;
-    }
-
-    // Strict spaces check
-    if (username.trim().includes(' ')) {
-      setError('O nome de usu√°rio n√£o pode conter espa√ßos.');
-      return;
-    }
-
-    if (password.trim().length < 3) {
-      setError('A senha de acesso deve ter pelo menos 3 caracteres.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setCurrentStep(0);
-
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPhone = phone.replace(/\D/g, '');
-    const cleanCPF = cpf.replace(/\D/g, '');
-
-    // Execute real-time database pre-flight checks in parallel with the first wizard delay steps!
-    try {
-      const usersRef = collection(db, 'users');
-
-      // Step 1: Check duplicate username
-      const qUser = query(usersRef, where('username', '==', cleanUsername), limit(1));
-      const userSnap = await getDocs(qUser);
-      if (!userSnap.empty) {
-        throw new Error(`O usu√°rio "${cleanUsername}" j√° est√° em uso por outro consult√≥rio.`);
-      }
-
-      // Step 2: Check duplicate email
-      const qEmail = query(usersRef, where('email', '==', cleanEmail), limit(1));
-      const emailSnap = await getDocs(qEmail);
-      if (!emailSnap.empty) {
-        throw new Error("Este e-mail corporativo j√° foi cadastrado para outra conta de testes.");
-      }
-
-      // Step 3: Check duplicate Phone
-      const qPhone = query(usersRef, where('normalizedPhone', '==', cleanPhone), limit(1));
-      const phoneSnap = await getDocs(qPhone);
-      if (!phoneSnap.empty) {
-        throw new Error("Este n√∫mero de WhatsApp j√° possui um ambiente de testes ativo.");
-      }
-
-      // Step 4: Check duplicate CPF
-      const qCpf = query(usersRef, where('cpf', '==', cleanCPF), limit(1));
-      const cpfSnap = await getDocs(qCpf);
-      if (!cpfSnap.empty) {
-        throw new Error("Este CPF j√° foi utilizado para criar um per√≠odo de testes gratuito.");
-      }
-
-    } catch (err: any) {
-      setError(err?.message || 'Falha na valida√ß√£o de pre-flight do banco de dados.');
-      setIsSubmitting(false);
-      return;
-    }
-
-    // Pre-flight database validation succeeds! Let's smoothly animate steps
-    for (let i = 0; i < steps.length; i++) {
-      setCurrentStep(i);
-      await new Promise(resolve => setTimeout(resolve, 800));
-    }
-
-    // Set success credentials with the registration parameters 
-    setSuccessCredentials({
-      fullName,
-      clinicName,
-      email: cleanEmail,
-      phone,
-      plan,
-      specialty,
-      username: cleanUsername,
-      password: password.trim(),
-      cpf: cleanCPF,
-      selectedModules
-    });
-    setIsSubmitting(false);
-  };
-
-  return (
-    <div className="min-h-screen w-screen bg-[#f8fafc] flex flex-col items-center justify-start py-12 px-4 md:px-8 relative overflow-x-hidden font-sans">
-      {/* Background patterns */}
-      <div className="absolute top-0 left-0 w-full h-full opacity-30 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-brand-cyan/15 blur-[120px]" />
-        <div className="absolute bottom-[-15%] right-[-10%] w-[700px] h-[700px] rounded-full bg-blue-400/10 blur-[130px]" />
-      </div>
-
-      <div className="w-full max-w-5xl relative z-10 flex flex-col gap-8">
-        
-        {/* Back Button and Logo */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-100 pb-6">
-          <button 
-            type="button"
-            onClick={onBack}
-            className="group px-4 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors flex items-center gap-1 bg-white hover:bg-slate-50 rounded-xl border border-slate-200/50 shadow-sm self-start sm:self-auto"
-          >
-            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
-            Voltar ao Login
-          </button>
-          
-          <div className="flex items-center gap-2">
-            {clinicLogo ? (
-              <img src={clinicLogo} alt="OdontoDash" className="h-10 w-auto object-contain" />
-            ) : (
-              <>
-                <div className="w-8 h-8 bg-brand-cyan rounded-lg flex items-center justify-center text-white shadow-lg">
-                  <Plus className="w-5 h-5" />
-                </div>
-                <span className="text-lg font-black text-slate-800 tracking-tight">
-                  Odonto<span className="text-brand-cyan">Dash</span>
-                </span>
-              </>
-            )}
-            <span className="text-[10px] bg-brand-cyan/10 text-brand-cyan font-bold uppercase tracking-wider px-2 py-0.5 rounded-full">
-              Free Trial Hub
-            </span>
-          </div>
-        </div>
-
-        {/* Central Grid container */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          
-          {/* Left Column: Premium Value Proposition & Plan choice */}
-          <div className="lg:col-span-5 space-y-6 text-left">
-            <div className="space-y-3">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 text-[10px] font-bold uppercase tracking-widest">
-                <Sparkles className="w-3 h-3 text-emerald-500 animate-pulse" />
-                Sem compromisso, cancele quando quiser
-              </span>
-              <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
-                Experimente o <span className="text-brand-cyan">OdontoDash</span> gratuitamente por 14 dias
-              </h2>
-              <p className="text-sm text-slate-500 leading-relaxed">
-                Acesse todas as ferramentas de gest√£o, faturamento d3, controle de agendamentos e prontu√°rios que v√£o alavancar os lucros da sua cl√≠nica.
-              </p>
-            </div>
-
-            {/* Core Features list */}
-            <div className="space-y-3 bg-white/60 backdrop-blur-md rounded-2xl p-5 border border-slate-200/50">
-              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-2">Incluso na vers√£o de Teste:</h4>
-              {[
-                { title: "Dashboards anal√≠ticos de faturamento", desc: "Fluxo de caixa claro e transparente" },
-                { title: "Agenda Inteligente integrada", desc: "Preven√ß√£o de faltas com lembretes WhatsApp" },
-                { title: "Prontu√°rio Odontol√≥gico Digital", desc: "Grave evolu√ß√µes de tratamento e receitas" },
-                { title: "Gest√£o completa de pacientes", desc: "Ficha m√©dica, hist√≥rico financeiro e anamnese" }
-              ].map((item, idx) => (
-                <div key={idx} className="flex gap-3">
-                  <div className="w-5 h-5 rounded-full bg-emerald-50 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-100">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                  </div>
-                  <div>
-                    <h5 className="text-xs font-bold text-slate-800">{item.title}</h5>
-                    <p className="text-[10px] text-slate-500">{item.desc}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Secure Badging */}
-            <div className="bg-slate-100/60 p-4 rounded-2xl border border-slate-200/40 flex items-center gap-3">
-              <Shield className="w-8 h-8 text-slate-400 shrink-0" />
-              <p className="text-[10px] text-slate-500 leading-normal font-medium">
-                Seus dados de teste est√£o seguros em um ambiente sandbox criptografado com conformidade total √† <strong>LGPD m√©dica</strong>.
-              </p>
-            </div>
-          </div>
-
-          {/* Right Column: Loading Setup Wizard OR Setup Form */}
-          <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200/60 shadow-xl shadow-slate-200/40 p-8 relative overflow-hidden">
-            <AnimatePresence mode="wait">
-              {isBlockedByFingerprint ? (
-                // Blocked View
-                <motion.div 
-                  key="blocked-trial"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="py-12 flex flex-col items-center justify-center text-center space-y-6"
-                >
-                  <div className="w-16 h-16 rounded-full bg-rose-50 flex items-center justify-center border border-rose-100 shadow-sm animate-pulse">
-                    <Shield className="w-8 h-8 text-rose-500" />
-                  </div>
-
-                  <div className="space-y-2 max-w-sm border-b border-slate-100 pb-4">
-                    <h3 className="text-lg font-extrabold text-slate-800 tracking-tight">Acesso de Testes Esgotado</h3>
-                    <p className="text-xs text-slate-500 leading-relaxed font-semibold">
-                      Identificamos que seu dispositivo ou rede local j√° utilizou um ambiente de teste gratuito (Trial) no OdontoDash. 
-                    </p>
-                    <p className="text-xs text-slate-400 leading-relaxed">
-                      Para manter a estabilidade do sistema e assegurar conformidade m√©dica, limitamos a cria√ß√£o de m√∫ltiplos ambientes teste por usu√°rio.
-                    </p>
-                  </div>
-
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/50 text-left space-y-1 w-full max-w-md">
-                    <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Deseja continuar utilizando?</span>
-                    <p className="text-[10px] text-slate-650 leading-normal font-medium">
-                      Para estender seu per√≠odo de experimenta√ß√£o ou contratar um de nossos planos comerciais de cl√≠nica, por favor clique no bot√£o abaixo para contactar diretamente nosso time de suporte e regulariza√ß√£o.
-                    </p>
-                  </div>
-
-                  <div className="flex gap-3 w-full max-w-sm pt-2">
-                    <button
-                      type="button"
-                      onClick={onBack}
-                      className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 active:scale-[0.98] transition-all cursor-pointer shadow-sm"
-                    >
-                      Voltar ao Login
-                    </button>
-                    <a
-                      href="mailto:suporte@odontodash.com.br?subject=Reativar%20Acesso%20OdontoDash"
-                      className="flex-1 py-3 bg-brand-cyan text-white text-xs font-bold rounded-xl text-center hover:bg-brand-cyan/95 active:scale-[0.98] transition-all cursor-pointer shadow-md shadow-brand-cyan/15"
-                    >
-                      Falar c/ Vendas
-                    </a>
-                  </div>
-                </motion.div>
-              ) : successCredentials ? (
-                // Simulated activation receipt / success details
-                <motion.div 
-                  key="success-receipt"
-                  initial={{ opacity: 0, y: 15 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="space-y-6 text-left"
-                >
-                  <div className="flex flex-col items-center justify-center text-center pb-4 border-b border-slate-100">
-                    <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center border border-emerald-100 shadow-sm mb-4">
-                      <ShieldCheck className="w-8 h-8 text-emerald-500 animate-bounce" />
-                    </div>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold uppercase tracking-widest px-3 py-1 rounded-full mb-1">
-                      Cadastro Ativado com Sucesso! üöÄ
-                    </span>
-                    <h3 className="text-xl font-black text-slate-800 tracking-tight">Ativa√ß√£o Enviada</h3>
-                    <p className="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
-                      Sua conta de testes foi estabelecida com seguran√ßa. Os detalhes de login e instru√ß√µes de ativa√ß√£o foram disparados com sucesso para os canais cadastrados:
-                    </p>
-                  </div>
-
-                  {/* WhatsApp and Email Targets badges */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pb-2">
-                    <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-100/60 flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-brand-cyan/10 flex items-center justify-center text-brand-cyan flex-shrink-0">
-                        <MessageSquare className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="text-[8px] uppercase font-bold text-slate-400">Ativa√ß√£o via WhatsApp</span>
-                        <p className="text-xs font-bold text-slate-800 truncate">{successCredentials.phone}</p>
-                      </div>
-                    </div>
-
-                    <div className="p-3.5 bg-emerald-50/40 rounded-2xl border border-emerald-100/60 flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-brand-cyan/10 flex items-center justify-center text-brand-cyan flex-shrink-0">
-                        <Mail className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <span className="text-[8px] uppercase font-bold text-slate-400">Ativa√ß√£o via E-mail</span>
-                        <p className="text-xs font-bold text-slate-800 truncate">{successCredentials.email}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Summary of Generated Accounts */}
-                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/65 space-y-3">
-                    <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Credenciais Administrativas Oficiais</span>
-                    
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div className="space-y-0.5">
-                        <span className="text-[9px] text-slate-400 font-bold block">Nome de Usu√°rio</span>
-                        <span className="font-mono text-slate-800 font-semibold">{successCredentials.username}</span>
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className="text-[9px] text-slate-400 font-bold block">Senha de Acesso</span>
-                        <span className="font-mono text-slate-850 font-bold">{successCredentials.password}</span>
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className="text-[9px] text-slate-400 font-bold block">CPF Vinculado</span>
-                        <span className="font-mono text-slate-800 font-semibold">{successCredentials.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
-                      </div>
-                      <div className="space-y-0.5">
-                        <span className="text-[9px] text-slate-400 font-bold block">Plano Ativo</span>
-                        <span className="font-bold text-emerald-600">{successCredentials.plan} (14 Dias Gr√°tis)</span>
-                      </div>
-                    </div>
-
-                    {/* Activated Modules Badges */}
-                    <div className="pt-2 border-t border-slate-200/60">
-                      <span className="text-[9px] text-slate-400 font-bold block mb-1.5 uppercase">M√≥dulos Habilitados para seu Per√≠odo de Teste:</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {(successCredentials.selectedModules && successCredentials.selectedModules.length > 0 
-                          ? successCredentials.selectedModules 
-                          : TRIAL_AVAILABLE_MODULES.map(m => m.id)
-                        ).map((modId) => {
-                          const found = TRIAL_AVAILABLE_MODULES.find(m => m.id === modId);
-                          return (
-                            <span key={modId} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 text-[10px] font-semibold">
-                              <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
-                              {found ? found.name : modId}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-amber-50/50 border border-amber-100/70 p-4 rounded-xl text-[10px] text-amber-800 leading-relaxed font-semibold">
-                    ‚ö†Ô∏è <strong>Aten√ß√£o:</strong> Por motivos de seguran√ßa regulat√≥ria e conformidade LGPD m√©dica, guarde estes dados cuidadosamente. N√≥s enviamos as instru√ß√µes para as contas mostradas acima.
-                  </div>
-
-                  {/* Continue CTA */}
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setIsSubmitting(true);
-                      try {
-                        await onStartTrial(successCredentials);
-                      } catch (err: any) {
-                        setError(err?.message || 'Erro ao inicializar o banco.');
-                        setIsSubmitting(false);
-                      }
-                    }}
-                    className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold uppercase text-xs tracking-wider py-4 rounded-2xl transition-all shadow-xl shadow-slate-900/10 active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Check className="w-4 h-4 text-white" />
-                    Confirmar Ativa√ß√£o & Entrar no Painel
-                  </button>
-                </motion.div>
-              ) : isSubmitting ? (
-                // Setup loader animation wizard
-                <motion.div 
-                  key="loader-wizard"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="py-12 flex flex-col items-center justify-center text-center space-y-8"
-                >
-                  <div className="relative">
-                    {/* Ring loader */}
-                    <div className="w-20 h-20 rounded-full border-4 border-slate-100 border-t-brand-cyan animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Cpu className="w-7 h-7 text-brand-cyan animate-pulse" />
-                    </div>
-                  </div>
-
-                  <div className="space-y-3 max-w-sm">
-                    <h3 className="text-lg font-bold text-slate-800">Preparando seu Espa√ßo Virtual</h3>
-                    <p className="text-xs text-slate-400 font-mono transition-all duration-300">
-                      {steps[currentStep]}
-                    </p>
-                  </div>
-
-                  {/* Progress dots bar */}
-                  <div className="flex gap-2 justify-center">
-                    {steps.map((_, i) => (
-                      <div 
-                        key={i} 
-                        className={cn(
-                          "h-1.5 rounded-full transition-all duration-300", 
-                          i === currentStep ? "w-6 bg-brand-cyan" : i < currentStep ? "w-3 bg-brand-cyan/40" : "w-1.5 bg-slate-100"
-                        )} 
-                      />
-                    ))}
-                  </div>
-                </motion.div>
-              ) : (
-                // Form View
-                <motion.div 
-                  key="trial-form"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="space-y-6 text-left"
-                >
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800 tracking-tight">Configure sua Conta Experimental</h3>
-                    <p className="text-xs text-slate-400">Preencha os dados e tenha acesso imediato ao painel de testes.</p>
-                  </div>
-
-                  {error && (
-                    <div className="p-4 bg-rose-50 border border-rose-100 text-rose-600 rounded-2xl text-[10px] uppercase font-bold flex items-center gap-2">
-                      <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-                      <span>{error}</span>
-                    </div>
-                  )}
-
-                  <form onSubmit={handleSubmit} className="space-y-4">
-                    
-                    {/* Input name and Email */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Seu Nome Completo *</label>
-                        <div className="relative">
-                          <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                          <input 
-                            type="text"
-                            required
-                            value={fullName}
-                            onChange={(e) => setFullName(e.target.value)}
-                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: Dr. Arthur Rezende"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">E-mail Profissional *</label>
-                        <div className="relative">
-                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                          <input 
-                            type="email"
-                            required
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: darthur@odonto.com"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Clinic Name, CPF and Phone/WhatsApp in 3 columns */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome da Cl√≠nica *</label>
-                        <div className="relative">
-                          <Stethoscope className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                          <input 
-                            type="text"
-                            required
-                            value={clinicName}
-                            onChange={(e) => setClinicName(e.target.value)}
-                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: mbsolucoes"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">CPF do Profissional *</label>
-                        <div className="relative">
-                          <CreditCard className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                          <input 
-                            type="text"
-                            required
-                            value={cpf}
-                            onChange={(e) => {
-                              const cleanVal = e.target.value.replace(/\D/g, '').substring(0, 11);
-                              let masked = cleanVal;
-                              if (cleanVal.length > 9) {
-                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3, 6)}.${cleanVal.substring(6, 9)}-${cleanVal.substring(9, 11)}`;
-                              } else if (cleanVal.length > 6) {
-                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3, 6)}.${cleanVal.substring(6)}`;
-                              } else if (cleanVal.length > 3) {
-                                masked = `${cleanVal.substring(0, 3)}.${cleanVal.substring(3)}`;
-                              }
-                              setCpf(masked);
-                            }}
-                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: 000.000.000-00"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">WhatsApp p/ Ativa√ß√£o *</label>
-                        <div className="relative">
-                          <MessageCircle className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                          <input 
-                            type="tel"
-                            required
-                            value={phone}
-                            onChange={(e) => {
-                              const cleanVal = e.target.value.replace(/\D/g, '').substring(0, 11);
-                              let masked = cleanVal;
-                              if (cleanVal.length > 7) {
-                                masked = `(${cleanVal.substring(0, 2)}) ${cleanVal.substring(2, 7)}-${cleanVal.substring(7)}`;
-                              } else if (cleanVal.length > 2) {
-                                masked = `(${cleanVal.substring(0, 2)}) ${cleanVal.substring(2)}`;
-                              }
-                              setPhone(masked);
-                            }}
-                            className="w-full text-xs p-3.5 pl-10 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                            placeholder="Ex: (11) 99999-9999"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Custom Credentials for subsequent logins */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100/80">
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-slate-400" />
-                          Nome de Usu√°rio para Acesso *
-                        </label>
-                        <input 
-                          type="text"
-                          required
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                          placeholder="Ex: arthur.odonto (sem espa√ßos)"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
-                          <Lock className="w-3.5 h-3.5 text-slate-400" />
-                          Senha de Acesso *
-                        </label>
-                        <input 
-                          type="password"
-                          required
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan bg-white focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                          placeholder="Ex: darthur123"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Select Specialty Preset */}
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Especialidade Principal da Cl√≠nica</label>
-                      <select
-                        value={specialty}
-                        onChange={(e) => setSpecialty(e.target.value)}
-                        className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-medium"
-                      >
-                        <option value="Geral">Cl√≠nica Geral & Est√©tica</option>
-                        <option value="Ortodontia">Ortodontia & Alinhadores</option>
-                        <option value="Implantodontia">Implantodontia & Pr√≥teses</option>
-                        <option value="Odontopediatria">Odontopediatria & Endodontia</option>
-                      </select>
-                    </div>
-
-                    {/* Custom Module Selection for Business */}
-                    <div className="space-y-2.5 pt-1">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
-                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
-                          <Layers className="w-3.5 h-3.5 text-brand-cyan" />
-                          Escolha os M√≥dulos para seu Neg√≥cio
-                        </label>
-                        <span className="text-[10px] font-bold text-brand-cyan bg-brand-cyan/10 px-2 py-0.5 rounded-full self-start sm:self-auto">
-                          {selectedModules.length} de {TRIAL_AVAILABLE_MODULES.length} selecionados
-                        </span>
-                      </div>
-
-                      {/* Presets Chips */}
-                      <div className="flex flex-wrap gap-1.5 pb-1">
-                        {[
-                          { id: 'all', label: 'Todos os M√≥dulos' },
-                          { id: 'clinic', label: 'Foco Cl√≠nico & Consult√≥rio' },
-                          { id: 'management', label: 'Foco Gest√£o & Financeiro' },
-                          { id: 'custom', label: 'Personalizado' },
-                        ].map((preset) => (
-                          <button
-                            key={preset.id}
-                            type="button"
-                            onClick={() => handleSelectPreset(preset.id as any)}
-                            className={cn(
-                              "text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all cursor-pointer",
-                              modulePreset === preset.id
-                                ? "bg-brand-cyan text-white border-brand-cyan shadow-xs"
-                                : "bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200"
-                            )}
-                          >
-                            {preset.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Modules Selection Grid */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                        {TRIAL_AVAILABLE_MODULES.map((mod) => {
-                          const isSelected = selectedModules.includes(mod.id);
-                          return (
-                            <button
-                              key={mod.id}
-                              type="button"
-                              onClick={() => handleToggleModule(mod.id)}
-                              className={cn(
-                                "text-left p-2.5 rounded-xl border transition-all relative flex flex-col justify-between group cursor-pointer",
-                                isSelected
-                                  ? "bg-brand-cyan/[0.04] border-brand-cyan/80 ring-1 ring-brand-cyan/20 shadow-xs"
-                                  : "bg-white border-slate-200/70 hover:border-slate-300 opacity-60 hover:opacity-100"
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-1.5 w-full">
-                                <div className="min-w-0">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter block">{mod.category}</span>
-                                  <h6 className="text-[11px] font-bold text-slate-800 leading-snug truncate">{mod.name}</h6>
-                                </div>
-                                <div className={cn(
-                                  "w-4 h-4 rounded-md flex items-center justify-center shrink-0 transition-colors mt-0.5",
-                                  isSelected ? "bg-brand-cyan text-white" : "border border-slate-300 bg-slate-50"
-                                )}>
-                                  {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                                </div>
-                              </div>
-                              <p className="text-[9px] text-slate-500 leading-tight mt-1 line-clamp-2">{mod.desc}</p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Desired Plan Tabs Selector */}
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Plano desejado para simular</label>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {[
-                          { title: 'Lite', desc: '1 consult√≥rio, agenda simples', price: 'R$ 149/m√™s' },
-                          { title: 'Pro', desc: 'Multi-cadeiras, KPI, WhatsApp', price: 'R$ 299/m√™s', flag: 'Recomendado' },
-                          { title: 'Platinum', desc: 'Franquias, suporte 24h dedicado', price: 'R$ 599/m√™s' }
-                        ].map((p, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => setPlan(p.title)}
-                            className={cn(
-                              "text-left p-4 rounded-xl border transition-all relative flex flex-col justify-between h-28 focus:outline-none",
-                              plan === p.title 
-                                ? "bg-brand-cyan/[0.03] border-brand-cyan ring-4 ring-brand-cyan/5 shadow-md" 
-                                : "bg-white border-slate-200/60 hover:border-slate-300"
-                            )}
-                          >
-                            {p.flag && (
-                              <span className="absolute -top-2 right-3 px-2 py-0.5 rounded-full bg-brand-cyan text-white text-[8px] font-bold uppercase tracking-wider">
-                                {p.flag}
-                              </span>
-                            )}
-                            <div>
-                              <h5 className="text-xs font-black text-slate-800 uppercase tracking-tight">{p.title}</h5>
-                              <p className="text-[9px] text-slate-400 leading-tight mt-0.5">{p.desc}</p>
-                            </div>
-                            <span className="text-[11px] font-bold text-slate-700">{p.price}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Launch Trial CTA Button */}
-                    <button
-                      type="submit"
-                      className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold uppercase text-xs tracking-wider py-4 rounded-2xl transition-all shadow-xl shadow-slate-900/10 active:scale-[0.99] flex items-center justify-center gap-2"
-                    >
-                      <Sparkles className="w-4 h-4 text-white animate-pulse" />
-                      Inicializar Meu OdontoDash Gr√°tis
-                    </button>
-
-                  </form>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-        </div>
-
-        {/* Footing disclaimer */}
-        <p className="text-[10px] text-slate-400 text-center mt-4">
-          {footerText} | Dental Analytics trial sandbox env.
-        </p>
-
-      </div>
-    </div>
-  );
-}
-
-interface StockItem {
-  id: string;
-  name: string;
-  category: string;
-  quantity: number;
-  minQuantity: number;
-  unit: string;
-  priceUnit: number;
-  supplier: string;
-  location: string;
-  lastUpdated: string;
-}
-
-interface StockMovement {
-  id: string;
-  itemId: string;
-  itemName: string;
-  type: 'in' | 'out';
-  quantity: number;
-  reason: string;
-  operator: string;
-  date: string;
-}
-
-const DEFAULT_STOCK_ITEMS: StockItem[] = [
-  {
-    id: 'st-1',
-    name: 'Anest√©sico Lidofrim 2%',
-    category: 'Anest√©sicos',
-    quantity: 45,
-    minQuantity: 20,
-    unit: 'Frascos',
-    priceUnit: 3.50,
-    supplier: 'Dental Cremer',
-    location: 'Gaveta A2-Consult√≥rio 1',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-2',
-    name: 'Luva de L√°tex Descart√°vel M',
-    category: 'Descart√°veis',
-    quantity: 8,
-    minQuantity: 15,
-    unit: 'Caixas',
-    priceUnit: 28.00,
-    supplier: 'OdontoMed Corp',
-    location: 'Arm√°rio Geral Prateleira 1',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-3',
-    name: 'Resina Aplic Z350 XT A2',
-    category: 'Dent√≠stica',
-    quantity: 12,
-    minQuantity: 5,
-    unit: 'Seringas',
-    priceUnit: 130.00,
-    supplier: 'Dental Cremer',
-    location: 'Gaveta B1-Consult√≥rio 2',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-4',
-    name: 'Babador Descart√°vel c/ 100',
-    category: 'Descart√°veis',
-    quantity: 4,
-    minQuantity: 5,
-    unit: 'Pacotes',
-    priceUnit: 15.00,
-    supplier: 'OdontoMed Corp',
-    location: 'Arm√°rio Geral Prateleira 2',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-5',
-    name: 'Broca Diamantada FG 1014',
-    category: 'Instrumentais',
-    quantity: 25,
-    minQuantity: 15,
-    unit: 'Unidades',
-    priceUnit: 12.50,
-    supplier: 'Dental Speed',
-    location: 'Gaveta C3-Esteriliza√ß√£o',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-6',
-    name: '√Ålcool em Gel 70% 1L',
-    category: 'Higieniza√ß√£o',
-    quantity: 2,
-    minQuantity: 4,
-    unit: 'Frascos',
-    priceUnit: 18.90,
-    supplier: 'Comercial Sul',
-    location: 'Esteriliza√ß√£o Pia',
-    lastUpdated: new Date().toISOString()
-  },
-  {
-    id: 'st-7',
-    name: 'Fio de Sutura Nylon 4-0',
-    category: 'Ortodontia',
-    quantity: 18,
-    minQuantity: 8,
-    unit: 'Envelopes',
-    priceUnit: 8.40,
-    supplier: 'Dental Speed',
-    location: 'Gaveta D1-Consult√≥rio 1',
-    lastUpdated: new Date().toISOString()
-  }
-];
-
-const DEFAULT_MOVEMENTS: StockMovement[] = [
-  {
-    id: 'm-1',
-    itemId: 'st-1',
-    itemName: 'Anest√©sico Lidofrim 2%',
-    type: 'in',
-    quantity: 50,
-    reason: 'Compra peri√≥dica via distribuidor',
-    operator: 'Dra. Ana Admin',
-    date: subMonths(new Date(), 1).toISOString()
-  },
-  {
-    id: 'm-2',
-    itemId: 'st-2',
-    itemName: 'Luva de L√°tex Descart√°vel M',
-    type: 'out',
-    quantity: 12,
-    reason: 'Uso cl√≠nico intensivo cirurgias',
-    operator: 'Dr. Arthur Rezende',
-    date: subMonths(new Date(), 1).toISOString()
-  },
-  {
-    id: 'm-3',
-    itemId: 'st-4',
-    itemName: 'Babador Descart√°vel c/ 100',
-    type: 'out',
-    quantity: 2,
-    reason: 'Consumo do consult√≥rio 3',
-    operator: 'Dr. Arthur Rezende',
-    date: new Date().toISOString()
-  }
-];
-
-function StockView({ currentUser }: { currentUser: any }) {
-  // Initialize from LocalStorage
-  const [items, setItems] = useState<StockItem[]>(() => {
-    const saved = localStorage.getItem('odonto_stock_items');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { console.error(e); }
-    }
-    localStorage.setItem('odonto_stock_items', JSON.stringify(DEFAULT_STOCK_ITEMS));
-    return DEFAULT_STOCK_ITEMS;
-  });
-
-  const [movements, setMovements] = useState<StockMovement[]>(() => {
-    const saved = localStorage.getItem('odonto_stock_movements');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { console.error(e); }
-    }
-    localStorage.setItem('odonto_stock_movements', JSON.stringify(DEFAULT_MOVEMENTS));
-    return DEFAULT_MOVEMENTS;
-  });
-
-  // Save changes to LocalStorage whenever state updates
-  useEffect(() => {
-    localStorage.setItem('odonto_stock_items', JSON.stringify(items));
-  }, [items]);
-
-  useEffect(() => {
-    localStorage.setItem('odonto_stock_movements', JSON.stringify(movements));
-  }, [movements]);
-
-  // Filter States
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('Todos');
-  const [statusFilter, setStatusFilter] = useState('Todos'); // 'Todos', 'Baixo', 'Adequado'
-
-  // Modals / Actions
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [showMovementForm, setShowMovementForm] = useState(false);
-  const [selectedItemForMovement, setSelectedItemForMovement] = useState<StockItem | null>(null);
-  const [movementType, setMovementType] = useState<'in' | 'out'>('in');
-  const [showHistory, setShowHistory] = useState(false);
-
-  // New Item Form State
-  const [newItem, setNewItem] = useState({
-    name: '',
-    category: 'Descart√°veis',
-    quantity: '',
-    minQuantity: '',
-    unit: 'Unidades',
-    priceUnit: '',
-    supplier: '',
-    location: ''
-  });
-
-  // Movement Form State
-  const [movementQty, setMovementQty] = useState('');
-  const [movementReason, setMovementReason] = useState('Consumo rotina cl√≠nica');
-
-  // Edit State
-  const [editingItem, setEditingItem] = useState<StockItem | null>(null);
-  const [deletingItem, setDeletingItem] = useState<StockItem | null>(null);
-
-  // Calculated Properties
-  const lowStockCount = useMemo(() => {
-    return items.filter(item => item.quantity <= item.minQuantity).length;
-  }, [items]);
-
-  const totalStockValue = useMemo(() => {
-    return items.reduce((sum, item) => sum + (item.quantity * item.priceUnit), 0);
-  }, [items]);
-
-  const uniqueCategories = useMemo(() => {
-    return ['Todos', ...new Set(items.map(i => i.category))];
-  }, [items]);
-
-  // Filtered Items
-  const filteredItems = useMemo(() => {
-    return items.filter(item => {
-      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            item.supplier.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            item.location.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchesCategory = categoryFilter === 'Todos' || item.category === categoryFilter;
-      
-      let matchesStatus = true;
-      if (statusFilter === 'Baixo') {
-        matchesStatus = item.quantity <= item.minQuantity;
-      } else if (statusFilter === 'Adequado') {
-        matchesStatus = item.quantity > item.minQuantity;
-      }
-
-      return matchesSearch && matchesCategory && matchesStatus;
-    });
-  }, [items, searchQuery, categoryFilter, statusFilter]);
-
-  // Add Item Handler
-  const handleAddItem = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newItem.name.trim()) return;
-
-    const item: StockItem = {
-      id: `st-${Date.now()}`,
-      name: newItem.name.trim(),
-      category: newItem.category,
-      quantity: Math.max(0, parseInt(newItem.quantity) || 0),
-      minQuantity: Math.max(0, parseInt(newItem.minQuantity) || 0),
-      unit: newItem.unit,
-      priceUnit: Math.max(0, parseFloat(newItem.priceUnit) || 0),
-      supplier: newItem.supplier.trim() || 'N√£o especificado',
-      location: newItem.location.trim() || 'Almoxarifado',
-      lastUpdated: new Date().toISOString()
-    };
-
-    setItems(prev => [item, ...prev]);
-
-    // Add movement for initial stock
-    if (item.quantity > 0) {
-      const movement: StockMovement = {
-        id: `m-${Date.now()}`,
-        itemId: item.id,
-        itemName: item.name,
-        type: 'in',
-        quantity: item.quantity,
-        reason: 'Cadastro inicial de estoque',
-        operator: currentUser?.name || 'Administrador',
-        date: new Date().toISOString()
-      };
-      setMovements(prev => [movement, ...prev]);
-    }
-
-    // Reset Form
-    setNewItem({
-      name: '',
-      category: 'Descart√°veis',
-      quantity: '',
-      minQuantity: '',
-      unit: 'Unidades',
-      priceUnit: '',
-      supplier: '',
-      location: ''
-    });
-    setShowAddForm(false);
-  };
-
-  // Edit Item Handler
-  const handleEditItem = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingItem || !editingItem.name.trim()) return;
-
-    setItems(prev => prev.map(item => {
-      if (item.id === editingItem.id) {
-        return {
-          ...editingItem,
-          lastUpdated: new Date().toISOString()
-        };
-      }
-      return item;
-    }));
-
-    setEditingItem(null);
-  };
-
-  // Delete Item Handler
-  const handleDeleteItem = (id: string) => {
-    const item = items.find(i => i.id === id);
-    if (item) {
-      setDeletingItem(item);
-    }
-  };
-
-  const confirmDelete = () => {
-    if (!deletingItem) return;
-    const targetId = deletingItem.id;
-
-    setItems(prev => {
-      const updated = prev.filter(i => i.id !== targetId);
-      localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
-      return updated;
-    });
-
-    setMovements(prev => {
-      const updated = prev.filter(m => m.itemId !== targetId);
-      localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
-      return updated;
-    });
-
-    setDeletingItem(null);
-  };
-
-  // Registrar Entrada / Sa√≠da
-  const handleAddMovement = (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      if (!selectedItemForMovement) {
-        alert("Por favor, selecione um material cadastrado para registrar a movimenta√ß√£o.");
-        return;
-      }
-
-      const liveItem = items.find(i => i.id === selectedItemForMovement.id);
-      if (!liveItem) {
-        alert("Produto n√£o encontrado no estoque atual.");
-        return;
-      }
-
-      const qty = Math.max(1, parseInt(movementQty) || 1);
-
-      // If outflow, check boundaries
-      if (movementType === 'out' && liveItem.quantity < qty) {
-        alert(`Quantidade insuficiente no estoque atual para o material "${liveItem.name}".\n\nEstoque Atual: ${liveItem.quantity} ${liveItem.unit}\nQuantidade Solicitada: ${qty} ${liveItem.unit}\n\nPor favor, ajuste o valor.`);
-        return;
-      }
-
-      // Update quantities
-      setItems(prev => {
-        const updated = prev.map(item => {
-          if (item.id === liveItem.id) {
-            const newQty = movementType === 'in' ? item.quantity + qty : item.quantity - qty;
-            return {
-              ...item,
-              quantity: newQty,
-              lastUpdated: new Date().toISOString()
-            };
-          }
-          return item;
-        });
-        localStorage.setItem('odonto_stock_items', JSON.stringify(updated));
-        return updated;
-      });
-
-      // Record movement logs
-      const movement: StockMovement = {
-        id: `m-${Date.now()}`,
-        itemId: liveItem.id,
-        itemName: liveItem.name,
-        type: movementType,
-        quantity: qty,
-        reason: movementReason.trim() || (movementType === 'in' ? 'Entrada manual' : 'Sa√≠da manual'),
-        operator: currentUser?.name || 'Cl√≠nico',
-        date: new Date().toISOString()
-      };
-
-      setMovements(prev => {
-        const updated = [movement, ...prev];
-        localStorage.setItem('odonto_stock_movements', JSON.stringify(updated));
-        return updated;
-      });
-
-      // Reset Form
-      setMovementQty('');
-      setMovementReason('Consumo rotina cl√≠nica');
-      setSelectedItemForMovement(null);
-      setShowMovementForm(false);
-
-      // Success alerts in Portuguese matching exactly the requested confirmation
-      alert(`Movimenta√ß√£o salva com sucesso!\n\nMaterial: ${liveItem.name}\nOpera√ß√£o: ${movementType === 'in' ? 'Entrada (+)' : 'Sa√≠da (-)'}\nQuantidade: ${qty} ${liveItem.unit}\nNovo Estoque: ${movementType === 'in' ? liveItem.quantity + qty : liveItem.quantity - qty} ${liveItem.unit}`);
-
-    } catch (error: any) {
-      console.error("Erro ao registrar movimenta√ß√£o:", error);
-      alert("Ocorreu um erro ao salvar a movimenta√ß√£o: " + error.message);
-    }
-  };
-
-  return (
-    <div className="space-y-4 container mx-auto pb-12 font-sans text-left">
-      {/* Header Panel */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h2 className="text-base sm:text-lg font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <span>Almoxarifado & Estoque</span>
-          </h2>
-          <span className="text-xs text-slate-300 font-semibold">‚Ä¢</span>
-          <span className="text-xs text-slate-500 font-medium">
-            Materiais ativos e rastreio de validade
-          </span>
-        </div>
-        
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button 
-            onClick={() => {
-              setSelectedItemForMovement(null);
-              setMovementType('out');
-              setMovementQty('1');
-              setMovementReason('Consumo rotina cl√≠nica');
-              setShowMovementForm(true);
-            }}
-            className="px-3 py-1.5 bg-rose-50 text-rose-600 border border-rose-200/50 hover:bg-rose-100 font-bold text-xs rounded-xl transition-all shadow-xs active:scale-95 flex items-center gap-1.5 cursor-pointer"
-          >
-            <TrendingDown className="w-3.5 h-3.5 text-rose-500" />
-            <span>Sa√≠da / Consumo</span>
-          </button>
-          
-          <button 
-            onClick={() => {
-              setSelectedItemForMovement(null);
-              setMovementType('in');
-              setMovementQty('1');
-              setMovementReason('Nova compra / Reposi√ß√£o de estoque');
-              setShowMovementForm(true);
-            }}
-            className="px-3 py-1.5 bg-emerald-50 text-emerald-600 border border-emerald-200/50 hover:bg-emerald-100 font-bold text-xs rounded-xl transition-all shadow-xs active:scale-95 flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Entrada de Lote</span>
-          </button>
-
-          <button 
-            onClick={() => setShowAddForm(true)}
-            className="px-3.5 py-1.5 bg-brand-cyan hover:bg-cyan-500 text-slate-950 font-bold text-xs rounded-xl transition-all shadow-xs active:scale-95 flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Novo Item</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Grid KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        
-        {/* Total Itens card */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Total de Itens</span>
-            <p className="text-2xl font-black text-slate-800 tracking-tight mt-1">{items.length}</p>
-            <span className="text-[10px] text-slate-400 mt-1 block">Variedade de suprimentos</span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500">
-            <Package className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* Low Stock Alerts card */}
-        <button 
-          onClick={() => {
-            setStatusFilter('Baixo');
-            setCategoryFilter('Todos');
-          }}
-          className={cn(
-            "p-5 rounded-2xl border text-left shadow-sm flex items-center justify-between transition-all outline-none focus:outline-none",
-            lowStockCount > 0 
-              ? "bg-amber-50/[0.3] border-amber-200 shadow-amber-100/10 cursor-pointer hover:bg-amber-50" 
-              : "bg-white border-slate-100 cursor-default"
-          )}
-        >
-          <div>
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Estoque Cr√≠tico / Baixo</span>
-            <p className={cn("text-2xl font-black tracking-tight mt-1", lowStockCount > 0 ? "text-amber-500" : "text-slate-800")}>
-              {lowStockCount}
-            </p>
-            <span className={cn("text-[10px] mt-1 block font-bold", lowStockCount > 0 ? "text-amber-600 animate-pulse" : "text-slate-400")}>
-              {lowStockCount > 0 ? "Exige reposi√ß√£o imediata" : "Nenhuma pend√™ncia"}
-            </span>
-          </div>
-          <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center", lowStockCount > 0 ? "bg-amber-100/60 text-amber-500 animate-bounce" : "bg-slate-50 text-slate-400")}>
-            <AlertCircle className="w-6 h-6" />
-          </div>
-        </button>
-
-        {/* Financial Value card */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Valor total de Estoque</span>
-            <p className="text-2xl font-black text-rose-500 tracking-tight mt-1">{formatCurrency(totalStockValue)}</p>
-            <span className="text-[10px] text-slate-400 mt-1 block">Patrim√¥nio ativo estocado</span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500">
-            <DollarSign className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* History tracker widget */}
-        <button 
-          onClick={() => setShowHistory(true)}
-          className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:bg-slate-50 text-left transition-all outline-none"
-        >
-          <div>
-            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Log de Movimenta√ß√µes</span>
-            <p className="text-2xl font-black text-brand-cyan tracking-tight mt-1">{movements.length}</p>
-            <span className="text-[10px] text-brand-cyan underline block font-bold">Ver hist√≥rico de entradas/sa√≠das</span>
-          </div>
-          <div className="w-12 h-12 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan">
-            <History className="w-6 h-6" />
-          </div>
-        </button>
-
-      </div>
-
-      {/* Filter and Table area */}
-      <div className="bg-white rounded-3xl border border-slate-200/60 shadow-lg p-6 space-y-6">
-        
-        {/* Actions bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-            
-            {/* Search */}
-            <div className="relative group w-full sm:w-64">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-brand-cyan transition-colors" />
-              <input 
-                type="text" 
-                placeholder="Buscar por nome, fornecedor, local..."
-                className="pl-9 pr-3 py-2.5 w-full bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all shadow-sm"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            {/* Category Filter dropdown */}
-            <div className="w-full sm:w-auto shrink-0">
-              <select 
-                className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2.5 bg-slate-50 focus:bg-white focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 outline-none cursor-pointer shadow-sm font-semibold text-slate-700"
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-              >
-                {uniqueCategories.map((cat, i) => (
-                  <option key={i} value={cat}>Categorias: {cat}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Status Filter buttons */}
-            <div className="flex items-center gap-1.5 p-1 bg-slate-100/80 rounded-xl border border-slate-200/50 w-full sm:w-auto overflow-x-auto">
-              {[
-                { label: 'Todos', value: 'Todos' },
-                { label: 'Cr√≠tico/Baixo ‚ö†Ô∏è', value: 'Baixo' },
-                { label: 'Adequado', value: 'Adequado' }
-              ].map((btn, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setStatusFilter(btn.value)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap",
-                    statusFilter === btn.value
-                      ? "bg-white text-slate-800 shadow-sm font-black"
-                      : "text-slate-500 hover:text-slate-800 hover:bg-white/40"
-                  )}
-                >
-                  {btn.label}
-                </button>
-              ))}
-            </div>
-
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setSearchQuery('');
-              setCategoryFilter('Todos');
-              setStatusFilter('Todos');
-            }}
-            className="text-[10px] font-black uppercase text-slate-400 tracking-wider hover:text-slate-700 underline focus:outline-none"
-          >
-            Limpar Filtros
-          </button>
-        </div>
-
-        {/* Stock Items Table */}
-        <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/70 border-b border-slate-100 text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                  <th className="py-4 px-5">Material / Suprimento</th>
-                  <th className="py-4 px-4">Categoria</th>
-                  <th className="py-4 px-4 text-center">N√≠vel / Quantidade</th>
-                  <th className="py-4 px-4 text-right">Pre√ßo Unit√°rio</th>
-                  <th className="py-4 px-4 text-right">Valor Total Estocado</th>
-                  <th className="py-4 px-4 hidden md:table-cell">Fornecedor & Localiza√ß√£o</th>
-                  <th className="py-4 px-5 text-center">A√ß√µes R√°pidas</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-xs">
-                {filteredItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400 bg-slate-50/20 font-medium">
-                      Nenhum material encontrado com as especifica√ß√µes inseridas.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredItems.map((item) => {
-                    const isLow = item.quantity <= item.minQuantity;
-                    const pct = item.minQuantity > 0 ? Math.min(100, Math.round((item.quantity / (item.minQuantity * 2.5)) * 100)) : 100;
-                    
-                    return (
-                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors group">
-                        
-                        {/* Material Info */}
-                        <td className="py-4 px-5">
-                          <div>
-                            <div className="font-bold text-slate-800 text-sm group-hover:text-brand-cyan transition-colors">{item.name}</div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-[9px] text-slate-400 font-mono">√öltima atualiza√ß√£o: {new Date(item.lastUpdated).toLocaleDateString()}</span>
-                              {isLow && (
-                                <span className="inline-flex items-center gap-0.5 text-[8.5px] bg-red-50 text-red-600 font-black px-1.5 py-0.5 rounded uppercase tracking-wider animate-pulse">
-                                  CR√çTICO/BAIXO
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Category Badge */}
-                        <td className="py-4 px-4">
-                          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium text-[10px]">
-                            {item.category}
-                          </span>
-                        </td>
-
-                        {/* Stock Quantity */}
-                        <td className="py-4 px-4 min-w-[150px]">
-                          <div className="flex flex-col items-center justify-center">
-                            <span className="font-bold text-slate-700 text-sm">
-                              {item.quantity} <span className="text-[10px] text-slate-400 font-normal">/ {item.minQuantity} {item.unit}</span>
-                            </span>
-                            <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1 text-center">
-                              <div 
-                                className={cn(
-                                  "h-full rounded-full transition-all duration-300",
-                                  isLow ? "bg-red-500" : pct < 60 ? "bg-amber-400" : "bg-emerald-500"
-                                )} 
-                                style={{ width: `${pct}%` }} 
-                              />
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Price Unit */}
-                        <td className="py-4 px-4 text-right font-medium text-slate-500">
-                          {formatCurrency(item.priceUnit)}
-                        </td>
-
-                        {/* Price Total */}
-                        <td className="py-4 px-4 text-right font-bold text-slate-700">
-                          {formatCurrency(item.quantity * item.priceUnit)}
-                        </td>
-
-                        {/* Supplier Location */}
-                        <td className="py-4 px-4 hidden md:table-cell">
-                          <div className="text-[11px] text-slate-600 font-medium max-w-xs truncate">{item.supplier}</div>
-                          <div className="text-[9.5px] text-slate-400 italic truncate">{item.location}</div>
-                        </td>
-
-                        {/* Action buttons */}
-                        <td className="py-4 px-5">
-                          <div className="flex items-center justify-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
-                            
-                            {/* Inflow button */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedItemForMovement(item);
-                                setMovementType('in');
-                                setMovementQty('1');
-                                setMovementReason('Nova compra / Reposi√ß√£o de estoque');
-                                setShowMovementForm(true);
-                              }}
-                              className="p-1 px-1.5 text-xs font-bold text-emerald-600 hover:bg-emerald-50 border border-emerald-100 rounded-lg transition-colors shadow-sm bg-white"
-                              title="Adicionar entrada"
-                            >
-                              + Entrada
-                            </button>
-
-                            {/* Outflow button */}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedItemForMovement(item);
-                                setMovementType('out');
-                                setMovementQty('1');
-                                setMovementReason('Consumo rotina cl√≠nica');
-                                setShowMovementForm(true);
-                              }}
-                              className="p-1 px-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 border border-rose-100 rounded-lg transition-colors shadow-sm bg-white"
-                              title="Registrar consumo"
-                            >
-                              - Sa√≠da
-                            </button>
-
-                            <div className="w-[1px] h-6 bg-slate-100" />
-
-                            {/* Edit */}
-                            <button
-                              type="button"
-                              onClick={() => setEditingItem(item)}
-                              className="p-1.5 bg-slate-50 text-slate-500 hover:text-slate-800 border border-slate-200/50 rounded-lg transition-colors hover:bg-slate-100"
-                              title="Editar item cadastrado"
-                            >
-                              <Edit className="w-3.5 h-3.5" />
-                            </button>
-
-                            {/* Delete */}
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteItem(item.id)}
-                              className="p-1.5 bg-rose-50/50 text-rose-500 hover:text-rose-700 border border-rose-100/50 rounded-lg transition-colors hover:bg-rose-100"
-                              title="Remover produto permanentemente"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-
-                          </div>
-                        </td>
-
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </div>
-
-      {/* MODAL: CADASTRO DE NOVO ITEM */}
-      <AnimatePresence>
-        {showAddForm && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
-            >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                <div className="flex items-center gap-2">
-                  <Package className="w-5 h-5 text-brand-cyan" />
-                  <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Cadastrar Suprimento do Estoque</h3>
-                </div>
-                <button onClick={() => setShowAddForm(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleAddItem} className="p-6 space-y-4">
-                
-                {/* Nome do Item */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome do Produto / Material *</label>
-                  <input 
-                    type="text" 
-                    required
-                    value={newItem.name}
-                    onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                    placeholder="Ex: Alginato Kelldent 454g"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Categoria */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Categoria</label>
-                    <select
-                      value={newItem.category}
-                      onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
-                    >
-                      <option value="Descart√°veis">Descart√°veis</option>
-                      <option value="Anest√©sicos">Anest√©sicos</option>
-                      <option value="Ortodontia">Ortodontia</option>
-                      <option value="Dent√≠stica">Dent√≠stica</option>
-                      <option value="Instrumentais">Instrumentais</option>
-                      <option value="Higieniza√ß√£o">Higieniza√ß√£o</option>
-                      <option value="Preven√ß√£o">Preven√ß√£o</option>
-                    </select>
-                  </div>
-
-                  {/* Unidade de Medida */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Unidade de Medida</label>
-                    <select
-                      value={newItem.unit}
-                      onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
-                    >
-                      <option value="Unidades">Unidades</option>
-                      <option value="Caixas">Caixas</option>
-                      <option value="Seringas">Seringas</option>
-                      <option value="Envelopes">Envelopes</option>
-                      <option value="Pacotes">Pacotes</option>
-                      <option value="Frascos">Frascos</option>
-                      <option value="Kits">Kits</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Qtd Inicial */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Inicial *</label>
-                    <input 
-                      type="number" 
-                      required
-                      min="0"
-                      value={newItem.quantity}
-                      onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                      placeholder="Ex: 15"
-                    />
-                  </div>
-
-                  {/* Qtd M√≠nima */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra *</label>
-                    <input 
-                      type="number" 
-                      required
-                      min="0"
-                      value={newItem.minQuantity}
-                      onChange={(e) => setNewItem({ ...newItem, minQuantity: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                      placeholder="Ex: 5"
-                    />
-                  </div>
-
-                  {/* Pre√ßo Unit√°rio */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Pre√ßo Unit√°rio R$ *</label>
-                    <input 
-                      type="number" 
-                      required
-                      step="0.01"
-                      min="0.01"
-                      value={newItem.priceUnit}
-                      onChange={(e) => setNewItem({ ...newItem, priceUnit: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                      placeholder="Ex: 34.90"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Fornecedor */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
-                    <input 
-                      type="text" 
-                      value={newItem.supplier}
-                      onChange={(e) => setNewItem({ ...newItem, supplier: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                      placeholder="Ex: Dental Speed"
-                    />
-                  </div>
-
-                  {/* Localiza√ß√£o */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Local de Armazenamento</label>
-                    <input 
-                      type="text" 
-                      value={newItem.location}
-                      onChange={(e) => setNewItem({ ...newItem, location: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                      placeholder="Ex: Arm√°rio Cl√≠nico 2B"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-xl shadow-slate-900/10 mt-2 active:scale-[0.99]"
-                >
-                  Confirmar Cadastro do Material
-                </button>
-
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL: MOVER ESTOQUE (ENTRADA / SA√çDA QUICK) */}
-      <AnimatePresence>
-        {showMovementForm && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-md overflow-hidden"
-            >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between" style={{ backgroundColor: movementType === 'in' ? '#f0fdf4' : '#fff5f5' }}>
-                <div className="flex items-center gap-2">
-                  <Layers className={cn("w-5 h-5", movementType === 'in' ? "text-emerald-500 animate-pulse" : "text-rose-500")} />
-                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">
-                    {movementType === 'in' ? 'Registrar Nova Entrada (Compra/Lote)' : 'Registrar Consumo / Sa√≠da'}
-                  </h3>
-                </div>
-                <button onClick={() => { setShowMovementForm(false); setSelectedItemForMovement(null); }} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleAddMovement} className="p-6 space-y-4 text-left">
-                
-                {/* Item Select */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Selecione o Produto *</label>
-                  <select
-                    required
-                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl bg-white outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all text-slate-700 font-semibold"
-                    value={selectedItemForMovement?.id || ""}
-                    onChange={(e) => {
-                      const found = items.find(i => i.id === e.target.value);
-                      setSelectedItemForMovement(found || null);
-                    }}
-                  >
-                    <option value="">Selecione um produto cadastrado...</option>
-                    {items.map(i => (
-                      <option key={i.id} value={i.id}>{i.name} (Dispon√≠vel: {i.quantity} {i.unit})</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Quantidade */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Quantidade ({selectedItemForMovement?.unit || 'Unidades'}) *</label>
-                  <input 
-                    type="number" 
-                    required
-                    min="1"
-                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                    placeholder="Ex: 5"
-                    value={movementQty}
-                    onChange={(e) => setMovementQty(e.target.value)}
-                  />
-                </div>
-
-                {/* Motiva√ß√£o/Motivo */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Motivo da Movimenta√ß√£o</label>
-                  <input 
-                    type="text" 
-                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan focus:ring-4 focus:ring-brand-cyan/5 transition-all font-semibold text-slate-700"
-                    placeholder={movementType === 'in' ? 'Ex: Fornecimento de rotina ou compra emergencial' : 'Ex: Tratamento do canal Dr. Carlos'}
-                    value={movementReason}
-                    onChange={(e) => setMovementReason(e.target.value)}
-                  />
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    className={cn(
-                      "w-full py-4 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md active:scale-[0.99]",
-                      movementType === 'in' 
-                        ? "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10" 
-                        : "bg-rose-500 hover:bg-rose-600 shadow-rose-500/10"
-                    )}
-                  >
-                    {movementType === 'in' ? 'Confirmar Entrada de Materiais' : 'Confirmar Baixa do Estoque'}
-                  </button>
-                </div>
-
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL: EDITAR PRODUTO */}
-      <AnimatePresence>
-        {editingItem && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden flex flex-col"
-            >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-100/50">
-                <h3 className="text-sm font-black uppercase text-slate-800 tracking-wider">Editar Informa√ß√µes do Produto</h3>
-                <button onClick={() => setEditingItem(null)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <form onSubmit={handleEditItem} className="p-6 space-y-4 text-left">
-                
-                {/* Nome do Item */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Nome Completo do Produto</label>
-                  <input 
-                    type="text" 
-                    required
-                    value={editingItem.name}
-                    onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
-                    className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Fornecedor */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Fornecedor Principal</label>
-                    <input 
-                      type="text" 
-                      value={editingItem.supplier}
-                      onChange={(e) => setEditingItem({ ...editingItem, supplier: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
-                    />
-                  </div>
-
-                  {/* Localiza√ß√£o */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Localiza√ß√£o interna</label>
-                    <input 
-                      type="text" 
-                      value={editingItem.location}
-                      onChange={(e) => setEditingItem({ ...editingItem, location: e.target.value })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Ponto de Compra */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Qtd Ponto Compra M√≠nimo</label>
-                    <input 
-                      type="number" 
-                      required
-                      min="0"
-                      value={editingItem.minQuantity}
-                      onChange={(e) => setEditingItem({ ...editingItem, minQuantity: Math.max(0, parseInt(e.target.value) || 0) })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
-                    />
-                  </div>
-
-                  {/* Preco Unitario */}
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Pre√ßo Unit√°rio R$</label>
-                    <input 
-                      type="number" 
-                      required
-                      step="0.01"
-                      min="0.01"
-                      value={editingItem.priceUnit}
-                      onChange={(e) => setEditingItem({ ...editingItem, priceUnit: Math.max(0.01, parseFloat(e.target.value) || 0) })}
-                      className="w-full text-xs p-3.5 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan transition-all font-semibold text-slate-700"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-4 bg-brand-cyan hover:bg-brand-cyan/90 text-white font-black uppercase text-xs tracking-wider rounded-2xl transition-all shadow-md mt-2 active:scale-[0.99]"
-                >
-                  Salvar Altera√ß√µes
-                </button>
-
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL: HIST√ìRICO DE LOGS DE COMPRAS E CONSUMO */}
-      <AnimatePresence>
-        {showHistory && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]"
-            >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <div className="flex items-center gap-2">
-                  <History className="w-5 h-5 text-brand-cyan" />
-                  <h3 className="text-xs font-black uppercase text-slate-800 tracking-wider">Registro Cronol√≥gico de Movimenta√ß√µes</h3>
-                </div>
-                <button onClick={() => setShowHistory(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="overflow-y-auto p-6 space-y-4 flex-1">
-                {movements.length === 0 ? (
-                  <p className="text-center text-slate-400 py-12 text-xs font-medium">Nenhuma movimenta√ß√£o registrada.</p>
-                ) : (
-                  movements.map((m) => {
-                    const isIn = m.type === 'in';
-                    return (
-                      <div key={m.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/40 flex items-center justify-between gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5", isIn ? "bg-emerald-50 text-emerald-500" : "bg-rose-50 text-rose-500")}>
-                            {isIn ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                          </div>
-                          <div>
-                            <div className="font-bold text-slate-800 text-xs">
-                              {isIn ? 'Entrada / Adicionamento' : 'Baixa / Consumo'} de <span className="text-brand-cyan">{m.itemName}</span>
-                            </div>
-                            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Motivo: {m.reason}</p>
-                            <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[9px] text-slate-400">
-                              <span>Por: <strong>{m.operator}</strong></span>
-                              <span>‚Ä¢</span>
-                              <span>Data/Hora: {new Date(m.date).toLocaleString()}</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className={cn("text-sm font-black shrink-0", isIn ? "text-emerald-500" : "text-rose-500")}>
-                          {isIn ? '+' : '-'}{m.quantity}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-              
-              <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-end">
-                <button 
-                  type="button" 
-                  onClick={() => setShowHistory(false)}
-                  className="px-4 py-2 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider"
-                >
-                  Fechar Hist√≥rico
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* MODAL: CONFIRMAR REMOVER ITEM */}
-      <AnimatePresence>
-        {deletingItem && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl border border-slate-100 w-full max-w-sm overflow-hidden flex flex-col"
-            >
-              <div className="px-6 py-4 border-b border-rose-100 flex items-center justify-between bg-rose-50/55">
-                <div className="flex items-center gap-2">
-                  <span className="p-1 bg-rose-100 text-rose-600 rounded-lg">
-                    <Trash2 className="w-4 h-4" />
-                  </span>
-                  <h3 className="text-xs font-black uppercase text-rose-700 tracking-wider">Confirmar Exclus√£o</h3>
-                </div>
-                <button 
-                  onClick={() => setDeletingItem(null)} 
-                  className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-6 text-center space-y-4">
-                <div className="p-4 bg-slate-50 border border-slate-200/60 rounded-2xl text-left">
-                  <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider leading-none mb-1">Material Selecionado</p>
-                  <p className="font-bold text-slate-800 text-sm">{deletingItem.name}</p>
-                  <div className="flex justify-between items-center mt-3 pt-3 border-t border-slate-100 text-[10.5px]">
-                    <span className="text-slate-400">Estoque Atual:</span>
-                    <span className="font-black text-slate-700">{deletingItem.quantity} {deletingItem.unit}</span>
-                  </div>
-                </div>
-
-                <p className="text-[11.5px] text-slate-500 font-medium">
-                  Tem certeza absoluta que deseja remover este item permanentemente do estoque? Esta a√ß√£o n√£o pode ser desfeita.
-                </p>
-              </div>
-
-              <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
-                <button 
-                  type="button" 
-                  onClick={() => setDeletingItem(null)}
-                  className="flex-1 py-3 border border-slate-200 bg-white text-slate-600 rounded-xl hover:bg-slate-50 font-bold text-[10px] uppercase tracking-wider transition-all"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  type="button" 
-                  onClick={confirmDelete}
-                  className="flex-1 py-3 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-wider transition-all shadow-md shadow-rose-500/10 active:scale-[0.98]"
-                >
-                  Sim, Excluir
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-    </div>
-  );
-}
-
-function PublicConfirmationView({
-  appointmentId,
-  onBack,
-  onOpenBooking,
-  setReschedulePreFill,
-  clinicName,
-  clinicLogo,
-  footerText,
-  data
-}: {
-  appointmentId: string;
-  onBack: () => void;
-  onOpenBooking: () => void;
-  setReschedulePreFill: (data: any) => void;
-  clinicName: string;
-  clinicLogo: string | null;
-  footerText: string;
-  data: any[];
-}) {
-  const [appt, setAppt] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [viewStatus, setViewStatus] = useState<'idle' | 'success_confirm' | 'success_cancel' | 'not_found' | 'error' | 'finished'>('idle');
-
-  const handleCloseWindow = () => {
-    try {
-      window.close();
-    } catch (e) {
-      console.warn("Bloqueado pelo navegador:", e);
-    }
-    setViewStatus('finished');
-  };
-
-  useEffect(() => {
-    const fetchAppt = async () => {
-      try {
-        setLoading(true);
-        // Procure localmente primeiro
-        const local = data.find(r => r.id === appointmentId);
-        if (local) {
-          setAppt(local);
-          setLoading(false);
-          return;
-        }
-
-        // Se nao achar localmente, busca no Firestore
-        const docRef = doc(db, 'records', appointmentId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setAppt({ id: docSnap.id, ...docSnap.data() });
-        } else {
-          setViewStatus('not_found');
-        }
-      } catch (err) {
-        console.error("Erro ao buscar agendamento:", err);
-        setViewStatus('error');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAppt();
-  }, [appointmentId, data]);
-
-  const handleConfirm = async () => {
-    if (!appt) return;
-    setActionLoading(true);
-    try {
-      const docRef = doc(db, 'records', appt.id);
-      await updateDoc(docRef, { status: 'Agendado' });
-      setViewStatus('success_confirm');
-    } catch (err) {
-      console.error(err);
-      alert("Houve um erro ao confirmar sua consulta. Por favor, tente novamente.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!appt) return;
-    if (!window.confirm("Deseja realmente cancelar o seu agendamento? Esta vaga ser√° liberada imediatamente para outros pacientes.")) {
-      return;
-    }
-    setActionLoading(true);
-    try {
-      const docRef = doc(db, 'records', appt.id);
-      await updateDoc(docRef, { status: 'Cancelado' });
-      setViewStatus('success_cancel');
-    } catch (err) {
-      console.error(err);
-      alert("Houve um erro ao cancelar. Por favor, tente novamente.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleReschedule = async () => {
-    if (!appt) return;
-    setActionLoading(true);
-    try {
-      // 1. Libera a vaga atual
-      const docRef = doc(db, 'records', appt.id);
-      await updateDoc(docRef, { status: 'Cancelado' });
-      
-      // 2. Pre-preenche os dados para o novo agendamento
-      setReschedulePreFill({
-        dentista: appt.dentista || '',
-        paciente: appt.paciente || '',
-        telefone: appt.telefone || '',
-        procedimento: appt.procedimento || 'Consulta Inicial'
-      });
-
-      // 3. Abre a tela de agendamento publico
-      onOpenBooking();
-    } catch (err) {
-      console.error(err);
-      alert("Houve um erro ao iniciar o reagendamento. Por favor, tente novamente.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-cyan mb-4"></div>
-        <p className="text-xs font-black uppercase tracking-widest text-slate-400">Carregando dados da consulta...</p>
-      </div>
-    );
-  }
-
-  if (viewStatus === 'not_found' || !appt) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
-        <XCircle className="w-16 h-16 text-rose-500 mb-4" />
-        <h1 className="text-xl font-black uppercase tracking-tight mb-2">Agendamento n√£o localizado</h1>
-        <p className="text-slate-400 max-w-sm text-xs mb-6 leading-relaxed">
-          O link de confirma√ß√£o parece estar inv√°lido ou expirado. Entre em contato direto com a cl√≠nica para confirmar o seu hor√°rio.
-        </p>
-        <button onClick={handleCloseWindow} className="px-6 py-2.5 bg-brand-cyan text-slate-900 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-brand-cyan/90 transition-all cursor-pointer">
-          Fechar P√°gina
-        </button>
-      </div>
-    );
-  }
-
-  const friendlyDate = appt.data && isValid(parseISO(appt.data)) 
-    ? format(parseISO(appt.data), "eeee, dd 'de' MMMM 'de' yyyy", { locale: ptBR }) 
-    : "--/--/----";
-
-  return (
-    <div className="min-h-screen bg-slate-900 flex flex-col justify-between p-4 sm:p-6 selection:bg-brand-cyan selection:text-slate-900">
-      <div className="flex-1 flex flex-col items-center justify-center max-w-md mx-auto w-full py-6 sm:py-12">
-        
-        {/* Logo/Header */}
-        <div className="flex flex-col items-center gap-2 mb-6 text-center">
-          {clinicLogo ? (
-            <img src={clinicLogo} alt={clinicName} className="h-10 w-auto object-contain mb-2" />
-          ) : (
-            <div className="w-12 h-12 bg-brand-cyan/10 border border-brand-cyan/20 rounded-2xl flex items-center justify-center mb-2">
-              <Activity className="w-6 h-6 text-brand-cyan" />
-            </div>
-          )}
-          <h2 className="text-[10px] font-black uppercase text-brand-cyan tracking-widest">{clinicName}</h2>
-          <h1 className="text-xl font-black text-white tracking-tight">Confirma√ß√£o de Agendamento</h1>
-        </div>
-
-        {/* Visual Content Box */}
-        {viewStatus === 'success_confirm' && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full bg-slate-800 border border-emerald-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
-          >
-            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
-              <CheckCircle2 className="w-8 h-8" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-lg font-black text-white">Presen√ßa Confirmada!</h3>
-              <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                Ol√°, <b>{appt.paciente}</b>! Registramos a sua confirma√ß√£o com sucesso em nosso sistema acad√™mico-cl√≠nico. Obrigado!
-              </p>
-            </div>
-            <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-700/30 text-left space-y-2 text-xs text-slate-300 font-medium">
-              <div className="flex gap-2.5 items-center">
-                <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
-                <span>{friendlyDate}</span>
-              </div>
-              <div className="flex gap-2.5 items-center">
-                <Clock className="w-4 h-4 text-brand-cyan shrink-0" />
-                <span className="font-bold text-brand-cyan bg-brand-cyan/5 px-2 py-0.5 rounded border border-brand-cyan/10">{appt.horario || 'N/D'}</span>
-              </div>
-              <div className="flex gap-2.5 items-center">
-                <User className="w-4 h-4 text-brand-cyan shrink-0" />
-                <span>Dentista: {appt.dentista}</span>
-              </div>
-            </div>
-            <div className="space-y-3">
-              <button 
-                onClick={handleCloseWindow}
-                className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all cursor-pointer shadow-lg shadow-emerald-500/15"
-              >
-                Concluir e Sair
-              </button>
-              <p className="text-[10px] text-slate-400 font-medium">
-                Voc√™ pode fechar esta aba do seu celular ou navegador com seguran√ßa.
-              </p>
-            </div>
-          </motion.div>
-        )}
-
-        {viewStatus === 'success_cancel' && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full bg-slate-800 border border-rose-500/25 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
-          >
-            <div className="w-14 h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
-              <XCircle className="w-8 h-8" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-lg font-black text-white">Consulta Cancelada</h3>
-              <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                Seu agendamento foi cancelado com sucesso em nosso sistema e o hor√°rio correspondente est√° liberado para outros pacientes.
-              </p>
-            </div>
-            
-            <div className="pt-4 border-t border-slate-700/50 space-y-3">
-              <p className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Gostaria de sugerir outro hor√°rio?</p>
-              <button 
-                onClick={handleReschedule}
-                className="w-full py-3 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/15"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Agendar Novo Hor√°rio
-              </button>
-            </div>
-          </motion.div>
-        )}
-
-        {viewStatus === 'finished' && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full bg-slate-800 border border-slate-700/50 p-6 sm:p-8 rounded-[36px] text-center shadow-xl space-y-6"
-          >
-            <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mx-auto text-emerald-400">
-              <ShieldCheck className="w-8 h-8" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-lg font-black text-white">Conex√£o Encerrada com Seguran√ßa</h3>
-              <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                Suas respostas foram salvas no sistema da cl√≠nica.
-              </p>
-              <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                Para garantir a total privacidade dos seus dados, a sua sess√£o foi encerrada de forma segura. Voc√™ j√° pode fechar esta aba no seu celular ou navegador.
-              </p>
-            </div>
-          </motion.div>
-        )}
-
-        {viewStatus === 'idle' && (
-          <motion.div 
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="w-full bg-slate-800 border border-slate-700/50 p-6 rounded-[36px] shadow-xl space-y-6"
-          >
-            <div className="text-center space-y-1">
-              <span className="text-[9px] uppercase font-black bg-brand-cyan/10 text-brand-cyan px-2.5 py-1 rounded-full">
-                {appt.status === 'Cancelado' ? 'Cancelado' : 'Aguardando Resposta'}
-              </span>
-              <h3 className="text-lg font-black text-white pt-2">Ol√°, {appt.paciente}!</h3>
-              <p className="text-xs text-slate-400 font-medium">Por favor, selecione uma das a√ß√µes abaixo para gerenciar sua consulta.</p>
-            </div>
-
-            {/* Information Details Card */}
-            <div className="bg-slate-900/50 p-4 sm:p-5 rounded-2xl border border-slate-700/40 space-y-3">
-              <div className="flex gap-3 items-center">
-                <div className="w-9 h-9 rounded-xl bg-brand-cyan/10 flex items-center justify-center text-brand-cyan font-black text-xs shrink-0">
-                  {appt.paciente ? appt.paciente.charAt(0) : 'P'}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-wider leading-none mb-1">Paciente</p>
-                  <p className="text-sm font-black text-white truncate leading-none">{appt.paciente}</p>
-                </div>
-              </div>
-
-              <div className="border-t border-slate-800/80 pt-3 grid grid-cols-2 gap-3 text-xs leading-none">
-                <div>
-                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Procedimento</span>
-                  <span className="font-bold text-slate-300 block truncate">{appt.procedimento || 'Consulta Inicial'}</span>
-                </div>
-                <div>
-                  <span className="text-[9px] font-black uppercase text-slate-500 tracking-wider block mb-1">Dentista</span>
-                  <span className="font-bold text-slate-300 block truncate">{appt.dentista}</span>
-                </div>
-              </div>
-
-              <div className="border-t border-slate-800/80 pt-3 flex items-center gap-4 text-xs font-bold text-slate-300">
-                <div className="flex items-center gap-1.5">
-                  <Calendar className="w-4 h-4 text-brand-cyan shrink-0" />
-                  <span>{format(parseISO(appt.data), 'dd/MM/yyyy')}</span>
-                </div>
-                <div className="flex items-center gap-1.5 text-brand-cyan font-black bg-brand-cyan/10 px-2 py-0.5 rounded border border-brand-cyan/15 xs:text-[11px]">
-                  <Clock className="w-3.5 h-3.5 shrink-0" />
-                  <span>{appt.horario || 'N/D'}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Interaction Row */}
-            {appt.status === 'Cancelado' ? (
-              <div className="space-y-4">
-                <div className="p-4 bg-rose-500/10 border border-rose-500/25 rounded-2xl text-center text-xs text-rose-300 font-bold leading-relaxed">
-                  Esta consulta j√° consta como CANCELADA e o hor√°rio foi liberado de nossa agenda.
-                </div>
-                <button 
-                  onClick={handleReschedule}
-                  className="w-full py-3.5 bg-brand-cyan hover:bg-brand-cyan/90 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-brand-cyan/20"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Agendar Novo Hor√°rio
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <button
-                  type="button"
-                  disabled={actionLoading}
-                  onClick={handleConfirm}
-                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-900 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-500/15"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  {actionLoading ? 'Processando...' : 'Confirmar Consulta'}
-                </button>
-
-                <div className="grid grid-cols-2 gap-3 pt-1">
-                  <button
-                    type="button"
-                    disabled={actionLoading}
-                    onClick={handleReschedule}
-                    className="py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Reagendar
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={actionLoading}
-                    onClick={handleCancel}
-                    className="py-3 bg-rose-500/10 hover:bg-rose-500/15 text-rose-400 border border-rose-500/20 rounded-xl font-black text-[10px] uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        )}
-
-      </div>
-
-      <div className="text-slate-600 text-[9px] flex items-center justify-center gap-1.5 text-center py-4">
-        <ShieldCheck className="w-4 h-4 text-emerald-500/40" />
-        <span>Atendimento exclusivo e criptografado da cl√≠nica {clinicName}. {footerText}</span>
-      </div>
-    </div>
-  );
-}
-
-
-
-
+      valor: Number(valuxúÏΩksGñ(¯]ø"Õqõ` Iêî%ä¢ö¢(∑nÎ¡eœƒïyÌ"P ™U®Ç´
+|òÕàô›˚à›òÿglÃó;û˚a∂;¬±±·ôç˝ˇd˛¿Ω?aœ9ôYïôïYU†(˘1F∑)†˘8yÚ‰y•}ã—'>I˝‰‘Î{Ò6ÛO„pñqD˜ÆVÓ—ø¡êµ“YøÔßÈ
+ã£á^ˇMK‹J˝ÏIz‰ù—®5Ù¬‘ßÎW˜n¡ﬂƒœfIƒZÙ‡Œ 8e˝–K”Áﬁƒøø4ÒŒ;gùÕÛêMŒ;ﬁ,ãY:ı˙~Á¢≥æ∆º(òxôﬂ	"6ÙÙoÙ•3L‚I'	F„¨sõfâá√Ì|≤∂∆¶'ùﬁ⁄“ÆòñŸ·0ÙœYê˘ì¥”˜£ÃOÿÔgi/:'~vÊ˚Q˛fìwGﬁ¥≥•ºÔúÃ≤,é >˚a–sˇíÍäÇ‘;	˝¡˝À@@ÍJm{⁄Ÿ`'£ŒŸ⁄g'q2Ä÷˘?ù4D Ù`jI<ã˛†”xıgI'ùi–H∆Ò©ülC¸È≠5ñ%^î/Û˛∑c pê]‡#Èÿƒgùt¢M&±ó$ÒŸSò©C<Îl±1¸ó˘ÁôËÊˆ⁄⁄[’Êø †]8¿*Gj€‘ÊÎıµÈ˘1∆Q÷9	jº´ò»†”øÄ7f”©üÙΩ‘«Ÿıﬂ ;Ø◊∫=rÃ&'ùuv∆VË{º≈ëø¥˚“iñƒl?ú˝òÑ~ñÃˇøÔ¨‚Hå¡ç{•°!ƒÕqq‹Y[+ì!Bj˝”∏ñvü«ß;¿m5ˇß˘äŸ¿gá∞àE;´„û1Ä©4Jøõ–/QlÄ9Éùíf0.ß∞Q†Wl˙jgu™/ù∂N∆OÁÆÉÅ;s≤mﬂõlz{tz¡1úè˛ÆÅÕão˘c´@Ù˝@{dUﬂvÄ≤˝,8º÷1v0v≥ÑFí∞Lg@™v·Ê]jÚÌÍ∆ •›#†ñb¡“~d€ÉÅz&‚i–?$¨1ôxΩIH# ⁄3ÅèÆ@¬1·™X»ƒáª¡©Ø¿7'YÏ£è!∑Õ;IÒ‰Y¡ë–YÀI⁄Íù5ˆÙ»‹ÙW¸<íx
+`û%ù…¿$M6öå:˝8¨#Œ∂,”u=zÜ„ÚMˆÎk˘›‰zg@á%Ó•” 2QØ
+ìÔ@œw ò,ûƒ÷W{∞›á}È˝ßq]òŒÒÇ•scÀWÓ;≠.v∑}Sl ©÷∑ﬂÓQıì8
+æÅY≈¨Oÿ!¸ÃfÛoì ÓvªVmé‘∏∞ruÀI∞¶»[l∆íyT©œéí`¿¢W
+'Ãd∞]¸Ïé›©AQŸ’FCÔƒ]∞- háÚ¶zÚj?	Ò¥y Œ< 5¿Q%l‡±Áq$á∫{õÒà÷˝Nh∑ôca	˘4JÃol Ø∆πóé
+#N˘e›©˙˝åïn0vÍÖ3ˇ˛ÂÄO˘ ˆbc/¡S-Ö›ﬂEvUÄ®Âw3/˘Yó⁄Y±æØÌC⁄ƒS sèMë¿π∂…æI™ç0Ø'áƒD9√ÿ œ≤0à|ŒE„˛,›Œ)?ˇô‡¬˜‘eXEZÀ_‚£PàÜ¡zÄg\ÍãætŒr©êÚÚ¿≈SlO¨∆û{∞`6ú‚aê¶À·xIßqîŒø=ı√ùU˛ö≠≈À‡Z⁄ùx”÷◊l÷M‚–g˜ÔﬂgÀøóÒ<í]øÒ/Ó_Œ∫¡‡J‚ƒ¨!õ≥+ø‰›u(M`ï£ò˜ˆ«˛)§GÒYd≈}.Öº+‰∑–d€•úÊ ÕÓ˚É`sâŸKﬂÅû‚†9Gôüç„¥O˝ÑÙ—tVEy¶4ÒY‚óë NzÂ≠#ˆúÙüeAòvS8≥‡ˇ©ü¡¿“Qxaí'‚˛‹…Sô˛0ò`˜Â'˜óŒ∑ﬂÄÃèW+à‚‘k≥‡(0É æ˚Yø[nÏZ˚MÁœÈJ√˝ge_ÑŒ≈Ç¥˛ﬁ6±"°
+iŸcè¸ÃAnh ?ÿ•¿"°≤˛[8±DœıÓñŒ!ÎË©ºcjˆÓœ®¡±•Ÿë[‹µræNﬁ˜Œ‚j
+f"ìYÃ#IÑG˛ê6öˇ
+≠⁄à∆' ¬K|œ$UÇLÂ:Ωãc£QÚÈZI€ãè|êq˝Sèy_œ8˘q["O/4/m6UNâîeÛ?ˆÒz⁄f∏I‡)º3ı˚ÛÔÜ¸:È~ú$Û?E˝¿É€,NPÉÅ{˝_¸îMÁﬂß8/õ-§ 1ò€‹B!AñZê*æﬁË*òadì ÍåQ»ßM|úºW©Û¡cı‹®k¥≠ÉK˙rÆ.FÂt·D#˙ûƒgïV.4±)jn•∏¨É}´¥—ùÙïâÖŒœ:∑7À‚]ë ß¥o9ªÛ8àê}íòµ^~∏‚ înV"ªò¬∏¢Ÿ‰ƒ∆oÀLˇX €˛˝ü-Ì›Úª∂ùq}~!UQ≈åc0œx±ØF7ófSE>¥^X–Oÿ¨À¶[*Wáv÷zæ«Ü»¨·∫UBYªä¶B}ŒÌ∫jﬂ$8ÍzãEËÂ;ù¬˘ee[DiE,^¯ZÇ†≈¢–¥∞/°‰ù˙6ZL2◊ZÉ_Mπ≠®á_ãfº§ΩE’8™#%¨›ÁD≠ qyÉy®vÙ∑aBGr˜ŒqìuCÒ∏ˇf?H˙°ﬂ”È	ôã¨B˚ŒÎÑÂ¶ôp⁄^ÿpÈÎî6]∫ˆuÂﬁ≠´[∑Ü≥®OöÉΩ•ü˛YÎ±Ñm¸G{ÉÍºƒØœ¶ =]†ﬂè¸–/~É,áËüˇbÙ≈ØßÒ(∆_√8¿øƒ¿_¿ù¬—íé£‘ÚeŸÛHÜÄ')øbéü=Ú2Ôê/¸°C è9ôf¸°'∞`ax¯W{Ù<Mp+54 ¢:ë?®’,N®=·Ú ;¡Ô–’û¯yÎjõÄ⁄V˙‚ıÒ=^€¨5£t·xÇ‘ﬂ9âc‡L¢›{&4·Ò`∞Õ `vmVı™wÌMÁ  P”˜¥ÂëØﬂ”ñI^e`–¯{⁄™©Øh´gªaˆaÆ&ã.§◊b\Úóîa=0«•åJyAîÂ∫÷>ª“ wh≈‡˘ñ˝AÒr´ÿ'ﬂ≈wÓ	Lî®£ §r)«KÂZéû–\ﬁÇ}Lya‘ÀÑ®À ±ÂT¿ú~†©i6]æß£7N&\˚ö2Äﬂ%"O”eØ”q|ñ”xÛ®¯}ÃÓ„Æ9 `µG	Ò"FÿK˛‚AÒ[}qÊº€¬≈W_∆¡æä˘Œ†∑?S.4}˝≥Ë Î¸B≈ÎEëÜÔÕ¬ûøµi//´˝ä∑^¬fUﬂ¬ﬂ˙[πŒ◊Ú6˛˝ kı}¬ëu\å˙∂º¶øΩﬁ€∞5p0ÒÇP}õ.4ËòËΩ⁄+^®ÔY<òÖ~™æ).i≈7˜Î„›÷ÎÂG^:>âΩd∞‹fÀ{#?x¯M˙ §À«∆jG4;ôÑˆm·ﬂì_®FcŸ#/ƒìÉﬁ,~k„´Ÿ_ª-ÒÄ“6ÁQ†!hGnpˆá?0•À‚a‹” Û «WÙÅëßmÔÛΩ'O˜>=¯ÚŸãGü==8Çw ~ºÙÅ4E1~}ÊG©O—ıB<§óq»ˆpm%^z$H]Î†å$ãG£–ÁKÉhMË[qNäcM¨Ωº˛˙ò†û—·8)ÆÊÙäæ\GÑ.]z+› Íá3êsEo++‚Q&5ü!^ù`£ˆ¡˝˚Læ»]√Æò¯a6Ú∫€ÌÍµ≈{«ÚΩ[ç»§"‡vΩ∑
+zÖ≥™?$ó(˛π\˝50•0˚`˘Œ≤ﬂ˙äøø^ï“AµD8¬êæ◊jB6—c-◊Ñúî‹9VÔ¨>iÎªêu˛∫}YmÛB∑¡®∏œ“¸oQõ8ôÅ±e-e•«¸H<SQVˆöZ⁄˝ÄöÁÏ)õˇqÙ=”9 ‚%ÖL!sùßº€	ú¶≥…“Ó>¸ À!LƒCﬂE‘*Ç†:ˇ«â7R6
+„‘;<©ßÙpÂöYüıÁﬂOQı-◊ªö˜TSg)Bï\P8S*•»WàyA∆‰ﬁ9¬=2ä;iÊûÄ¸$‘Äeg¬y“á8$ì/“/E∆[∑z*j≤◊DÒ;∫ÙóÀ‘-©c âkN®uÒπòˆe?ji∑[¡ô¨S=ã|¨{¥I–Ñ#S≤M«@⁄ﬁt÷Lìu€ËL96–|,Œù¨p•2P≥påd€ÃD≥í™ﬁ–a•B^?Kπ_K™âØü…\ù¸t˝©,P¡¸ k$cå∏9Ò_¸˜πRR¥¯â¨ìÓ≥J©Û ≈Y¿©RS∂»ò¢∫>:¶l:BÚ—†IGîRÔ_‚_}M•¿{_z‰¶˙}¢Q˜πå~'óã°Y˘’ƒ©B Ñ…ø_h($i‘?ãØÍä“NY≈F5·!ïeà8Fg{Ú!¸ÆO°P|‹ø,æ`Vı ‰´Q¸¥?…¶˛2ßko~˙c*ÜE¿ª∏†7§ƒm¡¨ù’r}z–Õ‚ßÒôüÏ√KH<pHZ6D”∆†kú˙€úM°¢¡ëøÍë¡â‚|≠Ò.πVÜ#≈µr£ëk%ºOwê˙óÀ%3Ã•¢ì1«%ZN}Æv;Z∆E◊>÷]ˆª©∏±+“»71@^Ón≤áÕaÒk@Æz£ƒÏJÓ∂∆Èﬂ0ΩQ¸AúÛ¿ToX;¨^!ÓÌj1±Z_Œlœª-≥wmÜYC~ÿDŸÌy<Ò]∂VŸá”{ã¯9ç/πˆWE¡es√‚õ1V—Ñ._a0	≤≈›¿⁄ÏŒö›å4üÑzUOC?ãmﬁT¸c≥˜TK∞”\xDÿ≠≥ö›∑‡Aú ∑Ÿãò√9]‹zˇ∏∑Î·ÚnÃ;q{-ÛèéX®Ûºb·ãl˝‚Ûﬁ∫÷°ò\PÃùãwÈd¨Ú÷ó„ÊoºÙ˚˛ΩñõºÊˆÊwÿÍæÒ£æ‘rﬂ˝ı±•∆ò¥Î◊⁄(Ù¶É‹Ú{M¸m˘G£±4ÅﬂpF’Î±˝ÖŒä7ﬁÀ^¡Éª7uŒ7«2ãà†~*∞åﬁ4∞l‚•o¯ıkbXkmmÖ≠·ßÉ~é¯ı≥°å ™‚9ıæSiÒº“ ó`PÀ\ÈFsÆtñŒ<Ô„*˘ü#:ˇ ®w‰Gcó£~ﬁI#‘õ
+xsÇ)^∏Õ/[—O«≥6ÎU¢ŸOc ◊˘&ı\DÔÌHö…—˘Ÿ¸˚¡,åS∂á[u˛›©§ïVKÆ”â¢ËŸ‰·!Œ-qY≤«SL ŸõÀj 8QmX4ËÍ«ΩÇˇ)"ç@!#	á·áljœ’èÓ °X›WÑ6]ã{±√l¨ï¨ÛÂ$]{„K®û”Á@WÆ‹RS=%¡ß&}t=âœ+®	~Ë1t»uÉ«ΩÒÒ£ê¢0™Ek“fµ45ÌóÚ^∏AÁ‹ˇ¸Si∏W5{≥®À¥¥xlèR⁄¨&¸.™yIãcÛ£Å)ûfnÂÙﬁ¶OŸL¶∏—	ü#k∞6~‘`´u¨	¨sà«Æ$µ/økˆ—(,ª∏sÄ∏¸‹õÄKseœ˝¥\∏ú◊K/¢æÃºtoÕ`ÿRîü®@7XNÂí<…W™‰ûG˙Y?ˆ“G∏uÅ ¶G˝$òfjß+Ë≥’Ù9¨Ö^"Ä‚Ódˇx°üd≠Â=$	Á‰◊3ﬂxl'lcü·'¬Z}tó2øè±p+›e·‡‰˙pwß™gÆl;R¨:#\ötÈÁ^∏∆„:≥Á™DßÛo°°¯]œ…p?lQÙ+{ÃíãöôAûŒΩ	œº +ÿ[ï»ãüàº∫5ß◊ö7–àóø¡^kﬁò	<ﬁ6˜õn
+ÏfI0i≠‘6'Y˙msØV1*¯!ıV˛ww≠Îã{√kûÆ5ØL§£q¯ˇ∏´∫IÆT6pµrØ ï7µ‰v’®√Lõ:È÷¡ﬁ"i/ˆZ.!	/‰ÊoÚ}æ\∑GYIÖµ–+bµö˚◊4[>Ók¶\≈∏]±aK^GLBS¯6/ﬁ´ÎŒïÎÜŒµ‹Ê\ãŸUUÊtˆVÈ…@25JÜå◊ùuäjÆM∏ß£±! —,y·)ÊwÍvªÀ ù,Ô√°â~û…≤ã'usCÆ`˝Ua√7o≠îóK%‘‚¸¸âüx·Ä|ö~ƒrò∑…|í‹'`[ÉâÃóÛãüÄ¯,¢é-¡q!ÖòÙ”∫Ñ›¢qf‡mT¥w÷VÆﬁüÚL›?K}ÎM∫®xì,ÏPâ7úı‘ë·«Öø8	4ªÒ#ΩÔﬂI@›EÙ
+Í ñ\~ﬁLBZ¿ç‡«µ’~⁄˜˝;®EbÌçcîñ∫¸L±©π≤˘«NÙ$OÕZ‰	‡Ã$˚{Gºß‘›8∫j©zk≠CSµÒccCE–`≈@÷<"ê*∫¬ç¡≈Æ¸$(*Â¶ˇ!4¬*ﬁ∫y⁄ö+=ÃÏoS§£e*BYo
+Ô~Ò<∞|™<‹jDnX–c€1x_Ev°ÈÊ∏æ“Mß!–M“pÀp˙á<{MÖÍë˜§˚‹d]8˘+Z—bÎÌüÎ∫RºGg
+¶¿Å{O[Œ‘—ı‰.U¥aÔ¬s¢Œw¢ô˜ƒÇ˛äEëjáÜ≤ÀDùÒÉ±–œ–F#≠Nóœm+˘pÍ≠+¯)ö/#∂Ã8(Á¸CY'jç
+•\ç`ÕVq‹†ø⁄'Ã”ãô«ój+ƒÚ⁄Lc®ƒB.-5N-Ô∆≠•÷±Ö2∫Ÿo∏é˘üÜœãäîrÈóó¸ÛÆ]^¯ßòö˛f˛&%’‚ØI	¨∆a„];´‘πu∏IÇ∑¨©´qU)Æ—ÙÙVπ˛§tS©sRqπ®y5àÉ6S~WõÀpwPÃï^6≈®V¥Çí»uæ6jvM√z#c˛¢¶¸3◊´“ﬁœ«^ø'V˝á±◊7∞∆óÀ†Â©G¥|∫Fπ≥,‚@9KW^‰nì’÷thl‹/°ãq6W‘xàW1wÌNß%øÍà≠v¡%‚f«Ö⁄i∏2%úãû™Fse(&› ˜që~∆2R˚f¯òi…¨¯Ï¬u¶e$ı≤„CÜ;⁄¢ä‚ô÷±6ß¿A`ÀBoö⁄äÁÜ∆pË;”èïÍZX√Ëˆ∞æf´Õ!êTXU≥±çínJØçl|ùw…,œV1ìSÊeÒuõëõÁ:os ø«SIU5˜p¬∑`	]À{.J{.OÉG±I6 1/‚Ö¸‚*∫êÃZ\q7Y¢‚ReK3)¸ÍñE∏`#ÿ˘SÁ@x«rU¶¶ÙÜ–I°{;“cÓ*ó˙ä“;û%^ı89‡j<ÄÚ«ÇÙyúiÜÙ≠.i•ô¢6Ê¢Ôn!0÷∫J:˙¢,e˘‘≤÷¯D'ÇªN˚qf~ûDæòú_?±Z} ~j"u*l,˘#J(Ñ–ÄKa⁄˝,ñøÆj;Å≠Îÿ∑‚˛Õ 3&ÏÑ%/ë"vÚúèpπñ˜–ö∂`UÔ∫8u;«)≥dRâÒu£∂}.g5Rb.ç	#´)èØ∑ÌT %qj1—’:ÙÎZ¿q•u≥†UÉ-YöHUÈ¨|ƒy?∞ˇÌµJüáBÒ≥Vâ“=`K´§vﬂZ›Z∫™ˆÒßa7£–‚¨¢˝}/hM≥©™yió≠›»¢{X∫ßºÍ¸ræÏ¸Áª⁄å$∞L€à–⁄,ØV-`ﬂ  m’+®õC˚ÌÅX2⁄4≤›ºP⁄U9√ÿ”`2ç	m©r€“çAÚ}üj»5·cre†ñƒ	ÿÄ¡·ûS ˚t°—˚ÔÏîeç`cVò´∑Î®—	\_z RΩ«Ì"?ó≠‚î˚√X´m\Yi»äV´Í’O°UöÒ„w”,û&Ò‘Q¿D´Åπ?F%ã÷¨—{µF3¸®-ç-‚◊l)™B0óÇZÁLÀ[mà„ü,»Bü
+/
+ı~“Qˇz#.ÅNÁ®¢n£”ø⁄ƒS|jË ◊íÆÉô6Û€¨vÑ¯±·Ñ’¿¶®¨,j¨’≠¡
+#∆ÁÜ[˝¡—°Ò∫∫3q€>◊°N◊§MFâûFî©]jåÅ©R$ó∑@=âxÁ˝p4«ºàÛ*Ò“qÔzx◊ÎﬁíÕpÎÔ™2oêˆŒn4!pC≥√ñbsfpVP)Wôæé’„µ˙Öf,§ï_‘˙—D'çï5Npò∂ëGÅ7äÊﬂ’wXF\0≤Îe/Í]ö◊-ŸqƒÍQ£2Ö˜⁄Ó~œÏ]P.Ò™Ñé*<d˙¶⁄ÄMµ¡ÃNª¨q†“˚ÄIQX Gç¬?Â%∂”JàT4{G¥Pâá~4 ∆LN€gı&n∂#öπÎ£ö-Cc v”ÍTøõÀÈù§X ‹gpÚu^√∆ˇ’1K∞å®Òá4DØ„qíë ∞«[ÔÛF\›‹Rœ˙:åìIΩæÊ0-Ìç?»€CÏÌY±’µ„ÕK≥˛$&‹IfåhÀ¶•ør	#Åı}3´x+"È≤¿@;@#=Û'ÃõúPzÓÕwE}å÷z x·aÊÊ—–KïpØf∆Ö¸\3™kÏq-·a‚ß~‘WN±Àô¬ÛîJPÂïdÇ|‚L0‘ô<l‡æ÷åY“Ä˚ú)|º∆gq?:Ûﬁ±·f¿H∏\xªº≈.Øh©~¨}öIû¢öi+Oiü£&«Lëo´  ü®Å(®!DÖL˝∂ùÂ Â:°©ˆg>$ö"ﬂ(^Á·>#w⁄Yõ	≈«6#'†6”Ù€lÕŸZ´ÙΩöë«ï“aiH5NV.ˇØ’U∂¢ üç}ÙÏ…í ÿW  Q1Ñ·¿„ƒÉ˜qbÒ,Cõ´•%>Í·◊£∏ﬂ‡'m∂L ¯“XÜi‰6-¢•«m≠Xdì+÷˜≤˛òµ¸$±˚ê!„–ÔûyI‘ZzÏ!L)@r»Å…10Ùbás{©Õ∞]K∑∑™~◊ÓóùU+irïÜ∂oü÷%·kª@ÛvæIUG∆€TúVyF-Å[<Ø^e¢êle≈√aÄáA;kÏõŒk‡∫èÎã|O•2gÚSu}A„®ãÂ0ûŸÉ=)œr⁄(|Ö!H{`]}¿?2˜Îπ§-Q‹≤Òræ*◊≥∫	ø·îÄË›9	g	⁄«ìÉÒURÍ\m:Q™}„Ïﬁ›j◊œZ<ΩﬁÆôÉVmñ£ºöxÁ≤ö\Œ⁄!f¨fÿM)Îúiî *vJuqÀ2«nQjõMúu÷o£YÒ6≥+>iBµ<9)â_V›‰ËÍNI~…Ìñ'–iﬂ7ƒ2õcëGeê®)ã"ˇÉÎÅ`i—¬>0%L[	À	3ò	ñ5@cÚ–ôˇ{ÈiÊ≥ô∞X2X{/x)CE)¢|¢~ú e·Ö,9ıÖ/%ô«Â#dû%ªÿWø˘P‹…˝"æBÎ+]n$=– >≠B¬O¡ﬁ\yª˙ØÇ®î6·Ù:ög6LË[<tÖMh83≠ÎqûÙ“1¬-<T%<1πskÖ]´’ 2¸8j∑Gs…CHÉåf¢]6Çﬁæ–™x¿);≤v0äGGcéAa~·ÿ/√Oìc ´¿∆.ò6âÎÛ
+6Ç¬+Hs»ª·LÉ»;„
+^˘÷˜ìÃˇ∆c@ˆ‡Ñ'.¡˝¡ùxiB ¢úg∏'†Ó˙âs \	„ı¬¡&àsÛo°;¡wƒ@ÔD<|Oπ:´˚ì‰rKbcÊ†|kŒ w¨\^b;æ[ñ†‡	û˘YÙ˜Ωd | E2∑ô®eì¢Nx¨ÕÇ>˛Õ&F¶ ö¢ß∑*Å¢jCË=yÅ˝ÅE3t*ƒ;JSÍÿËÉmˆ“˜˙Yó˛>è>ﬁ°é‡ñl¢	/ë6»4àº™44HÑ(UZ)ÁPØ2D†Œ|àg>!@Ÿ•Ô™Z¬Eò%zkö1¢∞Vh().+G¬f- ÄI&»ÅAU·Ò,ù%[Ê%!H… eé=Ñ-¥™îH¡˝KDú+Ó´?lá»x(Œã|>èê1∏‰Ÿy*{pfLÙ–˚Kæì0;ŒvD0cSAn,H)©âÍ?YL√>Ùc’É0T∂≈Ha¬«êçî%•lΩ"+âdÜ4rï“ô)G.’Nv√Y™Û?h-#ct∞Û,àú˜ı√‡Úôóçª∞ıZ‘˛ ’Ø4ö©£¢bp`ø;‚¬≥	¿ŸÉ≥	PC°p∆+Ë‚Ãé2/õ•Ω¡»*ú“/.zÒÔ€sÅz·KøÙËı2ø∫|,E,a».(jáìŸ∂ ∑ªhs†A,°ÂA“À€lŸ\œeé	"9∫Úà$tí ·>¢W˛@ÓA.ü'ø“Üƒ˘ƒ¡ÑÌe–NÄü“UAµ–Åº·ÛÕø≥Ã ]›ªU:-‹ª…AÈ,§Mê¶DhŸcÚ≈ÂµXSÃ™îÓ¯ñæ/.≈CT®‹ çÙNn°X~ï-"z∏∫•o)£ÅT‹¬⁄öo±S™„Ä¸Xú ÔG°∑YıgÛÉ^yG’‹+ﬁáÀëÚFû«îˇ§7∞B|ê˙;¯Ê.ª•!˛kzú*&—ÿèπ—wU^)@<§–ﬂÑO?¥Áe0~˛Œ ˙4Õ˚¨l1DK⁄y6◊ F^ëΩ‡0|ÚN„§çzÅ Ò–ü'Ü(ßÖPS@\Â®œ–aÔ€Lø±Ma©˛¸œ ˘ Ú£ò‰/ës£r
+<’Ï™%QZ*ñ-´¯Ds•
+j”jÆÑ+«NØ‘1i:ó€ùÀ"J®khù⁄™
+•Vï?Ω~ñ…†ƒÏ:¯‰zmäŒº¢ìO!bUÍPÏs√îíü!˛k‘5/∑KÓ3uJå∏ıòL˘lË7Jzî≤¬'ô≥7 ;∑æ¥˚BÓ”˘Y‰S&@“L=ÿ≈~t@ü°?9ÙDóYOÊﬂ¢kü·Áb˙BñY‰;πØ‘Ì\p1Xb±C æÁNπDŸ¥l∏æA∑®Z‘◊7ÕkÃ˚Qv—¥˚)z-À9üNÉ®ºƒÊiM”í∫“?6ÕAµ¥+ÀƒXS~YEªûB˙ a∫eøÿ¶y.ﬂ~Ç@A˛O§s´»èné(•Ì>z•Ωúc …ƒ$ ØØˆXGM'ÉÑµ…Ås˘òôÇ¥ôçÉ®πP”À~wÆ,á∏Qc„•;Zb/⁄neÁi5%|È¶^ö˝‹üL√¯7Ù¨Ω4ª%›kà;töt$µ©_’Í-“˚2œãÏf(~(ÅΩµfÂfØìG¶Ÿ•@Ω“]k&]‚°»loÒkè£ﬂ˘è‚≥(oÿÔæÒ/«çîçÌ<û∞`˝Z•÷ÍhT˝>V≈”¨l∞+CÎ1PUó"œ›@Yz.ëIAî!Ù∫æYbV)õF]ûæõ◊@R8sæÀÚ‘≥ÀøY¶‰vµ`,ê‡∫êt’…*√Æ§B÷∑£-ÁVâªáG≠Ø›))∞-˚≤∏¶ΩYΩ<ßa…≈Eøßq?FFÆ◊cØÆ≤Nß√û|∫˜îÌøxv¯‚˘¡ÛWGxQhì‡‘Î_∆∞†R∞“S?jK…î´[¯≈m¿z q‹∂…≠RÈBÇaE
+ Ë˛yÔ-‰ë;¶<˚7xÇøSÅ˛ˆÍ≠·Ù\cCÔFÖÇ€∏Û˙Œ÷È¯∏$îhñ⁄zQÖgÓß˙úgÍ∫j§⁄)˘ÂÔËÜZ.ÑN52pçq8ˇò~ çŒQ1x‡"«=£È¶Ó˜M ∏Ñ2ˇ˚0ÉµÃ3#íºøÕÄ!ãaÕ{∑M[fÈ∂t®ò¡|≥¢¶ìrõMDGmˆL’¥õ‘ƒ§%1*Gµ ofÕÑÿp∞G¢Ìÿ,©Eˆóı.€bìz<Çìñ„æv¶ª¸ô	fE≈gÿM„^ÄŒ…ìòa¡á∂F€0	^á»˛·c.çÅﬁpS;f´Á…U=“ÒíÇùíªWQÊ’‰4 Q eÒ ÜH¸˝%WËà‚4ı`éÛÔ"¿k3f√Øq†ÍuŸg®èÚRˆ$¬PO¶.≥ ÏhFéÖ c,≈©ÕÄsDÌ7‹E¿lóNvfö¨i÷Ås≤èôˇ∑»é√\"& `¡Æ0R£óc‡î¡y»˛jÏeÈﬁt
+¥êØ xä•ïg—¶‘ü±1a˛}–ó0èYkö t∏ü¬äí¯‘Ÿﬁa£ÇFÖ±¿bLÄ"ì M≈í'~?8!›ÑŸƒŒÍ,|/Kº—EMoÊÁhH;Çµû~z¯h≈∫Œ‘”‚2U•ƒØ√Á€¿\’˙-†√	¿Rnö≤ãÙç—Ö≤c[d»D¯=M™ ﬁåÈQÏñ¶ÔIú*ªöÄE„Sû“∂	ÆÍê±éõÿeÁSX@8P„˜∂i6ª2’ ∫≥<:|¡ZQﬂKÑiè$àÌ¿=ƒ…Ê>pø§ÒI¢B(Nî%àC8MÍaÉ‘Å˜‰’?ùˇ1≈û9q⁄fhóä£—Ó`ˇ¶B$êß0(¯m‹!S?åb6Xà‚‘9ÀêïY[J
+!\≤ùç–™•/=Àù\ÇØìi¢ëà@Jcò ñî¯Öª[QÛ˙‚£4ÇA‹¸¿mÓà
+R8Ua>«I÷üeÈ"L˘ΩÎ1Âπ='ïùbıÊ%∆(•€ÏıÚ~ñÑXΩ‡∑À«mÈﬂ≤¸$¬-ã9;’Ú—h≈‰√DTÅ‚úD+FhádH& _VéU†&Ó›Æ‡2ªj;∫ﬂSªÁñXÃ
+Kà‚+˝„ñ§ﬁ˜[øxöYå“Yc®Í˜PÌW¶È-äcó'çá#r1m‹˝¿ò|=±í`0ïÔ¬p∏ÆVç‡π:Jv+ª7¶<0^@z
+"ÈûÖ≈dygÙ]°™◊áFØíL√r7»VØTÙÔ!ë"˛-¬´lï˘™<S∞èTë»gœ¸(≈ÊÿÍ'~SúJò¥OÜ~ÇIˆ¢™´«jW¢å{D®tÅ≠¥»C„Ö9ø–F¡ìÅ:Ö≥sÌ‡ºrvøSª¸t®ˆ2/«©V©˛–ÔèaR) v$ûı¯≥˝FΩér¨@Cí›øùpÀªœSªÔ‚ß°7∫"Î*Â¥á¿ë‡øj-Ì%Ó/I*‘ô Ès˙êï‰Í◊ΩM5y∫8,YƒõT˜vîS˝ïVÕ~2<ıÎ’+Á±
+√¡«◊…‚N¬Ü	Ù®$‘é%ß≤•g◊ÓlUÄY
+Ì¶åœçVÎeâ˝Ê∆*ÎÊjoK´%’ËjxΩ…qÀ#Nój—]cÀ»áY´Ivÿñ–vRÓWÁÀFMM∞¥+v!n≤W~ùulYG)&6®`üw
+¸3Á¬OÅ}„™Ü≤&à]Ù=äŸ‚˜4-K_5Q˝∂KK•T√ëÈ∑uODt®ëöâ^Z“!gŒ"QJA◊πu√x¡e-úÉº$:D!Ô/=˙Á%nŒÃ‘îN5Uçh:gøÿS8«+76nP°≤ªΩ¶©ÏÑ≈ûÜ¶‚lÈ∑≥Ä°≤˝–fb™h\õ‚ø˛«ˇı€\ÍxÙdè=z¡_æÿ.dç)≥
+Ü9øÜú*¨°˚≈ãÑXÉß<L&o
+•™$Yèπï¢18¢@Ûâ◊q‰xw2⁄¡Zˇ˙?˝_≈´]y(r±SzÂ‡ˆÑÛy£„¸ˆ ﬁi‹üˇ	 ˘∑Ω˝S_$‹Äß|SÇQ ï:$©
+ëpqÊ—[p˚s¶ïF+{Çˆº˙ú˛ó9√MY⁄[ÚgŒ¡Û[ŒvÍìRµ√∫¶Ò¢”Î69*\ew´cÇ&p6ûu9]¨¢Á9⁄%ÇF®W∞Eâ$ÿéDB9‹∫‹è⁄6&wnü*gnG21Œ¢˛YÕ∞êo[dT+P‰f—u‡jí z„Xêb »or‹z”foû8∞JÙˆÊd‡ ÃG(áÔ7,eF	Ç◊ıÃ„Œ±6\ˇ§Á[JÎP
+`ÌŒ	€d`•}EÿÇV:°»$e≠}˘ no∏Ωõ∏s¥··/Å°	ÔçmIqÒ p∂&mvvG
+©“E˝]ª%P;±«qVœÇ9÷Œ;[<…≠[◊SKKçÛ}•¯âcÆ/_Rˇ2É∆qB≥D,Ì“≤|Ã~Wú,@Ÿs˘'ú%W‘ õÓÚIy-WµìS~ΩæÆ˚VÊ¢;Âx+Éu2ıX÷Í97†¬™’]ΩÚìI˙bÎ˘ã%˘KÚ{µ$#Íq∂Ó3™õıÓÕ«ü£˘üÄˆ∂±ˇX¨≈{§Åìzﬁîq¨∞öoˆrsg¬j‚∞0åøm!JÙcÃ√2†∆	z4'Ü	c•øCΩ6j s´£W €˜.m¿{äU’>m4Ur0·∞á\iGËµ»•´i2ˇcG3–¢∂{ä¡9°∂%+.4Hk0W¥Hy¬˙Ì=¶æ0õ˙SzÏΩAa£+Ω‰*¿p$` Õü}ıÜ±˜å0iíµn¬œﬁ&Ï–Ñg„A3tﬂp2¿eHå‘PÜƒV„Yñhö~éq ƒ!ù¸MÿÎjy8•‹ÒÕöÈnºéQj]+“ÆÍä"◊´´X¨/ WΩÎ€>Z4¸á^QYÔ8⁄Îgm ˜ÿßB,åºa¶z’Áz)3
+€Äå¿⁄ö=áà¬5pæ¬ñì§ƒùƒ û	•°f'AI_o≥…`õÆáy,L´ÒzÌÀúù_n·üdt‚µ÷⁄ÙøÓ˙÷äôá§¿d ∏Â‡ò/≠K±Ø∞`<€‘XX¢˝0‰uùmã£XÕÏ@AÕulùUû…j˜«æôÆL9UÛıcµf◊rØXΩ7KJ[rGw(Q∞|ÿ“ÓÛ˘˜ò-6ù˙Çû°ˆj™˘“iÈl-¨–yjÍ´≥ï|∆Œ	QG‹0¬’c‚áHÖÌ£‰m,yT)≈´IPÀ|8ºbÚï‡8IJÁÆÙû¿2ÿ¬i–ôx§y–ª‚g\ù ìXH£B˘ÓW)£;œÜ›Å°¨"[‘ëA∑√‹5•ƒÇ|™ã«9§D∫TYâÇV@∫f(º›u,´ÑÅãå‘&i±O¸•ﬂü• °aNXoı„¬8#∏¢Ö«ˇ∆ëÊ@-‚~IF”Îê}”Ã£Äç7,QøÙ∂v]k©Hb=X¯ÉÍbLy'eÈ'*Ω{∏igÀ˝i§Ï)U3§≥„;yÅ\fhê€Ù=âœ™%≈:rØd§¬FÌ ıó¯ä|≈Z\π…cŒÒı-Ö°n◊siÓ) .’PÕ…«’&3—rÛóÄc/è≥ ;ÁÚØdﬁ,¥√~¥‡–Tu0ÿ8Òá˜ó˛bÈò¬ÓQ~äÔ¨z?¢qÌ˝~6–áTFÏ»MSìÒéÏ*rçû¶éÈ457∂“JêßªÆGY€Të≤eë|E2©áBcèê{!G‰QÄ©‚vb≤∫Àˆπ«j¯)¥«d0b)√ëS•Ã©jqﬁín{Ëı}ˆ8Ò˝W	»Fè¸Ã¬îN=<ä¥T∑p„Ã´Z¬º@%µ°ßÂﬁ^ò÷Ö™‚¢Ãí´Ω=É3Tƒt®µE~˛‡ØE¯@ﬁ{}L≥‰~óØ^>Ÿ{˙ÂﬁÁ{OûÓ=|zÂ≥è>{zp$º0/Y =,´ñ| ≈%ˆ{6ˇ#¶+Û∑±ﬂ>I€lîÃøRx:r.k“OûGõÊ(N`æÀ)ÊWáŸÔ1—9W,=œÀèro@’[M·Ùi©~õ¿cAßÑ=HËq•◊}·ªØw™∫Wä~?Eõ>w∑8_>˙„¬çîú”)|U5ﬁ$Ú1ON}∑è‚˛åkÇHÁ◊`ŒáE|Å:ÌÉDÜ+†á3Æjk“˜K?ãì(.:RËù®H—Á”<É¬ƒ¿éÙßƒ•íô;ΩÍ=?÷ni›´Nïb ˘%ò∏t¢T&çâ§*Q”‚X%©Á2&Of∏Dñ!§˙vŒ$§O,nä˛ü¿Ñ'r ⁄BüƒßR‡Ÿ†.GÔRsÒΩ◊…—ç≥ËîÇR
+IVq≠O0G£ó,i–Îﬁ`‰
+Â…Ω•ﬂÄ˛H°™@Ç&°´q~<í´ß~]B±^ÌèsÜy¡ÄJ"RXeÊ!HÄ+ºd„	k=Lºo@áÉÖ‘ﬁŸä†^"ìºX4§´•P¬ï‹⁄'≥ÒW˚x	{ºèt≥õ¯î†µ˙≈£’Qõâ¸Dhîä“Mîn}=7	RÍ˘ÏÍh}1X˘b˝r}ÌÍ√’.nÀ¸˝„,€Ai%—-»@∞¡`ÂSo|ËdΩ+˛Î¨Øﬂ"∂h
+¥ÉAØqŸ,a-º–¯gá›Ö>˛X&¬á?æèJí‘£È¢s/k0¨_≥÷˙Î∞ÄÊ|%∫ÅMœp¶p£Ö≠¸
+g-'J7k≠ùˇ"∞ú —…bŒ‹]1√gZ3ÀıµkMs]õÊ{ö‚˙öcé‚&fÇ#YÏ“¯·î˝I¸˚ eòà*NN∏Â[Ù‡PO“[2Vz@œΩHé8Ô∞è`EÎ‘ã‹](ù¿Nƒ}æÃ˛¿ñ9√B_%{A?$_A?àYŒ”j¡Ë^˙#ÿµôL?%∆òo*˙…üπœV_1{tgm≠ˇ<|¸¯ÓÛüè·ÁÓ∆æıÍ#Û*¸Ó≠—Ôççµ5|jpg√á´É]á√„’ë\íb|(ä‡‡O"\∏ÁÅ@‚Lı©ü!ú1U0¸»È∆I6Õ‡,g^˘hºâF≈î°€‡ Œ»ò≈ÎpÄ`£9<˛√kØÛÕ^Áﬂœøùˇ√¸Áˇi˛«˘ˇ=ˇ”¸ª˘ˇ3ˇ~˛œÛôˇÛ?˘¸Á;ˇõ˘3ˇoÁˇ√¸øüˇèÛˇy˛wÛˇm˛øœˇè˘ˇ9ˇ˚˘7ˇ_æHª«∏ ”mâI}ê˜TÃò£yi¢bÈï©ÓÖ”±ó\√‘-í5ÁŸÊÆã¯oå«”1úœmößÙbL~™ÄÅwYƒZÁÓ¿‚ãŒGÌ2<î.k!íÔ Lh∫m 	ö§˝8¡4º¿ˇvYÎyúC&äŸ⁄˘ÙWî˘ÀlÄÒYæˆFÌ‰FΩT˙§k÷ø¸’ùèè?˛ç6Ü„èøËä«óΩˆï9†¢π⁄—‰4DPA≈ê6ÏÏ~Ò≈±ﬁG˛Ä•ùz"≠,¥¢RH˚<œZó§…ƒZvm˙vÑv∫›ŒÂ¥ßÒ(∂(IÛ7M®⁄
+‹papª$ñs"ﬁ”˙‘≤0sO¢
+Ì™Hé(≈MJé¯X¸®H¶Xà¢Ù∆~˛SgBŸû˙1jÍ€Õì6í,KO‚∑™Má|(”aU{!:dasE@
+è‚Æ|‰=3»≈õπ–LØ…_zü¢CÎPn±∂¨UV¢5§¯QÒº!Û¡È◊‘∑w§tæÀıÈ…ú\j'àhìn0X·Jãºœ	µK• 2ÍôrAÎmŸCìòÄ¨:¢Dˇ¸Œdû…Únãû]LKë≥sv2	≤L…€ô_∞ÊÓ,añ$–«QÊO9^øµ◊4ƒLL∆âàâﬂ,êªj∑(˜óı!ØÁ˜d´ëüL·ÒL⁄v´z¯¢Bﬂ~‚ì ∑˘“ñ.kc,©íå—ÊÌãÃFÑ(|›êôõ“7‡‡/õí’¿—ò»◊)!™VIDz>}#EßıW3x‹jÜ¨y.Q@ZÍƒ‡K¨˝º÷tQÖnHSÿËjE≥p\= é◊D°#–˚í¿ù‰ñÃï™Æ˝´x4
+}ﬁÆ=lÍ'-ÔÆ}YÛïØ^XÉ.…∑®%≠Ìa!ÔÄ$§÷pÃ˚Z&`ò¿ìéKÎl""Z…Vo3—„ÅÔ+ôlı\∂E—FÀjò#aFïQPœÊ.f¶≠~’wª›ı¶6 ¸`8ÑG[j˛a*…Iói¿›µÇéw2S‹€Ëµ/–o+•—û∆}/< ‚–êXÍæb+Á2rI1T•∞V.ï?K˜‡πØÓ±/bOtyõW_›”û≈T(5“;›tYãﬁ√>ÆÓïØm|X¢nù^.\Ò[”x⁄Zy öYæ∑º“M«¡0kQn7…˙(ú_qâïk @∂%àâÜ±Â¢≥û¿XÊYæ|p$íucù”î] ⁄ìÃü¥ñøL/“/9ù˘FD˛óò|€ˇrYõü⁄ñäÂ9®Rk˙˛ª£œªÙK£@b¨îó‡ﬂ04Wv—â@ §ÏÃZUTs˙\nïwØ¥ùQ‘V]—‡Ç’TÈ‰lÈôsB†w +ì#@ägˇ@1ÁÀ˘%’ƒ≈SI%éE'íˆìTM:≠RâΩ”Ä◊*Ïx€®b•˙µ”çjß1˚˝¸[·∏œ0ˇˆ˝\cû%„±Ë	¶ÓMYã πÇ=EkNOh∑∂ŸÎcıúÖ◊ßE∂â%ÆxƒP=ûãF¶FÑvì¥€xÌ
+£ÑGÕ¬O‘Ûtª"≥¸“√Y⁄ÁçÃ¶ËÁâO•¬q5C'Uv«M@t√”
+(M<âPê∫àÕ»"›©®“MâûR∏uü√ÊÕBèB"<πé“Ã#Ä#Fb“â±w GAïπjWK|$Û r≠n
+,ÊDCÒqô3!.Ø»∫ÓÀR1è„drÄÜÖ˘›)7∆ΩÂ8õ$—|Lƒ{ıîkÅ—ñ‡áÉîy	~Cê#ÔR.ıá)õd!˚®WyéIÂâ.Í£ñ1Hp¯Z˚”°¯©·æ@j%g<Ã⁄è–"[ìu•2˙3>IÇëGâ£b ¿£$…pfró–QµÂ·À°ÑuüÿÿÙ‚®∑ï‡A$ì⁄3kÊ{|ù?yÁ<‡Uº¡u¬,Ó~«Q›r®€'≈’ót‹	—çÌK-'¿µîï–1 ˚*˘≤©>[Ö¿,tz∂Iø`œ„â/ÏÃM{ß|ß˙Öˆu+«Éf&.j"¡¡≥‹õ˙ëó‚Yïx®ÎÁ˘ª`Ôañ∂ï⁄ÆI®R|ŒWL¿æ4>.:n¨<«0◊m!J+∫¥™—˙ya;Àh⁄u„ŒëñCxø‚Ì|9¢˘ü'~ÇÌLcäßœø˙∫ÄŒN(∆:æ˛˙=â‘ºŸÊ*H*l¢,»fD¶Cu£}NHÕS†qΩ*Nîó‹Â;”ïIh “˘w®Z°:◊ûA°ŒPv∂yÏ¡!çG+<ıÄÔF1kÌ¥Ÿnõ}ÒÖ‡í°+A&ıÍ}¥Ü‰S1KŒiÉô›"Ån3›¶Ò†Ñn’#„úúv"‰≤€∞É-%∞·±+K&û"QL‘†év’#0T,*g•ÎPHo¢àdéí˙-Æí–†ò≈O„3?Ÿ˜Äè*/íﬁR—öWHØc÷nY]¿õÁ~””'æv0wΩÃ;AØ!8n;√=Ü8∆ m†s	XÜê[4å	tyÜëWXç–ª‡\‡ô!ïæÙá8∏8ytLkp"»\öèN`Æ?eÎ€¬Ç«@<ù%ºµ¶ø∆Åv1l¯¢%;j≥≥1`B´†¢–’˝˚hMWq•Õ∆÷˙Jé1≈àè"oäÏ’uñ˛Q‹O[‘ü&‰| üÌ˙ìiv° Ÿ=e#ˇåq\˛ÍE±ñ>º‘∆rµDl∫Hx1ÅπgE I∆ôÿùn!D^ô`Îï¡Fß√L‚¢húk£7‹‡¢7Ï:Päﬂ®ıÑöAlâdQáh:@ƒÀEöa(ô◊8ˇÑ‡2Yß¥ª‰ÜÿFb¥Ôtà…≠ËÄO.|„ËAvt…;⁄›vÿÒ75ÿÂO7Öù8Ω’j<`¢”YÄ<©îç
+xWAm≥5…8Á0€ü›"•C	=;ú0ÇßÌÇ>t¯à'õB)¶D%ô;W`06¿à€§Âƒe/õaû”à
+B¬´ä[é4∏ı†;¡¸s#üä¶=ˆB‰<!â‰Èar<0%^Âê3O4µäîã=8Töñ‘ˇ¥"›º?H?@Û˝2HÕì8Œ∆ +â‡5NÔ©1õW	›Á∫Ê_R:cÉ|ú|eqÅÑÂØGyba2*ëÒ
+N*ÿ›Újõ›Y[ÀUë€Cé=dAÄÃM≈Ÿ¬>)êiö∏–›òd  Êáñz.I‹,dqE8™$Sﬁ‡F>˘-tπÕM\(úTµ„!7˜W5∏®|PË≤%wTﬁãÆÑÂ0+òˆ4®>Ü9Ö∆Lœ¡ô¸r2Íº˛ã·ù°7Ï!$V_j#àÈfz<ºe2ÿ¶≤Â*∂ÁyÓY§0w¡∆*huë77ÎÉ>¢T…ß“¥Ü-EÈã2∂≤ûƒ∆Ÿ::§àIyy#%CEÃã÷ŸÎŒ˙⁄Øéyè‚˚&#ø˙q˛Õ]¯pu}ãâÚT…y¨.∫∫A§–„Ù»CHãÓ?…ªˇƒ—=V…‹\[√¥q¢Û£s›KøÏoØ§∑ÿ:ã.*sÂ®ÇÓ˚wñ,—8r°ŸC>Ç*t®Ãú£∑ùNäH¶˙T[Y3¶'7ÍÉSrÜ¥≤ÕEnöõã√∞Ê®·aÆ¨^ElqπN}ëåL+
+Ui
+ ãBø0Ú¨"C‡¢gOaÁÿ¬,‘‚“J¡≠s*
+¨Lêæ¢Œ∞î°ÚÛ8ƒJ/Fú
+"ui-·;ÍÌk§ 2n-ÏA9Y\0±4ÈﬂWªbp^‹_*ÙÛZÄŒ7“èﬁãO~èâ∂Tû[a€ÂÎSò…†=0V	°©ç‘VÇhÛ8Y{Z∫rÂd[BHπ<ˆl÷@öºà¢ôù™\€:2}{€jÊTû‘ï2Œv}«\%£ PUé.„àX+U"¨ïLòL˝V™¢m=17º˝vv¢≤úØ´>˝ôÃ˝iò¿Ÿöthh?b¯	V
+Ñ)m+?{¸Q3,96/Äh >úîìh‰	÷¿˛úåø¿írkPˆèzV±˛8˙æ6ºÚ a<0îB0∑®rÈJ'È™ÜhfÙµ‡A@È_:ŒDå∏∞<ßüyÆ+o:Õñ7Ú§ J-m«‰<sl˘*èÄ˙∆ﬂÄ-æQ
+ò´I,åü#™’0ôí¸ê∆më&œ)ä©€˝§¥ﬂ¨ª–íæ
+h»hÂMôÀ
+~$ûy¯ﬁ-ë<Éã§ê'áL˘^OX‘,√4)î
+ù7Íé÷7Ÿ ÃBèÂ‹Z÷XkLßºHJ	¸PVu‰p±†Üáôâ™∆≥Ìåx¸J[ãal¥i∑Àh#këR	Ü'˙9•‚&°wÍa°4	Ü≥~B•É∏ŸLñ (M€ûåY?çë≈âœ˚8D
+!1í”´Æm™Uõ-•®S”ô`Œa7ÉdI}]Œ,RŒº©l>=0¥Oâñû†ﬁ?çIÛ 2∞–:ºB«∂ôtÑ†Û∫¥‚ó,2,·ºî˚r°“„Ò‡•à≈% µÙXK∞èsK0ûë¯2†
+à√K2ÈæΩC¿¯ûÉ!=˜)^—∫ÀU* ›"2¢›ß®],c5*AÉ‚¸e£ÿ#JDΩ~ö`Eu%rêîG∞AÛ¿M`X”ßåñÃ!ï¢©M
+õúÃˇàŸÀ⁄jM•aWƒP.13≠È1O1ãá;uqUÚ‚"ãùì+1ë<[|≈Q‘8·&w@n≈yv9í˝Óê
+s?H˙°ﬂkrY'„iÀäòﬂo-ímyi˜—%¨∏Ç≠πÂh∂aFrŸ%9.∆ YY/õir]§ïb }ﬁ#t4Æ#´jä$®(ä´4‘E?7m»c«MkƒæR≈ª °yz)K©Â¶â‡Õ§Ÿj]7ìÙ ˝¥5PúòTæthÍ'¡4ãÅQõç¥N+"ñ≈@´ÿ¸ÚÑÌËÚ$âGëØΩ·˘YµÍ∏Ê/â˝ëlı”ò Äz⁄Ÿî˝7!æx)~£Î”ı'ˆ$g.¥∏]döŒ4iH3µ™Kö=÷ÁF…eË+∫µ"ÓxAôπª¥;Œ[ƒ}RaãgÜ·î∑ü-_mÒA“ºt¬Ëêø°-}∂#ø-•Üo›ª[j˙⁄‚„»w+ﬁ[∑ø‰üŸ¬=ÈYÒAêk†EVïÚÑ»Sïñ˙hvH≠cñ8¯cS∞˘¸FgîéãÙ⁄˙ö™ˇ“•YØ!Rb45ÁSÉ	KxıÑä∆W©˙¥!†v-˘>•∆≈*0Ÿ¥.{“€És§);HGqÊ(‚"˙ΩFf<aI iÂòcO»ÑŒsJ¡EÕÀ6û14qóÈíœm… ösß[≠vL◊û•ﬂqX7ò˙f#	é®2‚Ñ◊ËƒBôw"‹IŸëüLy¿D?`r>îÃπ0nOÕŸ…¸œaL—´pÕÂ`A¡UzIògP%ö£πñEø!O±•‘ )J§Í	ª'.àV%Û)d6gZ]C∑¥˚»«¸∂E™Ei∫éÒw’åÜ| Ì≠˘ep1∏óˆÜj7˜sÌÜ¿r—ãH""#;ïNÇÌûíuî{ÊXr8!‘∑	=»≠ÕØ∏—<&Æ»;QRZÔQÿ«∆’Zvºx'˜yB˜Ehô*·û»å*ÔÌîTï⁄ ïùf%√@ﬁ
+7:8¿Ó∂,üJSÒqg‰,ñcg®∏ÛI]J»≤ΩH+}8Ç;«uu¶l≈äèA›v÷èr◊s4Õ•°Ω?ã∑V˝¶¸¿“Ø›ì‰A:#{Ã˝ó>˜Ú˛UoçüqE±Ê,º<◊HO™2I÷\§[◊_ò…¿íÛt}k±’zÏÖx™¨≤œQ…c™0Âjy	Æf
+È‚Éñ∞r8™ãA?¬ îÄæ#ÓJB˙úi∆Vs˜ﬁ~-^¥—≠.¿ƒ#Kæ˚nñ´(>ŒP5]\ãßæ#èº¶õuQŒ∆Ï¸"Z'∑Ö§`Í'n÷∏*%µ¬“€'0Íæ›ÚAÌ∫‘PıFCßùÁìÜÈU∂%ûﬂ⁄á}Y«v7ëPTÕà"~¿˛Î¸˚øqL≥Ç¡±»y—ë&ñﬁΩ"∞Î :<ÃA˘V¬F~¬S⁄¶¸˜Q)¸'%E‚ƒ)0X‰”.ípw±ŒíúpÃµÕ!ûrÃß∏âD—B+±k¿±{íaº$/˛ûÚÓ¥pQpKQ‚x˚fÿ#TÂ.©Ë√√›í_y…»œRv‚F~Z“äVÎ¡ìÅbÓ	Ækz‚Ê≤J%6P£¨í‘π%e°¢©©˛—’øôô‘Ê÷ÄXïÏˇHx+œâ·<„Ó©G_œ0f∞Ïh„§Bït»Ó@Ë*J(ﬁ∞”Æ;Õd'mK´±öUdÑ∫µÓng&ˇ¢Æ‡eôëËí˚ßK—^3˜˙kÕ·<£0Åü≤Ú–∑˜ä™‰¬¸v®Íº·8éfìâó\∞x»>ı#L6¨ı^øHî5= tïŒV#ïŒÌ¬#«Ö‚7¨∏·ÄÊZç"ó	Æy ^∫Qµ⁄çàÄqˆÑ´¿ã∆{YÇfÕY√µ@Œ4˝d†X⁄5CXkÒ‹Ï´®j´(U®tmx.˝ÏØ™{]à>º{ê…PHÆ8∏!àm)=90l”Ç%¬¢˛åó~èÿ•≈`∂æ\n\≠îˇÈ]≠¨∂Ÿ“áÎ›{›7:n.≠¸¥ åûê\Äª&|™©∏:p˙∫b≠ıMˆ( z˘)OY≤rmxU1Vx,ÌqÂúE"lÜ¸ú"âÖÀ∞∞öµR7GªiÒµóÑDn‡ãÚ…ªœx“®î˝ñ¨8î‡\dêÚgÏP—“KœØJÄVóB©Æ˙M†mY÷÷P¬,?ıO…¿Ò]∂Ê*içüö™zªy
+A˚gÖ˚VÒ‰Yjz)€GÊ¯ƒ¶˚ŒûáA4(∫¶\Bº˘{Mkë\ÆG=rÒ¢5'Øjc´Î∏ZânÇÍ‹XkúÕÔˆËÍu—·ˇ6ÙÍR?ó|=uÈRÄmqó5E®Ü(ä¨ìˆœï•¯∏lˆ&yp/ÌMN`Ö®ŒØ±j¸ ãüË∆”¢vaQ‰ﬂπ¶—˝_ˇ˛˛À˛ª‹Ki/~ú€E—pL≤ÉÍÙSÓ$•‘§„&=ÚÇÙD^˝‹>≠˙;µŸhÊ%r≠Ú•øU–n6Ï2™–Á£BêlŸ©ÆT„â{RÆ±Ka<§'CË~0)˘!WØw@&ªÆœˆ_Ìπƒü
+£`ΩI07ä‘SïD©"_Ü•o%˜C˘√C|’,¿ñ≥¿ŸvEhµu‘é`kºåV@ß
+<^>XWkâÎ‡†GYókΩnµ≤0ùPïmJ≈ºR¸'¨Ücç·éZi#∆Á¬z0{7πª<Ù≥dº€†Ë:≈æCvVπÍ:Î*út|_î4Iò¢^˘à†˚AÇ˛áiZ˜©À\gMT”˙:Ìà‰Û∆.	7Ú†%ëÁUπñŸê∑’·-¸‚˘¢œùÎY)•®„d‚~≠∞≤bÒöJ¿Ü¨!bÑGÎfŸ«NJ™6Tö”©%¶”’s'óèQÓV6SZﬁüŒÙ9}S˙§§¥≠◊¢÷ﬁû])Ço§±Ì^âVß˚C·EÓGïxÜ+ˆyê`m¯∑∞ÊÇW/Ëƒw0„Ÿ):NÀ6` •ÿPSÄ;P:fπ√$%‰√ì%ŒÖ·Nß^3l‚≥‡‚—óm8¢NîŒú«3Jπr?PÛ≤U…@BmƒæV.QªJxH6Sñ	*>≠YEñƒ`;ÂÁˇû’Õ5|=∏ùßpÅpKüNò8∂§Ã¡?◊Ù™±|‰Êm˜vrkÔPÏ~”nÅCÌ›z¬\√m°ÅßÙæ(ÊS $’6S‚IﬂñR‰YXc) !gâöhëë/@ÁP/#æzJÃîí|kq
+DôñQdﬂ¶e´Á¶ÍìÔpπ/<Âëy÷ò_Elµuö%rP∆∑áïÏ∏¬…≤Jü}√∏Ya©$MáM•íÿy§Æ\YèS‹I(îøzˇRÕN|eC|ógììSzMgºÑì‚Ê—îej‚ŸQ·kÂ‡‹^INà>67mõ†’ff§…˝ıŒ*ıR1ä≈8RÒeC¥±}îiù0˚–˙jè)…Q.ËÇ1áz”9u–⁄VÍ¿∏>õwR¯I¸ØgA‚ó%ıCyıÔ_ T\’⁄∑8⁄l¡ÛòœùßìïZ~7#O£.5ÈTµÒOYBó¥íª\LCLª‚“o**≤xñë
+ïíG„˛,›ñnçjñºé’`î
+#∞e≤$ÜUuŸØúŸ®∆@Ê¸‰˛“¡˘6{îtŸ^íçg	{ÈÉÓ¸UT`Gµ©™¬¯ÚcŸ∂"Ò00√√ Myﬁ·wµqMœïœ∆%áêõ€π‹ød·mKá∆/{ñJ{v‡—Ü1o˜l≈-'¿´ß1 ïHI7ë†Ù¶´πhagännc≠f6~ÏA)Ò¸ª"2 Wf„8Ì«Sˇ«IknñI(Ús.Noärø˛)ù¢Ú·øU	Ÿ ~?Z»Çl”%¸[ÿ∫”·Ç{∂ ß?Jö¸œ=JƒØmkK∆¸.ñ∑†ö`≠µ∂¨h]ı¡$»/}CE≠dOu/Â•—·Ÿ¬°ÂnïmS~Úææπ‰±	m–+W]ÎΩç6ªÌ∫wª›_u¨˜Ó ä¢gÆèR∞<π€?‰‰ﬁvÔzMXsü◊àmÒQ‘†≠√$-?ˇÜŒ≥µµµÆ¯ØS•Pˇyüi9;>]UÕÂÔLÓÂûeeÈèÈdªAÒóG˝[>⁄>YåÄ∂\¥∑rµ¬¨7{mËƒqÄ}Ú∂Ùø˜Óá3' I◊øúãù-ÿÏ.~:¯Á«¶E°∫ƒLMQÄ’7uÄaÂ[
+˙Ω)ÌâåRb´VfÃAˇ–;˛ÌÔ˝®€*uÆ‰ˆïŒÎÀÌÅ1?¢t√iı	T™‡G~§"Î’Ø+ê´Ó Æ=ŸöIlé5q®Â±Tè⁄î,≤∏…"*ñ:btSd(wZÙ®Dç∏V∑Àµ∫XCº(c∏‚n®.÷ıg∏'ü∆¶sË5˜§_˜>∂°≠ªô≠òÍ-∏≈{ølE˙∏,,ÎΩçÎoºä[Œ#ˇà‚îdEﬂÏÇQ¬—rFÚºΩÖwÒ;∞õä¢V<ÿ‚ñ®LA0QL5ªgáág9!-ê=/ûÂ∆RÆÁ¿léÏ7ÄÍ9ˇà∏‡
+ÍO…ùCzÈS;X⁄Õ-TÙ}Ë”l˛«åîø–∏≈IFÁZ‡-Ìﬂ°…=  û/‹Ëì	âÎø±rG2ˇ>É¥x”<A€î¸‹¥~Å
+¢ß∫÷wV9Çøï¿CÖ¿ë¢,pñn•ÕEÄ<Â+
+rYùh\Pæ◊÷‘™>“4|ÖwÅµ´8’â∑íµ8HN‹á2è»Õ£pü˚£˘˜˝ ~v£*≈ó·I™ü≠zrW˘g°Æ™9_⁄#vØê√∫t≈∂ gË]4™b{˛?ó—ﬂéª‹”è”îÌèÉ©{”4{∆SU¸≤•ÄÜrìÉm∂î|πÕhµ·◊´›múY∂’ã(5"*›Ì<é˚±<}1¯i_)(‹¨…ây#äÕfeçäèÿ„ºÿD√a%S⁄;ÑÌÜfT™√ZŸÜ(X1•ı´å¿OuU˛°ﬁ^7®âÎmívïÚXKe)ºki[p‹kÂ]b)Ü56’∆’ƒ1‡«Apì#∂™	˚¬ë‰b*≥|.U-+~&¥’õä¡˘¸j’¶ÿí3ùiôEíAäïÓ¸≥Õ¥AF⁄‹;\$@.‚ÆrFÆ∫ã ´é-óG†™ôÍ‘¥4ä∫pÒ
+2(” ÃUakNKöD8#TM¢≈-ÀÌ@œ‹áÉÃ§–0èBêâà›7´‡v,4Sl8º}ÓÑTÜÂπjâÃ"d∆Ah^≈£QËÛ	Ài÷u∫Åë$Ü“¢Oâ™î+Ä%/±°≥ê%6ëJû.H}ò≤‰µèñ)ŒÍÎµÓ⁄Êqô⁄¨ﬁa˘…uf aΩµEHë$FU+í¬|íS'ıŒê$Yà¯∂|B^®å˛‚üö5ØM´·Æl Bá/“ú◊¶Ì(˜PüiOy∑"Áû33õ%ï-S°œS—≈<y£8π®… §g|€¬ÜØ;G£f«H£ŸHÕœáCI ∆∑@± Ó‰v£]ŒXæ§dvi^¢´\[òÌj∞°’-]≈"Pd§MÉªG9˛Î˜Ë UìÖæTÜı—G÷E“LXÚ∆Ôºﬁ†bŸu$∏·R6{»RÙ¡L$•ñE·Â*y∫bTS¡À:¨	´*Ü©´cVﬁY‚ß÷‰ëü¢
+ùo}ÂùHf'næüÎJﬁ£2ıHH¡Xîg[PıèÅ∞¶îå>©S®^√mﬁùˆµVê’óü¬∂\ñE
+ó◊â)ìRg[T˙ƒLÅÉÁ¶I–«◊^~»÷7ÔÆNÊ™weWá sÊ==ÉNÇNﬂÄ(Í•mˆª√'Ì<ÛØﬁQÔÆË®‘Ã·EkèDÉ:	TÎ9öh6)ÜH‘◊≥ {óuFzõc∏ãIá±>à≠ª˘lkﬁ∫0y¸4wÉw$Ê¢E	êµ5Â%o^§¸ÊÊçqõ@¶ÔEª™†Ø=üP¡Ã≈\>’jè2¸XyŒœ…Ñ˙ø¨¯œ+m,’wW…nﬁv±õÔP‡Ì‚>sGwücó˚v–∞ÄÅ£
+Û∫ªtñ’≈QL—UΩ*fUwÆ7·"kˆä;ãÄÚLUuQ[7á˛¥∂Ë®“oVc”∆jPÇRË™)wQó6‹ÕÜBiGß]¢ ÿ˝–«T‹rr1O=∆åíßQ~∏á4
+7”†zTJ±˛Í˝ºìì-V†»QªﬁLJ÷0cOîttœ¸ôR	Pf∫u‡ãDCÀÌùUÃÌ∞`“≥íØQËT}ﬁDVÛ7"Ï„8¶hÉ @#[V£ítõ°ƒr≈–c:/á–ãüºÇgÆÿÄ’«¨'l/Ú¬ã,Ë#Ü·vëÂq˝Ë¥´åyöèXŸó˘WSÆn›"Â”∏vî≈˝7O óH˚àVÓ∂ã“äÍÍo©=PØ}=Û¢åRÕ ªx‚'xmDiπ<ãÇL}ïH”gt±xòÀi¿Tƒ
+î∏æ⁄5/Õ>õ0üqqπ<≥g∞ô—∆côn†'•+œç9#I¶6àña!ñÅïZvÕ:ÒΩTc<≈‰ˇ±6±6`Æÿ}txÔ≥ßØæ<zıbˇw_>yuÏhªXõ◊«Ï>CÖkà…÷îÇDªÃπ9æNÀ{Æ˛ò¢EÏi0àáI0aΩ_âáä≈SL≈›bBõ[¸ä∂àΩ5~ë/!
+iÒÆ≤é›-Òd±éÀ}˜$®‚ùbIó?ıN±¸^Ø£Òòúú∂–ë∆¡◊÷J7ãüΩ8‚.Êò´ò$>=>Ogß‰˜»P†˚^íÕø=	˜YJ ˝†¶;(≠oiP⁄˜Çsœ§ﬁùÓZJú@>â~?N¶e0Ì%ÓVÀ}U±¨DàÚ‡M@jCá‘K?"X[ü˝˚ç≠5ˆ◊Ø`Ål0ä≤˘w)zÃî ¥ﬁ≥ÄHá–ëèÉ≤¡h}cÕ§f®Ùp]G•ﬁ€hS–CÔ]ztÍØ≤ıµµEi≥Já^Nê∂nën N[úËÛ€cÒ]o‡±«üå÷7À@zBà)øóH=Q2∂¿ÙlpÍUê•£©Ôú®¥ø—9H·D°z¥:ˆˆ0∫≠√h˛∑a?	é‡Oã>Y˚[Z–oÉQ‡G∆(Y ¥ŸåhØﬂÈﬁ-Ég_¨Õ¬2|®∞√¿{{»|¢CÊq@i¸èfŸ∞Û˘EÇ¡f«≤√
+áª2≤Í;`"ÿΩpV[@sßªyMƒy¥˛ñ«Ÿ≠„{&sÏ≈Áœûøí¨ÅdnlÏ¡$Á$ü£rßS√5Ïè	Xπ£$€É3Öe¬4}ÛÔQ+H%üX(8ôAÀí`l—Ú£ƒÎ"_À´â˚ÇEöù<É%ß≠Jm∂^èGì¸‹Wgﬁ+œº	? Êè|üÎ|ÀY≥ætIB>§ºS∏$≥d‰ßú6}37’MÅ`√ÇÕ2Íœ±
+ òÛ'|üƒåJ_*®ø±ƒk˜≈pq∑⁄òz≥u)≥çR@”’6”.PÇuv≈ÉWWQ<ÕH<y>â'Ï)πá∆o‰ﬂíﬁØI∆nS™t¸Ü€lñ˙GmGaŒw[j y˛n
+d ù4B•·Óà7‘ZÊ!0_¶ÿ∆ó‘ãL’éQöÙnóIIË•«∆ø;zÒº¢zÍã«Ó)â‰Wp“–}˙]üßã«˚‘ŒUN®Ú·§√iÛû∏†/Z	eEåYÕÚﬁøÇß
+êNÕ‚`ïÃ⁄Ç∏Ω%xÛ< .Ü‰sNÎ@ŒÔ+ ∆Ï0`÷ßÅîe±Ü◊ÏlÏG˛)ö±ÃlF«Ía Ú√°ﬂœ4H_WË2¯U[l£c>∆kwU≥¸V—e~È8Õ„ De°XZ dÍ{I¸ó3?π î<*~´HŸZÊË#ﬁíÃoî^‹◊.ÈÔí€´÷ .¡,U^?R.ÿ_∆Iàm$›¡9ö›ñ˜>–‰Aº,Ê˘,`$Ì*|ÇŒî>«ÒŸﬁ`ÄÈäyó≈o≠«¢ÑÚ¢‹è⁄€Í≈ö&ÑkÆ,<-_ ∑ﬁ≥ì[ˆÕ¬p∑Ö’‰íøÇK#.xAkK’ÊÏ∂ó9Ÿﬂ◊KÑ(~[ß»°˛é,%É¶'ä&·<√{‘‹s˛]kÍRÂz Âá+/÷ FÚAÖø-Û¥Àç…uj∂© U¯ÀÏB[¯]±ù‰[/âó–^‰óÙw%ßë†.÷ìLó∑úÒ`dÊ»0ﬂå|!äﬂb⁄ UkÍër°Y[|ò˚^à≈¸–„Ê0Aˆ(“∆gÙ˛>Â≠>Û'±F8≈©@∂;$‚A‘ü¿ªOÿŒ}~AAìõ`£”|Yú]√Üö"Ò≥æﬂj¡µÈ7†œ&Ïc÷“áÙk>¢Åπ]≥|0ÄÀ_œ|AfP’£yùì n∑ãÂëüÒÉâÇPÓ∑≤rlÎ8?6`ÖàÃ3óÈÍ5Grºµ	r~ œ&V
+ÈøO„3?Ÿ˜R‰Üs_Â‘“Y¡¢@¢m˚á⁄ñ€˝ZÌ◊7/i«‚ÕK/*x‰	ã9[¥√ñƒz„¸i˝¸È˚ÊÛF'<_:Ö°,%#ÜQ9ûyw¸ V”ßòm‘n@ŸÅí°•‹O~æ7Ôj◊›ì¥	‹‘Ô£èJ†..ÒæxCW˙6E"®pQ%ÊHemÚçú?1KÆ›Iæµ∏´7‹¶ª˜ÅÈﬁ)—Îg]<pN·PP6ôÙ√«kè¸°2gK·Ú?ØÿJI0AÊSøwK'päΩ:ï†Fy˙+û?ºDÅ¥≈g≠ï´Ø§?≤-Ω»äS\>$Ø»'äÉ¸ôóçÅ6ùc:?ûDYKæ&£˝Ωñ∑Ø˙ï®t_oÉÛÚ9¸%Ô(|B©Ì«aÏ≠4\oª`+‰ìÂ!@Q≥Á®AÙ)¸y(‹…‰÷Ãô˘~AZä˜˜¬I|Ó%¡P{µ°¶X‡ÇîÛ1ÑÈ1å∞õº"P7G^…¥P†™®”¡HX…–‹ñk+&·m=
+NX®x®Ø`†ﬂ‡zû¸8)nöä=µq™¨ò%y’9∆∆p>+Ì
+EÛÄóõ§eÀKÜ A¸‘*Åƒ¢	S‘≈ MrCY=Ö¬æ§ê.§)rıoﬁ∫‘∂˜Úry7[yrWÓ‡À]úπï7∑qÁ%˛\efHvä(v•±«¥Ôø=ÒUn\nıwA.mB¸ó≥lÎîo0Q1Vm?®ß•8Ï‘¯*¿
+U PÓ4ßJÖÈìgÂJ15EË(ƒä|]Hé´VÜ?!◊¶ph()»8∞rﬁ3HéW +èìP,‡e4¸Æ‹<r¥"I/E(∆}_+ΩI8†äJ≈B√‰˘*û†*O}FÈBù~ræNh"ôÏ|™¿Te9oy}≈ñËÆ`S≈jãÎs$«^¶LM∆/+!eøˆ*4fœCCà2‚æÙGD«^Ör‡1TEŒøxeÆN9„ÆG\‘¢¨Ñd›íJ<,a‘Z¬˙∫CÔ4&ïõD —=¬»ß™œ∂<!…'Ê·YÕPë≈≥ª§D|®à≠0ŸBéNÂéunG«‘0Nö™lÀ6∑$Ã≤òEƒLEXΩóÊ≈Úhf÷˘k>Ø3µrŒo]·*5±`ÎW∏ueàYaÜa|¬ Öù†ˇ£ópıÜúç™±„≤j‰P‰ê”T§'My÷_Ò£ï2ÛQ:ˆ1@ß∫“¨˘r∆≈J/}xô˜B1iK›/¢/¢Ò“æ¥Õîá‰PÆ‘ãxä_})£8äC:;‡€_€üˇ"R0—CÔMåá9ı¬8È~Uø< b~BIÜ£Ä´ì^:(éÌ`ïÎ£Æ˘ÙìµhN ø$|)Ø*™["Í«Ñ]ß…:xU§≤ú›¯ÅÛ;0n¸(éy4Û˛bá;]éÍLZ:ËÈeÒnò±hÖD*‹èE.	„Q™mËî6|∞I⁄÷2•MSoë>æ∂…∫äXë˛,dÑ#‹≤<ã&^õyô°«JÚ JsYEÊπÜòR%ß∏wßEÇYµ9˝õ¢ó&/1CΩ/U˙∆æ^ï:˚¸á!®`8‰sÜÈIµ≈à¡ÒBÏ¸ò¿˜(n6Õ`\£Ö^‹˛90·À∆>%%ƒ
+è…’ít%ZßÕ3ç`©û¬T‚	hî`Ò$Ìœƒ£ùtƒ|Ω@4£óÒn-Ê∂>^Q—∂’YY÷Nõä#Êy|3qöUıU>j%i.ﬂ!Ú\ÓÏ+	yµ§}lµ◊≠ÊK≤n}¡aÈ¸’ˆRõ—£˘¬>Áπƒü!€Êã6h ,⁄6[Ç…P#›	OÃ^íc¥DÆ ŸM|ÜÖ@aîÁî'äR#ıx0HÍE©R=UzÚc∏¿o}*®}Ëa—"P¿Ï»àh+∂›—K|NœaLSûÂ,O÷`DNE
+3:g™Úó©¡±È‘¯í"]îª∞3ÓïB N0<&ùlÎ%™më[zºV√R•ºî®™‰©¸ıÀëO;´„ûˆ€[•óç›ê˘S`ÿœ“Óø˛Õ?Z⁄n–÷ñëÀPüã PÆ,8•“¥	J$>˜Ö<i(µ˘Ë£0¢±™óµH˘eY‡ºä´6E†£€òåpYìYkJ⁄ïÁU„}ã‰Ç™ßË¯YØ|§Ò9§⁄<g–*d<h$õWÎ¯ûc,ÁÖ¨m-Î˘ÍÖ{-’}qø´YùÚíøF††ï-Ïà*Kı≤ª[Ó‹Åfne^∆~{F<>äœ"=^Ã»&(´ó≈¯ñ«⁄*ãb€¨Â∞ƒ•øà„°pŒhb–o˘´iúú≥PÙÈÔ1ã‡Gæhj‹£éûÚéâ°Ú˙è
+I√Yu™K%Ë”ÅüíC'·8≥û%ñp≈&HiËËi˘*◊K§∑„+¶ÅÁkÄøx™–‚®πªı”X¯âÖ≈=⁄Ñ.h«ûπâåÂ˚›·ì¥Ç´K˙éîüõ•Zú˘ÏÔzŒ‡‡Å5Ïcï;-J‘≈˛M;[MjQ‰ë¬ìäX`¡ﬁÈáw)B∂Aû’≈ºâ|>w[‡π%FÁ⁄ò)úPZﬂKÆKŸUKAˆïÛ2¶@…ÅDö¨œQIIä<¯:õ&$Oƒñâî¢ﬁÕU=CaåÙ¥Ÿ'·åÅ⁄0nŒ;ÛßÕ‹a;á tÍ’:º˝›6vì1N[PÛSH#ƒˆ∏∏\∆ÿ2M´<fá÷ñÙñπg>•{Õjû≤Ú£dπUñªßH∞≤¿∂1I£%ÀyE^›uoó≠ô.Y<iäá±√XÜÊıZ∑»ò¬ØˆämŒ/¨ÛÑ :Ω-Ëøl´îB≈ô0	âhm¿-,*ıVé£˜LA§
+~?ôóa,Õ*#Ï©•%àvzb! mÀ"=Ÿx$,◊(õNçñ Ÿ‘.µñÃÑ5Ñ©¥ YAçä≥ª¡hë[3í3Ëcﬂl0vŸÓ¡y0BçX¡ê ÔQ´œ˝h<õ`¨W4òˇ)Íﬁí9ÎE©%Å¡J1Î»§6˘ûXÁâÅÙïÕaÖñ©æH∂ß‰‘≠‹ rôøÜ$∏ƒ5Rj	 6ç∂)Ól˚oäm¯m_‹ﬂO^ßˆ¶1˚ EO˜ÄôDºlüt˝˝ãñ·Ëºrs≈!ñSòÃˇ9
+bÆ“!¡ù‹nê•ê∫Öf,E.ï3|á°ó£ËF∏
+4¡ ˙Üï•^ÍŸ
+= £,(ΩßÌ`ÊÿñÇÿä
+VaÈá:Dü∆#‹G™¡‚_¸∑a«’ƒc÷ïúﬁÇ'W:¡ÂKé•≥p˜s‰{ !0º¥œu%\POWS“(›(∑Æïìh»≥E4»=Ò÷GFY¬>„–3¶Öc…K|ØâÕAŒw√±UDb=±[¬ÏØ€LöFnª`}∆Nº§Ús◊]©5Zlñ©EÙ€"ù3ˆyf´˝°˝‡≈´»KﬁÃMÊ™,2~´Ω‹ﬁ,%ﬂ€≠∫kª+k˘π
+Z@˝vHHrêçÉh€≤Öı¸≈ñT^ÆäoJπ≈ÚM≠“ÿ√:…≤)úÏQ<Ò€Ë)˘}Än/d√ÓvªÂ<e™Í+Ï‹e”ÑÎ+{y
+n5ˇqìbURıe´U•Wcªô“U˘…Rûú¨ıULî3›Y´|/‘’˘2ïiñ|TwI∆x 1H‚È 5˙unÓª°àﬁ‰~me4q k∞öR›„⁄–nrA5L1dnÖoPmÇf˙E◊“Î·1ÕVﬂPì‘ @9Eﬁ•<«≥Ô¬P™ÚÔ öa"∑Æ2Å´]Ÿîón3∫‚.VŒi/ÊBTÂ$–îÑÂ‚FÕÃ÷T’πs•Zäj]Ø8∑÷J'CÆ˝;ÁˆÍQñƒ“óz1§Â6k˛€ñ£πxG*EVI%¬˛ıÔˇ·ø¸ÁøS⁄‡z∂Í6Úà≤‚µ¸R)c≥»”|íEnLqgÂtgeÆÀ≈lëTÖ"åß¢ aÉÃöL)dØ0‰ •[]\à!‚¨Rì´Dy]Sä˙Àßg}\Íï‰øÖ∂‹†Nƒ¬ªí°Í¢"˚©—d.¸Pá´õ÷t ñÖ∞%Ωƒ©9 πí–ö§L(,W,8È∆π&6„‚¸]∂e®≤e[öj‹˙ú€z˚víayÅ±∂f!lYT€ @ÙÖyL¶¿ﬁ·<≠¶ù”:ßI‹‚¿®πƒR©ÏrÒ™†üS„q0¯ë¬ÜU	
+’4|'£°9íˇ≈ò˙®>ô¶~ô ∆æ7∞‰≠ÕC ÀÎ“í◊Ï:)O˘mu∂ì>”$ YrkiWz3bDGn€YÕ∆Z3ˇ?   ˇˇÏ][oWí~˜Ø8·Ãé®â‘≈R,EV@KÚƒàm)í„`3-vKÍÑd›MYéB`ˇ¿<Ì€æe_`üÊ'ËüÏ/Ÿ™sÎsÌã®õÜL6ªõßœ©™SóØ™ oVèTö^™V mmøæ˙_,Q’%Úz7LY=É4∫˙üÑ`æ-ä8”Õòì@˜§ìØ·9È√MJx‰ÿqËπ4ú»üXQQyØ·¨ÈÛŸc~!rxı€8¶é◊›‡hju◊I’[˘qj˛‡6 ª≈Ñø1Ë¯"s‰•V^Å;îË∆àÆ}ß™jèP|ÅÄﬁ¡—8=Ω¸rjÃ…ÚäVâŸ`ï#W P{≈ãÖFä4%q¬A¶‰9ÛπèGúìﬂq?@7w»˜¢¿V	{∫k~Ù	•*],äsòª{âésnPÀ¿uìq?'ˆ<P√Úã‚QHbÅ}¢2ΩmdOwyBäzá?∞ÁÁ·∏xü˛wèƒy∞¢
+h¶¡≤Lçz,è0v_(Íå)iπ‡˝Çˆ1dÙbtíî¥/‰dÓ‡ﬁK\~h◊öQÂk˘≈>πÔIQ2JùN≈!zÇ5çô<,k¸,oÊˆFª<0∆OF†\˝◊ èáK*2,`ôBHI3ößNGÖ_ãÏêöÿ.˚’h.‚xûxDu8˜$-	‹ª'ù5|då"EﬂØK8’/ÄúñMiL‚∑åÙ`tuœBvØ˛ÒÊ≈Œ~˜YÔ≈˚’\k
+´˙èTQ]≈	L:ó2±Ù≥=¬”Ë:\l{çµãÃÖ/Î„m´ln™ÇY±påe[¡“y,_≠…ÜB¯_c"	Îƒ¯ny≠Ú· eÄÑÜΩ\|˝[ÑL≠‰ùKm£ú6
+U”a0¥Ã.øï≤≈N˘!öËSá„jùc9îWÎƒy¶πe(Òö∆≤k lï¿«_≠î*ÕIû±ÒiÉ5‹B·$•Ÿd¥ï€§øò‹g^&ñ)	©-≤Æ„[súíﬁ«¶N[»ÍŸ»ÚòâKﬁÁgõ‰ÔºÑ1LˇÌÔdZyµ∑7{›Å‰=¿Z*‘∏ªû∞(å;[<JóY)›ô8ìX/ñT2¶∫O«ÃÕy<g©¶ÁØÓ7”√Ò
+8‘¯•Aâk=≤€∫n∞®ç∑Jv–ap±¯û5Éí›ocµ¸Uµ∫Î˛Â¶≠R<à˚÷èâAU?Vc˛Y8ﬂ|©1˘’¶HπjÔËqÖ{ÑhΩ±§ŸJ7iUÛ√{Eπ ≥ÊÏD|6J'É>[≠>Í34GwÍ´$ÈI)ÔSqáÍ4®“À|âQ•Õñ*Âûà…SˆkZæ∆:j4n-ÈÕ
+•ÄUs¨¨4*”†ÊW©°*ÀŸPƒ~D∞¶äíh7ƒß≠^c1ú P™ÚÎ™T≠øà:@@I≥∑‚Ö∑œ …¸æ9Œô[z›L,W;S÷˝ÄÀdñ≠ûKkÒóÃ∞ΩÊ*™cıŸîŒ∆\ãEi-ˇ´&oŸñÿ;™⁄ú-ÆkÖáUr)≠+xÔºiîŸ£‹÷å¨\Qùy	h§î®/Úrµ·∆â
+(ä÷n*™ñÕFY[tkÊhZ◊óÊº^‡ΩSäYSQTº∫πp—“’R¸z°«ætß˝/7°qEm	ÑËÏîåyç∏qÜ€iœr¨íjﬁ§A¶W˝∏q∫ô≈Äq Â‹é¶Û÷A~çÜ9M¯µ)kgIÿÓW˚ªΩóõdß∑€;zs∏Ov˜»Î˝∑˚{È®Hno€K•≈á5∞,¨¯"
+i1_TBùÌ}ÙF@(Êü¶∏Á˝≤¯‰YçÊ√&.~πhœköVºl2zò∏i∂IñÕ;áwùç5[%‡ÅÌöeyÕ≤}AtÁç~°
+%œ5Å≤‹a~ ‡e”{©yìu˛≥BÍ∆¬ÅŒ≥Œ∫J˚!"’	-z‡“a◊∂π·$ŒÏdîkVÜÑ[>lù≠ZŒ“ÊÜª<q¿]x±jÿ, 6)ì9fg´.»ÉS‡àÑ•Úr¨Ÿ‘TVßç•Ghö™çp“wÑ¿„∏⁄˙¡1ÈŒIˆ°Ì‹=€∑–Ÿœ}Dª´?Ω‘™ÙèZ§á∏"W÷}ØìaÑãB•∫_m.w†wã"o2°JPîYÌ¡˘?ouÈœ9‚I¢¿Wi"æ∞$]úF°ÛK∆Võ∏’û\V:Á›Qhl^Ô\ó√~Ëæ≠¬?¶ª ø+„FÚ/ö·ÚÒ•Â≠Ï]líﬁ‡¨^XËo£Â‰Ò⁄„S◊≈N÷r±êMƒV≈ëa®U±≥úƒK	,«ÅGìn∆2∑¡4
+ÍœÀ!2Kƒ£æt^kÆOÌE5ˇö#4/ä[#~#ä¨◊≠s>òO±˘l	ZZœÉ÷∂ˆ—ü˝·ºï⁄Çæµ≠~jx£¢ıokªxﬂ&Js|,˘°·m¥÷≠mÌc√[È›û[€˙ÁÜ7;†e‘˘ùîÂ∑qÁËàÔ‹Úç…%ﬁ”ÇÊG!º∞Ú…ÈÕ…)
+òòYF±.!üÂì˚q:ΩT‰∫6Â∫ù æ2‹∂ˇÜE¯‰xπx◊≤yk[æm ÈA?…Ò¸M√Àyã¯÷6”Úo„Æ≈ø3Kœ·™’
+ÖÍª<ƒŒ–¥ÀCY⁄À≈UâÈ!åè—!DÛ£¬ °≠çû∂º>HC J|⁄ÃB±®óÇÒ+seyÕ}™€πR∫}#ÖΩ¬Xﬂ·n‹8∆¨vOv&‡£b_937h˝≈>3Ñ`àõ„3GÏ¡2Ö5–√?ﬁ;_dy4∆Ë,-˚VéqN…	ÛH@·Ï¨£Ù⁄˚Ã8ÇqVw6<gó1èÁ-ª¿îº»á ï `˚Ò8ÃÃî%Ncãa$‰tf~)⁄P~f¡.Ë.U¸hEÎı[éñ·˚`)õé}'Ωt¸aÙÄÊÜﬂ!mKÑÛÃ¥]¥S˝L€2íô"!∫_ëïg∑∏3x·>å.2yt˝æΩ,<ÓÆîØL€«ÍàÇQ>†@~-ªQ-;·©¢_îì¿äeZtE/Øˇn©≥±Ò£˝\Æ)›·≠©R"[0áâåDñÑx≠/ÜsM¸JÅ”(±HvÿÍZ8˛çÇeyµˇvÔêÏΩŸˇÓ˚=“ﬁ{˝Ê∞∑€√bΩ´¿õÔæ±ÛÌ|}pã
+)˝åpØ{G∏C·ròñVëÆÜã{JhësõﬁÆîs8Y:	O”6k899Y;YõÉ˘∫a<ÃÀ‡Cî™Ì/xΩkÜŒXØ•e®u´çﬂ≤¶Ô¸¥>†F"¶õjú;Äøô]¶I≤∑Û‹t±≥
+ÎrWú(†Á¢ãúS∫‡ŒeY;¡ÍVAò˘ª ˘àÁˆ}äóuÄ&Q!‘áÕÔÉD¸…—ÍßÍS,ıí|¢Q;YÈ‘…A_cg·_%≠VM‘í/ÂÜïò9¡π(Î∞mîÃÙ%¢î∞<˚	≤≥M{9ÛW<¶ê<SÈm2îHÌ⁄∆JyXçwƒ°ù}=’fïmhYæTÙ√6¸G¡d§Ωg„dDKnm¬ÌïÅ∏ÁÀádW˛§∆ˇ|¶K=∂¢¥PÜ◊ˆ”<NÌ',"‘s”˘ÒÉ•˛ŸRπC=Ø∑Îße€÷çp>P∫€◊áT™9wıyÒ’ 5HÕ)00Œô?®Kﬂª›B˜Õ|h†ﬁÈ≠ío!˚ÈíiIsh†_ÊTXˆH‰h&ë#ç&√iD€…P›/zìy ·Ô˝`»n⁄!;A:H2ßém±KmŒ<©Ùf√≤"sü˝UíIVÂ\™YFÛ<›öS	ÏlóÔ»WR∆MCûìEUa’⁄¥r”◊ã
+√ y›eªÔXÒbµiå|8qDπ°8ÔÊV'ÍkW~ˆ)\hJ{OŸvô2Kq
+ñ”îdè!Í∂±ºV÷]9ﬂˆv_ºÈíÉ√˝›ÔﬂÏ◊s≤EEÍÏgˇöx›ªÌAgê±ÃUW
+ŸÕ%qÒtg¨É	å…+ßÈ8_ê7[KMßÊ‹Ô¡èÉ]û≠’‹âÛq‰m°´q1ΩGRÃ˝Âl)2∂aﬁñJ∑4~©‹ÍÅÊoÕ®ﬂ[v’ghâ„Â ‡Î¿K …¯√Lf6Ò>m0à%m2™Hßπbº§ú0.‰Vâ—s¯ñÖ.√táëÑu?Pj∑Á0?;¯ÈPË*ø\â^Œ2"ùï˜.⁄`2çÉ4ã^år”ÑÒ•˘Où£|$üF}⁄>2p˘'-W9‚ZÚr~P`Ê7¿®8C<$¡Ôî%<á}Üº„F%4pŒ<
+ÁAJzÿ”Ö;CJ<˜Â~¸Ê≈—õ´ˇ<|±C+YΩ‹ˇÎ˛ø≥ˇÍ‡∞wD›Î£Ô_’ÙKfEœ~IÒ∫wø§´Îöﬁ(œ;[|˜dÌ¸Ï«{ıRﬁ|ë+g3ÔYã\]ì«±s†è¶…(\˝Îî∑F∑:¿ﬂXµ+˛¯üfµ+_è¿¨Ô´Ó5•ƒÓR≈d™^≥±EÓædJ„2A.¢-Î?`‰O	øÉ*≈†ïa–ŸÍéÌÅ˙⁄Ü„ß-√ÍÙ{1"O…∞ì´q77X™™˚Æ)YΩ∑@k€¨OV©EÓ◊ë~ÎTì[^d†øÂ¨≥|ìJ˜¸˜âﬁC§r?m∑QôXÍ åòŒæ≈’+éØ›BD1d@\6z⁄ìä˛»÷õ4Ö ÇæÎ<H{“#¬œ»ìv±±∏˚¥ÚÆA5∫$îè∑Y3g;B˜Ãâ¯qóàÚÈ\AC»,p‹HÊπ) bwceõÿFRá«okv€©~~[™ÿ˝+÷Ã˛å¢8ûgY'e»ß¯(ùo©`d_ª6ŸéÃ—≠^+∑Ìƒ˘o·&8:≈âL`Î`á¬âdÎucw˚øˇ¯Ô&ßÔy–˝&Iµ‹∞É-‡äpç∫øÕﬁ«Áu‡ﬂ;‰ê#B+Ñå"]úÚ§âëÙ +ãs”ÀÍ˙ \ÚÂe~˜¨“Z}5/ﬂê÷¯Ü$§:JóÜ u0ØÌÀ+_ªN®•∑ïÕ¥kË+^áÇ´˘∫Óh∞ZeöÖ˙π_ ◊K∞ûQ¸<ÍüÅQåèwıØ‘ﬂ¶:†~Ëb0xüø8|’;$á{,1Æ~eÁ´îÊ<4¶ÔNÄ9≤EE-ãW÷¢w5]ö…ÊµzMÇ•ß‘£7˙n∆úœOÌ™/5Cß„–∑s66¶e1~´jiÅºË&≈/_√lÆ%ëwæP§
+ë|∆u-	kZ€˛ÖöÕ⁄FÎZ5À™I;˜_eßÒ5ÊX_“µ%¿'è}ÕP
+DZDÃÌ><F«Å,%-rÄhÁxß¢≠•™3XÍ∆!:-ªÔÏí¶p—‰(Ó´då¸èò,⁄∑Œ'úvë¢ˇsÙ-Èa◊ÂÕ2ÌŸ”]ï.ê≠0¶FIn“éWt>m…pZcVS?√sŒ€Ï¸•yÙK@Ç„,LÚÄ‡,Ö†<¸êî7˝à2ÿ„hü£Ì¢·xÎ¥Ø‡∑aﬁ¢˛'`±fp=‹Ó$äÛ¿nOÔ §∫ÓbR˘P"Ù9UnV7vH‚rAÃ‹~∏_Øﬁßv|-QæÄz9“⁄í˚ÜfªœˆV÷sß…¸ñ&(ë:ebgöF%Vgß'ÿëª'u#wÒpÅ©q˝πøE˚DûFÚÙ—£ì…à5˙<ò√Ç	MΩç£˜mt˝„qèr!/BÃ<IFœ`"Ÿª˝q4zñ$8≠x ÿÍ0 ˙gQ8‡O?è<ﬁÄy–«e.>ΩLN¸tí$∞πºÅ%√Oaêè¶õƒ˙ÂMíQw WrõÑÒÚyá_ô£1øtçŒ¡ü€;‰Évr1\ıWãaã£Ñ%•=Özâº˝ªaæÁÈS1«˘;x∏|á’É7?íßdíEG9¨ÿúŒoº›ñπ«¸™ABï	z·Kˆ^Ω∂Ë∫'~Ö.ÔKÂ™ûzDªñóA(.>¿Ø&ΩÚ≠¸®w.—åx.õÙ˚Qñ˝ç3Ω~å
+ zhî‰£…’ÙSî¶IJﬂù¿Ùf∞@s€mvOãÉ¥ÔÄ)ˇ=¬‘ﬁåy˙A*ﬁ”:}<πÕΩAS¨ˇﬂ?#‚Á·ùìA‘y§£vÎŸ wF`}ÿ7∞)Á—)|J7[D$ê3ˆ“Ê¢]åõû4•ÉÜŸŸ;9â˙y[$œ]è` ∏ÍAˆa‘'zìIıQà≤–fK≈n¡Ì˝IQ‘‚ÄmÚ¥ÂMúﬁˆ£Ù¯A§Hñ/ü‚o¶"_^„5ÂG‚“¶◊Œkq N∑¸´ØÙoƒxÇ/*éL©Os¡¨' l—ØS<“9ûÄ‰%£Ñ<èS‘`“»x∫0ÈF'¯xIø/ê9DY•a6∑‡}2yÂ—(„Rº‚úúÇbÄ˜†74ÊÅü€â.‚,œ⁄ÛÓ)π$1+qn. @H|ƒÈo#ŒGô¡4ô∑R	¨`ı≤G‚rAÿi™H7ÂØvk˛#0πt*SúF£ê≈/(}√µ_=Ú¸<„P˘˝î ˘¿éÈ!R}—Ÿ(ßÏ£$|∆î”*ïÕÖRÁè∂g≈…/∏0_†0ù◊®Àît*Û®Vã~rl(â—…dåæ˛ÇT∞∂ù∞M2◊£≥&s Bìj JKL©´©Ø•∫X†è§yªıM29ßu$"æÃ}È”»&ÎC: ∆'IJNÇÛ$] %	≈≈(9ßduZrÊ˙Zs©ÆÒT <m≈®∏o≤`Ù∞ê‹lÙmlA¬L!›˙\è%	åj¢í17iŒÉ” Õò´ﬂ» >éh¿.F´äÁBG¬√ÃÈÙ;ÇnD<ò¡””≠kzˇ‘ƒu˜z‰ƒ∂Ÿõ¶&>ÎwG?ÖÆvL{Õráº§ÙA8ÕËk∏Ûe,¥“Ah‚8ç@]?ãP'äêå”+Nt¢“{1∑ñ^€.3v≤ÇÕ
+ïP±¯HkíÃi‰Ç¯i‚£yZfXY‚4Ò—∫h%¿qlw·wT—”w∏HÕÊƒÜ¡§?üî’ÈÉ~‡O”Ãme»ò-b&4ıﬂV˚f„Äòé≈»¢b∑ÀL˜¢gà±”—2åGãgãY?’†p¬±"QzÂQüu’¿V≥äK∆¸aQ¶.«#÷rÜÿ•˜¯Gƒ8ã∑&wxåÓ^≥Å™Ì=Û∫¯U„ò◊t)Ói
+˙<l/ú≠Be[Ï®()eLMKQòCË§⁄1ø.éÿ2˝∞ß˝Å—òsyWe›Ë[LW@uÓoù-€”?®ò˛<>=ÀÒ^+≠Ìû¬´‘«8‡IcËÌ>[.]Á¬ù.ob˝·ÊÎ“´ûÇ\∏àÙH˙>l˝£üQZ5à˘9AíF˝}†ÿI{t~ı€ zH&$∫«¥Ë-ßÒ“˚Ü`r`aÆdR®œ
+„L(J”FŒíîÊJûSÕcj¡+-õvÍ
+Æ∞~”*Føò†›∑hzøÀ}`∏€z†∫olÃ,I©™nTÑ‰Q¯É´ﬂ∞¢Ú‡∫kÀ…T‹NaØ	BCûÚ}
+¥5åz«Ÿ[ ò∞Õ2âéˆ€Ú[P◊Ë›æ&¥B@Ó:eÅ¥"xÅYíπ0ö#Ø‡≈ﬁ}ÄW∑gJí∞°çÛgá∞˘∞õní÷‚bó˛[\lQY¨qÙu˘ŸåÆ†_<nRt)-!Üâá˙Z«ıUóã‡
+„,.7$≤¢ÎÇÅ]ãƒâu::Dü*k.ﬂ∞d’”§˚b§ßM˚Qa÷p8(ÏXjDvY∏ﬁ,,ÌV<<%Y⁄™ú4Ö}<(∏N»>åÍ”gMéÇÈ]§Ãèò‹“ú6T÷|6∫π—mNÁ£e3©|∑¢á#+°L†j√@¯∫•„‹Ä§£t_ØÑ§[Nf-¸±•ÈÎÖ@ı4"UŒ¥∂’≈ ·ø¢9±+7u£”vö"zœD<Vß/vcó1bUHøoc∞è€DÌç<K.42æ4˜|À≈iBs| ôJxÃ∫	^ié±3ü§ ¬ ±Nâj-ßï5oG9T@íﬂ≠ÆÀ•ƒÀBÁ<@øÆA∂´ò·À4®óíj»	\Ji®DjtkÁ,ÍˇÃÙqB—◊’·œ√t¢é28u”0ÕÆÃ∞+g +ºá¡.–â[64$…[¶±◊˛‡Í∑PF∂/5[∏Úx˚"ä2AEÑÛHa0‘ÉÄ	Ä‘íF	æ…‡íh6t?Ø˛9õlëkJ†QÌß1:“ø0Õå&◊ò€∂∂DÍ$|	ßÆ.àIΩEJÖ2ü´ëxÁ∆F∑0P”T∫u≈ØwÄuA6•Xç%A%◊â∑°ÑKUuÚ`úxÖŸT¶üoÊ	J†- }éç∫ã†Ø†v≤ÉÂãÔﬂhó¯A	¥söqçﬁá◊››π;õ∞ÔUq3+æ+›9óö?ß˛≥4r6√	(1i¨sù)∫´∆∂‡ÆDXﬂ¶.ÒîY7bõ·Ì*|hUíµó
+D:ç˜ìàVÿﬂÙ˜bŒ¸“ﬁAmoì˛’?òÁÑôfE˙”≤Üh•ˆ£¡Ñz–'EåìâıËt3ªí	˝©’n|¬ºﬂÛ´R<2¸qjR%rjîäPπæEÔ‚T†úŒ£{◊ù§ÁX8‘É;RúéÙÄ\ã»HX°aO·Ç3SPˇ∆…(§c‡œ"Xïx¬S◊–ùJcú{ÛVæd™U….‡êT∫õ…ç¬\sÄØˇö†7.¶æ˝lr•q û^Œ◊◊.ÿaÕç®ç4Ÿájñä∏Òç®íoô´§jøRµü€’÷atÙx∂Ûæ.⁄õYÿ¥øKBæ·ÀTkõªâ}C¬m>“C„≤O”Ú>:ã£AHÌÔá∑yDh«ÓÅ‹N): ˜ëT}Ój/ô°ª à?iÅ≈M2,Ûí!ŒIÏar®‹neú∏ù¬∞3R√&ÿ˝rú∆Á¿¥˚∆“@≠‰—ÍÓ4»`ƒi∆=2íSçJ)zÎπ™Ÿ·⁄ÍO∞ˇ95÷ë_cΩï!g3˜IM˘Ç‹¨l1Ñ LÇƒï¢cW¡p'wî(ñ”‹¥ã—ﬁ3„ZhŸUÄÉZ≈ô≤Ñ
+Í‚kÌÖiMÇ4§1·CŒäV¡wèa›@Ë÷¶Äπ›ü€ç¯¸Z€
+!S∫
+°¸»à®û_p˝Ù,⁄,¬Äá˘òH;F{y±∫‹:æÂA<»∞≠Dhï≥´„¿£˚ﬂZ-?ﬁ„RΩ‘Á§Y≠t—X[ÊlTF«-ùJ+∑Kìåö°Ù¯∏RtRÍ’>wPRˆÚˆ∆ßÊç
+|ôJéÿÂ{œºö~Uú≠Èª“‡¯≥‘J}s‘*–¢BìQ»Íœ¥l∑„á‹øZyMn
+ƒr˜…Kî3 £Æpz†è÷πVµ“rg[öcÍ—Âk¢ µJ≤‡*º∑Ö/ù›[,è\ëJ8ò7ØÑ¨Ôx™Ñ3ˆˆ¶©¬Ω{À¥ÎN¨¢r<Ãµs–ó;Æ¸ıõåõëì–»\v_ΩÍ"DdŒ_ª•¶xı>iŸ˛`m6ÕBk‰"€T*ˇx&’é„`!—3˙∑ﬁ,6â´î´„êCÈ¿Úó,_Ì0yoÈ üYwÃgb6»:W∞~∑∞ïwÆ*B≥£»‡#Â™jÎå0Ãª–ﬂ®!EAU‘™M»NÔıŒﬁKl¿≠9 —(ì˛∆0¢æ Äª6]Yø◊ÆzPÌÑÛπ·,Ã€GÓà[qTÀu2Vcg\=w\£dSWu¿˙ABRYæó';æ„,8D·”K-q—E7f»ë°öRXe»Qåhì€È≤ÄﬁC%∫Úh•áÍ¸Pô2¬”	Ìk™=Ç0—˛µFs5°„9mOÒbõ<5h,ûCïΩ ˝‰ÿà  =Ω∆è<óç*•§Ë…ÑØ∂R·kQ"™0.ÿÒîÆÒK9©xéêCû}a'”ó—}íSBjìÄ™SËïGÎA[Ø⁄1,¸Ë¡iÆ¶oUˇvW_’Ò∞Œc]guzNFVM–∫S´*éc]Iıá[I›Îj=SÊ{9VneyDÎ`ag_Xí4Á…iúPmQ…ÅP!ΩrYT@0, ençÚ˙   ˇˇ ⁄S†

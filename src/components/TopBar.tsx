@@ -434,6 +434,22 @@ export default function TopBar({
 
       {/* RIGHT SECTION: Quick Actions, Booking Link, Fullscreen, Notifications & Profile */}
       <div className="flex items-center gap-2.5 shrink-0">
+        {/* Link de Agendamento Online / WhatsApp */}
+        <button 
+          onClick={handleCopyBooking}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs group"
+          title="Copiar e Enviar Link de Agendamento Online para o Paciente"
+        >
+          {copiedLink ? (
+            <Check className="w-3.5 h-3.5 text-emerald-600" />
+          ) : (
+            <Globe className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+          )}
+          <span className="hidden sm:inline">
+            {copiedLink ? 'Link Copiado!' : 'Link de Agendamento'}
+          </span>
+        </button>
+
         {/* Fullscreen toggle */}
         <button 
           onClick={toggleFullScreen}

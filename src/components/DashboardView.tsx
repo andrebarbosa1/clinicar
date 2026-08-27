@@ -31,12 +31,17 @@ import {
   MoreHorizontal,
   Send,
   User,
-  HeartPulse
+  HeartPulse,
+  Share2,
+  Copy,
+  Check,
+  Globe
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { cn, formatCurrency } from '../lib/utils';
 import { DentalRecord } from '../types';
+import ShareBookingModal from './ShareBookingModal';
 
 export default function CustomDashboardView({ 
   filteredData,
@@ -68,6 +73,23 @@ export default function CustomDashboardView({
   const [currentServingPatient, setCurrentServingPatient] = useState<string | null>(null);
   const [activeCalendarDay, setActiveCalendarDay] = useState<number | null>(new Date().getDate());
   const [callingToast, setCallingToast] = useState<string | null>(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [copiedQuickLink, setCopiedQuickLink] = useState(false);
+
+  const handleQuickCopyDoctorLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const params = new URLSearchParams();
+    params.set('booking', 'true');
+    if (clinicName) params.set('clinic', clinicName);
+    if (currentUser?.name) {
+      params.set('doctor', currentUser.name);
+    }
+    const url = `${origin}${pathname}?${params.toString()}`;
+    navigator.clipboard.writeText(url);
+    setCopiedQuickLink(true);
+    setTimeout(() => setCopiedQuickLink(false), 2500);
+  };
 
   // Get logged in user name from session
   const loggedInUser = useMemo(() => {
@@ -487,6 +509,29 @@ export default function CustomDashboardView({
 
           {/* Quick Action Navigation Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
+            <button 
+              onClick={handleQuickCopyDoctorLink}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer border",
+                copiedQuickLink
+                  ? "bg-emerald-600 text-white border-emerald-600"
+                  : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+              )}
+              title="Copiar Link de autoagendamento do médico em 1 clique"
+            >
+              {copiedQuickLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedQuickLink ? 'Link Copiado!' : 'Copiar Meu Link'}</span>
+            </button>
+
+            <button 
+              onClick={() => setShowShareModal(true)}
+              className="px-3 py-1.5 bg-brand-cyan/10 hover:bg-brand-cyan/20 text-brand-cyan border border-brand-cyan/30 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              title="Enviar link de agendamento no WhatsApp do paciente"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Enviar WhatsApp</span>
+            </button>
+
             <button 
               onClick={() => onNavigate?.('Agenda', 'NovoAgendamento')}
               className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
@@ -1005,6 +1050,16 @@ export default function CustomDashboardView({
         </div>
 
       </div>
+
+      {/* Share Booking Modal */}
+      <ShareBookingModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        clinicName={clinicName || 'Oral Admin Odontologia'}
+        clinicId={currentUser?.clinicId || currentUser?.parentTrialId || currentUser?.id}
+        users={users}
+        currentUser={currentUser}
+      />
 
     </div>
   );

@@ -39,7 +39,9 @@ import {
   FileBadge,
   Sliders,
   Settings2,
-  Send
+  Send,
+  Globe,
+  Copy
 } from 'lucide-react';
 import { format, parseISO, differenceInYears, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -51,6 +53,7 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import AnamnesisFormBuilderModal from './AnamnesisFormBuilderModal';
 import AnamnesisPatientEditModal from './AnamnesisPatientEditModal';
 import DentalBudgetModal, { DentalBudget } from './DentalBudgetModal';
+import ShareBookingModal from './ShareBookingModal';
 
 interface PatientRecordViewProps {
   patientName: string;
@@ -496,6 +499,49 @@ export default function PatientRecordView({
     alert(`Plano "${createdPlan.title}" criado com sucesso! Agora você já pode clicar em "Gerar Orçamento" para definir as condições de pagamento.`);
   };
 
+  const [showShareBookingModal, setShowShareBookingModal] = useState(false);
+  const [copiedPatientBookingLink, setCopiedPatientBookingLink] = useState(false);
+
+  const handleSendBookingLinkWhatsApp = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const params = new URLSearchParams();
+    params.set('booking', 'true');
+    if (clinicOwnerId) params.set('clinicId', String(clinicOwnerId));
+    const doc = patientData.dentist || currentUser?.name || '';
+    if (doc && doc !== 'Clínico Geral') {
+      params.set('doctor', doc);
+    }
+    const url = `${origin}${pathname}?${params.toString()}`;
+    
+    const cleanPhone = (patientData.phone || '').replace(/\D/g, '');
+    const finalPhone = cleanPhone.length <= 11 && cleanPhone.length > 0 ? '55' + cleanPhone : cleanPhone;
+    const msg = `Olá, *${patientData.name}*! 👋\n\nSegue o link para você agendar sua consulta online com *${doc || 'nosso dentista'}*:\n\n🔗 ${url}\n\nEscolha o melhor dia e horário para você! 🦷`;
+    const encoded = encodeURIComponent(msg);
+    
+    if (finalPhone) {
+      window.open(`https://wa.me/${finalPhone}?text=${encoded}`, '_blank');
+    } else {
+      setShowShareBookingModal(true);
+    }
+  };
+
+  const handleCopyPatientBookingLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const params = new URLSearchParams();
+    params.set('booking', 'true');
+    if (clinicOwnerId) params.set('clinicId', String(clinicOwnerId));
+    const doc = patientData.dentist || currentUser?.name || '';
+    if (doc && doc !== 'Clínico Geral') {
+      params.set('doctor', doc);
+    }
+    const url = `${origin}${pathname}?${params.toString()}`;
+    navigator.clipboard.writeText(url);
+    setCopiedPatientBookingLink(true);
+    setTimeout(() => setCopiedPatientBookingLink(false), 2500);
+  };
+
   const handleWhatsApp = () => {
     if (!patientData.phone || patientData.phone === 'Não informado') {
       alert('Paciente não possui telefone cadastrado.');
@@ -538,6 +584,11 @@ export default function PatientRecordView({
                   )}>
                     {patientData.status}
                   </span>
+                  {(patient?.origem?.toLowerCase().includes('portal') || (patient as any)?.viaPortal) && (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                      <Globe className="w-2.5 h-2.5" /> Via Portal
+                    </span>
+                  )}
                   <span className="text-[9px] font-mono text-slate-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/10 hidden sm:inline-block">
                     ID: {String(patient.id || '').slice(-6).toUpperCase()}
                   </span>
@@ -554,7 +605,16 @@ export default function PatientRecordView({
             </div>
 
             {/* Right: Sleek Action Shortcuts */}
-            <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+            <div className="flex items-center gap-2 shrink-0 self-end md:self-auto flex-wrap">
+              <button
+                onClick={handleSendBookingLinkWhatsApp}
+                className="px-3 py-1.5 bg-emerald-700/80 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm border border-emerald-500/30 cursor-pointer"
+                title="Enviar Link de Agendamento Online no WhatsApp do Paciente"
+              >
+                <Share2 className="w-3.5 h-3.5 text-emerald-300" />
+                <span>Link de Agendamento</span>
+              </button>
+
               <button
                 onClick={handleWhatsApp}
                 className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
@@ -1671,6 +1731,17 @@ export default function PatientRecordView({
           onSaveBudget={handleSaveBudget}
         />
       )}
+
+      {/* Share Booking Modal */}
+      <ShareBookingModal
+        isOpen={showShareBookingModal}
+        onClose={() => setShowShareBookingModal(false)}
+        clinicName="Oral Admin Odontologia"
+        clinicId={clinicOwnerId}
+        currentUser={currentUser}
+        prefillPatientName={patientData.name}
+        prefillPatientPhone={patientData.phone !== 'Não informado' ? patientData.phone : ''}
+      />
     </div>
   );
 }

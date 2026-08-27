@@ -30,8 +30,12 @@ import {
   Send,
   MoreVertical,
   Activity,
-  List
+  List,
+  Globe,
+  Share2,
+  Copy
 } from 'lucide-react';
+import ShareBookingModal from './ShareBookingModal';
 import { 
   startOfMonth, 
   endOfMonth, 
@@ -74,6 +78,8 @@ interface ScheduleViewProps {
   onOpenChart?: (patientId: string) => void;
   users?: any[];
   currentUser?: any;
+  clinicName?: string;
+  clinicId?: string;
 }
 
 const STATIC_EVENT_TAGS = [
@@ -95,7 +101,9 @@ export default function ScheduleView({
   onCreateAppointment,
   onOpenChart,
   users = [],
-  currentUser
+  currentUser,
+  clinicName,
+  clinicId
 }: ScheduleViewProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -103,6 +111,28 @@ export default function ScheduleView({
   const [selectedDentist, setSelectedDentist] = useState<string>('todos');
   const [searchScheduleTerm, setSearchScheduleTerm] = useState('');
   const [removeAfterDrop, setRemoveAfterDrop] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [copiedQuickLink, setCopiedQuickLink] = useState(false);
+
+  const handleQuickCopyDoctorLink = () => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const params = new URLSearchParams();
+    params.set('booking', 'true');
+    if (clinicId) params.set('clinicId', clinicId);
+    if (clinicName) params.set('clinic', clinicName);
+    
+    // If current user is a doctor or a specific doctor is selected in the filter
+    if (selectedDentist && selectedDentist !== 'todos') {
+      params.set('doctor', selectedDentist);
+    } else if (currentUser?.name && (currentUser?.role?.toLowerCase().includes('dentista') || currentUser?.role?.toLowerCase().includes('médico') || currentUser?.isDentist)) {
+      params.set('doctor', currentUser.name);
+    }
+    const url = `${origin}${pathname}?${params.toString()}`;
+    navigator.clipboard.writeText(url);
+    setCopiedQuickLink(true);
+    setTimeout(() => setCopiedQuickLink(false), 2500);
+  };
 
   // Quick Slot Booking Modal
   const [slotModal, setSlotModal] = useState<{
@@ -497,6 +527,34 @@ export default function ScheduleView({
             </button>
           </div>
 
+          {/* Share & Copy Booking Link Buttons */}
+          <div className="flex items-center gap-1.5">
+            <button 
+              type="button"
+              onClick={handleQuickCopyDoctorLink}
+              className={cn(
+                "flex items-center gap-1.5 font-black text-xs uppercase tracking-wider px-3 py-2 rounded-2xl cursor-pointer transition-all border shrink-0",
+                copiedQuickLink 
+                  ? "bg-emerald-600 text-white border-emerald-600 shadow-xs"
+                  : "bg-emerald-50 hover:bg-emerald-100/80 border-emerald-200 text-emerald-700"
+              )}
+              title="Copiar Link direto de agendamento online do médico"
+            >
+              {copiedQuickLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span className="hidden lg:inline">{copiedQuickLink ? 'Copiado!' : 'Copiar Link'}</span>
+            </button>
+
+            <button 
+              type="button"
+              onClick={() => setShowShareModal(true)}
+              className="flex items-center gap-1.5 bg-brand-cyan/10 hover:bg-brand-cyan/20 border border-brand-cyan/30 text-brand-cyan font-black text-xs uppercase tracking-wider px-3.5 py-2 rounded-2xl cursor-pointer transition-all shrink-0"
+              title="Enviar link de agendamento pelo WhatsApp ou ver opções personalizadas"
+            >
+              <Share2 className="w-4 h-4" />
+              <span className="hidden md:inline">Enviar WhatsApp</span>
+            </button>
+          </div>
+
           {/* New Appointment Primary Button */}
           <button 
             onClick={onAdd}
@@ -831,7 +889,14 @@ export default function ScheduleView({
                                   )}
                                 >
                                   <div className="flex items-center justify-between gap-1">
-                                    <span className="font-black text-[10px] truncate max-w-[80px]">{apt.paciente}</span>
+                                    <div className="flex items-center gap-1 min-w-0">
+                                      <span className="font-black text-[10px] truncate max-w-[80px]">{apt.paciente}</span>
+                                      {(apt.viaPortal || apt.origem?.toLowerCase().includes('portal') || (apt as any).canal?.toLowerCase().includes('portal')) && (
+                                        <span title="Agendado via Portal do Paciente">
+                                          <Globe className="w-2.5 h-2.5 text-brand-cyan shrink-0" />
+                                        </span>
+                                      )}
+                                    </div>
                                     {apt.status === 'Em Atendimento' && (
                                       <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
                                     )}
@@ -1725,6 +1790,16 @@ export default function ScheduleView({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Share Booking Modal */}
+      <ShareBookingModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        clinicName={clinicName || 'Clínica Odontológica'}
+        clinicId={clinicId}
+        users={users}
+        currentUser={currentUser}
+      />
 
     </div>
   );
