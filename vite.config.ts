@@ -13,10 +13,13 @@ export default defineConfig(({mode}) => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'logo.svg'],
+        workbox: {
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+        },
         manifest: {
-          name: 'OdontoDash - Dental Analytics',
-          short_name: 'OdontoDash',
-          description: 'Dashboard profissional para gestão de clínicas odontológicas.',
+          name: 'Clinica odonto - Dental Analytics',
+          short_name: 'Clinica odonto',
+          description: 'Professional dental dashboard for tracking procedures, billing, and clinic performance.',
           theme_color: '#06b6d4',
           icons: [
             {
