@@ -31,13 +31,18 @@ import {
   Mail,
   ShieldCheck,
   ShieldAlert,
-  HardDrive
+  HardDrive,
+  QrCode,
+  Copy,
+  ExternalLink,
+  DollarSign
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency } from '../lib/utils';
 import { SecurityUtils } from '../lib/security';
 import { DentalRecord } from '../types';
+import { generatePixPayload, detectPixKeyType } from '../lib/pix';
 
 interface AdminViewProps {
   users: any[];
@@ -55,12 +60,22 @@ interface AdminViewProps {
   footerText: string;
   providerPhone: string;
   providerName: string;
+  clinicPixKey?: string;
+  clinicPixType?: string;
+  clinicPixBeneficiary?: string;
+  clinicPixCity?: string;
+  clinicPixBank?: string;
   onUpdateSettings: (updates: {
     clinicName?: string;
     clinicLogo?: string | null;
     footerText?: string;
     providerPhone?: string;
     providerName?: string;
+    pixKey?: string;
+    pixType?: string;
+    pixBeneficiary?: string;
+    pixCity?: string;
+    pixBank?: string;
   }) => Promise<void>;
   deferredPrompt?: any;
   onInstallPWA?: () => void;
@@ -82,6 +97,11 @@ export default function AdminView({
   footerText,
   providerPhone,
   providerName,
+  clinicPixKey,
+  clinicPixType,
+  clinicPixBeneficiary,
+  clinicPixCity,
+  clinicPixBank,
   onUpdateSettings,
   deferredPrompt,
   onInstallPWA
@@ -355,6 +375,11 @@ export default function AdminView({
             footerText={footerText}
             providerPhone={providerPhone}
             providerName={providerName}
+            clinicPixKey={clinicPixKey}
+            clinicPixType={clinicPixType}
+            clinicPixBeneficiary={clinicPixBeneficiary}
+            clinicPixCity={clinicPixCity}
+            clinicPixBank={clinicPixBank}
             onUpdateSettings={onUpdateSettings}
             deferredPrompt={deferredPrompt}
             onInstallPWA={onInstallPWA}
@@ -491,6 +516,11 @@ function SettingsSection({
   footerText,
   providerPhone,
   providerName,
+  clinicPixKey,
+  clinicPixType,
+  clinicPixBeneficiary,
+  clinicPixCity,
+  clinicPixBank,
   onUpdateSettings,
   deferredPrompt,
   onInstallPWA
@@ -500,7 +530,46 @@ function SettingsSection({
   const [localLogo, setLocalLogo] = useState<string | null>(clinicLogo || null);
   const [localProviderPhone, setLocalProviderPhone] = useState(providerPhone || '');
   const [localProviderName, setLocalProviderName] = useState(providerName || '');
+
+  // Pix Settings
+  const [localPixKey, setLocalPixKey] = useState(clinicPixKey || '');
+  const [localPixType, setLocalPixType] = useState(clinicPixType || 'EMAIL');
+  const [localPixBeneficiary, setLocalPixBeneficiary] = useState(clinicPixBeneficiary || clinicName || '');
+  const [localPixCity, setLocalPixCity] = useState(clinicPixCity || 'SAO PAULO');
+  const [localPixBank, setLocalPixBank] = useState(clinicPixBank || '');
+  const [copiedTestPix, setCopiedTestPix] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Auto-detect Pix Key Type
+  const detectedPixType = useMemo(() => {
+    if (!localPixKey) return null;
+    return detectPixKeyType(localPixKey);
+  }, [localPixKey]);
+
+  // Generate live EMV Pix QR and payload for preview & test
+  const testPixData = useMemo(() => {
+    if (!localPixKey.trim()) return null;
+    try {
+      return generatePixPayload({
+        key: localPixKey.trim(),
+        name: localPixBeneficiary || localClinicName || 'ODONTODASH CLINICA',
+        city: localPixCity || 'SAO PAULO',
+        amount: 50.00,
+        txid: 'TESTE01',
+        description: 'Teste Chave Pix Clinica'
+      });
+    } catch (e) {
+      return null;
+    }
+  }, [localPixKey, localPixBeneficiary, localClinicName, localPixCity]);
+
+  const handleCopyTestPix = () => {
+    if (testPixData?.payload) {
+      navigator.clipboard.writeText(testPixData.payload);
+      setCopiedTestPix(true);
+      setTimeout(() => setCopiedTestPix(false), 2500);
+    }
+  };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -526,8 +595,13 @@ function SettingsSection({
         footerText: localFooterText,
         providerPhone: localProviderPhone,
         providerName: localProviderName,
+        pixKey: localPixKey.trim(),
+        pixType: localPixType,
+        pixBeneficiary: localPixBeneficiary.trim(),
+        pixCity: localPixCity.trim(),
+        pixBank: localPixBank.trim(),
       });
-      alert('Configurações salvas com sucesso!');
+      alert('Configurações e dados da Chave Pix salvos com sucesso!');
     } catch (err) {
       console.error(err);
       alert('Erro ao salvar preferências.');
@@ -540,8 +614,8 @@ function SettingsSection({
     <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-8">
       <div className="flex items-center justify-between pb-6 border-b border-slate-100">
         <div>
-          <h3 className="text-lg font-bold text-slate-800">Parâmetros & Identidade da Clínica</h3>
-          <p className="text-xs text-slate-400 mt-1">Configure o cabeçalho de documentos, WhatsApp e marca institucional</p>
+          <h3 className="text-lg font-bold text-slate-800">Parâmetros, Identidade & Chave Pix da Clínica</h3>
+          <p className="text-xs text-slate-400 mt-1">Configure o cabeçalho de documentos, dados bancários Pix para cobranças e WhatsApp</p>
         </div>
 
         <button
@@ -618,6 +692,229 @@ function SettingsSection({
           </div>
         </div>
 
+        {/* CHAVE PIX OFICIAL DA CLÍNICA */}
+        <div className="lg:col-span-2 space-y-4 bg-gradient-to-br from-slate-900 via-slate-900 to-indigo-950 text-white p-6 sm:p-7 rounded-3xl border border-brand-cyan/30 shadow-xl text-left">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-brand-cyan/20 text-brand-cyan flex items-center justify-center border border-brand-cyan/30 shrink-0">
+                <QrCode className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-black uppercase tracking-wider text-white">
+                    Chave Pix Oficial da Clínica (Recebimentos & Cobranças)
+                  </h4>
+                  <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[9px] font-bold uppercase tracking-wider">
+                    Padrão Bacen EMV
+                  </span>
+                </div>
+                <p className="text-xs text-slate-350 mt-0.5">
+                  Insira a chave Pix da clínica. Ela será utilizada automaticamente na geração de QR Codes, comprovantes e no Portal do Paciente.
+                </p>
+              </div>
+            </div>
+
+            {localPixKey ? (
+              <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0">
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                Chave Cadastrada ({detectedPixType || localPixType})
+              </span>
+            ) : (
+              <span className="px-3 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                Sem chave configurada
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+            {/* Form Fields */}
+            <div className="lg:col-span-7 space-y-4">
+              {/* Type Selector */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-350">
+                  Tipo de Chave Pix
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {[
+                    { id: 'CNPJ', label: 'CNPJ' },
+                    { id: 'CPF', label: 'CPF' },
+                    { id: 'EMAIL', label: 'E-mail' },
+                    { id: 'PHONE', label: 'Celular' },
+                    { id: 'EVP', label: 'Aleatória' },
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setLocalPixType(t.id)}
+                      className={cn(
+                        "py-2 px-2.5 rounded-xl text-xs font-black transition-all border text-center cursor-pointer",
+                        localPixType === t.id
+                          ? "bg-brand-cyan text-slate-950 border-brand-cyan shadow-md shadow-brand-cyan/20"
+                          : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-750 hover:text-white"
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pix Key Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-350 flex items-center gap-1.5">
+                    <KeyRound className="w-3.5 h-3.5 text-brand-cyan" />
+                    Chave Pix
+                  </label>
+                  {detectedPixType && detectedPixType !== 'UNKNOWN' && (
+                    <span className="text-[10px] text-brand-cyan font-bold">
+                      Detectado: {detectedPixType}
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={localPixKey}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setLocalPixKey(val);
+                      const detected = detectPixKeyType(val);
+                      if (detected !== 'UNKNOWN') {
+                        setLocalPixType(detected);
+                      }
+                    }}
+                    placeholder={
+                      localPixType === 'CNPJ' ? '00.000.000/0001-00' :
+                      localPixType === 'CPF' ? '000.000.000-00' :
+                      localPixType === 'EMAIL' ? 'pix@suaclinica.com.br' :
+                      localPixType === 'PHONE' ? '+55 (11) 99999-9999' :
+                      '123e4567-e89b-12d3-a456-426614174000'
+                    }
+                    className="w-full p-3.5 bg-slate-800 border border-slate-700 rounded-xl text-xs font-mono font-bold text-white outline-none focus:border-brand-cyan shadow-inner placeholder:text-slate-500"
+                  />
+                  {localPixKey && (
+                    <button
+                      type="button"
+                      onClick={() => setLocalPixKey('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                      title="Limpar chave"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Beneficiary Name & City */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-350">
+                    Titular / Razão Social (Beneficiário)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={25}
+                    value={localPixBeneficiary}
+                    onChange={(e) => setLocalPixBeneficiary(e.target.value)}
+                    placeholder="Ex: ODONTO CLINICA LTDA"
+                    className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-brand-cyan shadow-inner placeholder:text-slate-500 uppercase"
+                  />
+                  <p className="text-[9px] text-slate-400">Nome que aparece no banco do paciente (máx. 25 letras)</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-350">
+                    Cidade da Conta (Padrão Bacen)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={15}
+                    value={localPixCity}
+                    onChange={(e) => setLocalPixCity(e.target.value)}
+                    placeholder="Ex: SAO PAULO"
+                    className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-brand-cyan shadow-inner placeholder:text-slate-500 uppercase"
+                  />
+                  <p className="text-[9px] text-slate-400">Sem acentos, ex: SAO PAULO (máx. 15 letras)</p>
+                </div>
+              </div>
+
+              {/* Bank Institution */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-350">
+                  Instituição Financeira / Banco (Opcional)
+                </label>
+                <input
+                  type="text"
+                  value={localPixBank}
+                  onChange={(e) => setLocalPixBank(e.target.value)}
+                  placeholder="Ex: Nubank, Itaú, Banco do Brasil, Inter, Bradesco, C6"
+                  className="w-full p-3 bg-slate-800 border border-slate-700 rounded-xl text-xs font-bold text-white outline-none focus:border-brand-cyan shadow-inner placeholder:text-slate-500"
+                />
+              </div>
+            </div>
+
+            {/* Live QR Code & Copia e Cola Preview Box */}
+            <div className="lg:col-span-5 bg-slate-950/80 p-5 rounded-2xl border border-slate-800 flex flex-col items-center justify-between text-center">
+              <div className="space-y-2 w-full">
+                <span className="text-[10px] font-black uppercase tracking-wider text-brand-cyan">
+                  Preview do QR Code Pix
+                </span>
+
+                {testPixData ? (
+                  <div className="space-y-3 flex flex-col items-center">
+                    <div className="w-36 h-36 bg-white p-2.5 rounded-2xl border-2 border-brand-cyan shadow-lg shadow-brand-cyan/10 flex items-center justify-center">
+                      <img 
+                        src={testPixData.qrCodeUrl} 
+                        alt="QR Code Pix" 
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs font-black text-white">{localPixBeneficiary || localClinicName || 'CLÍNICA ODONTO'}</p>
+                      <p className="text-[10px] text-slate-400 font-mono mt-0.5">{localPixCity || 'SAO PAULO'}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-36 h-36 mx-auto bg-slate-900 rounded-2xl border border-dashed border-slate-700 flex flex-col items-center justify-center text-slate-500 p-3 space-y-1">
+                    <QrCode className="w-8 h-8 text-slate-600" />
+                    <span className="text-[10px] text-center">Digite a chave ao lado para gerar o QR Code</span>
+                  </div>
+                )}
+              </div>
+
+              {testPixData && (
+                <div className="w-full pt-3 space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyTestPix}
+                    className={cn(
+                      "w-full py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md",
+                      copiedTestPix
+                        ? "bg-emerald-600 text-white"
+                        : "bg-brand-cyan hover:bg-cyan-400 text-slate-950"
+                    )}
+                  >
+                    {copiedTestPix ? (
+                      <>
+                        <Check className="w-4 h-4" /> Código Pix Copiado!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" /> Copiar Código de Teste
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[9px] text-slate-400 leading-tight">
+                    Você pode colar o código no app do seu banco para testar a chave.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* WhatsApp & Integrations */}
         <div className="space-y-4">
           <h4 className="text-xs font-black uppercase tracking-wider text-brand-cyan flex items-center gap-2">
@@ -645,6 +942,41 @@ function SettingsSection({
                 placeholder="Ex: CLÍNICA ODONTODASH"
                 className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-brand-cyan"
               />
+            </div>
+          </div>
+        </div>
+
+        {/* Pagamentos Reais & Gateway Pix/Stripe */}
+        <div className="space-y-4">
+          <h4 className="text-xs font-black uppercase tracking-wider text-brand-cyan flex items-center gap-2">
+            <CreditCard className="w-4 h-4" /> Outros Meios de Pagamento & Cartões
+          </h4>
+
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-slate-800">Terminal & Links de Cartão de Crédito</div>
+                <p className="text-[10px] text-slate-400 mt-0.5">Checkout seguro integrado e link de pagamento para WhatsApp</p>
+              </div>
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                <Check className="w-3 h-3 text-emerald-600" /> Ativo
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-1">
+                <div className="flex items-center gap-1.5 text-slate-700 text-xs font-bold">
+                  <CreditCard className="w-3.5 h-3.5 text-blue-600" /> Cartão de Crédito & Débito
+                </div>
+                <p className="text-[10px] text-slate-500">Links de cobrança com parcelamento e confirmação em tempo real na ficha do paciente.</p>
+              </div>
+
+              <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-1">
+                <div className="flex items-center gap-1.5 text-slate-700 text-xs font-bold">
+                  <Share2 className="w-3.5 h-3.5 text-emerald-600" /> Disparo por WhatsApp
+                </div>
+                <p className="text-[10px] text-slate-500">Envio direto do código Pix Copia e Cola e link de cartão pelo WhatsApp do paciente.</p>
+              </div>
             </div>
           </div>
         </div>

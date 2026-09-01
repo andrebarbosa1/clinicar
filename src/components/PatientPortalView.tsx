@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Globe, 
   Smartphone, 
@@ -30,6 +30,7 @@ import {
   Send
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { generatePixPayload } from '../lib/pix';
 
 interface PatientPortalViewProps {
   clinicName: string;
@@ -38,6 +39,10 @@ interface PatientPortalViewProps {
   documents: any[];
   doctorsList: string[];
   proceduresList: string[];
+  clinicPixKey?: string;
+  clinicPixBeneficiary?: string;
+  clinicPixCity?: string;
+  clinicPixBank?: string;
   onBookAppointment?: (newBooking: any) => void;
   onBackToSystem?: () => void;
 }
@@ -49,12 +54,35 @@ export default function PatientPortalView({
   documents,
   doctorsList,
   proceduresList,
+  clinicPixKey,
+  clinicPixBeneficiary,
+  clinicPixCity,
+  clinicPixBank,
   onBookAppointment,
   onBackToSystem
 }: PatientPortalViewProps) {
   // Selected simulated patient or guest
   const [selectedPatientId, setSelectedPatientId] = useState<string>(patients[0]?.id || 'guest');
   const [activeTab, setActiveTab] = useState<'booking' | 'appointments' | 'documents' | 'payments'>('booking');
+
+  // Dynamic real Pix calculation
+  const pixData = useMemo(() => {
+    const key = clinicPixKey || 'contato@odontodash.com.br';
+    const beneficiary = clinicPixBeneficiary || clinicName || 'ODONTODASH CLINICA';
+    const city = clinicPixCity || 'SAO PAULO';
+    try {
+      return generatePixPayload({
+        key,
+        name: beneficiary,
+        city,
+        amount: 200.00,
+        txid: 'PORTALPACIENTE',
+        description: `Consulta/Procedimento ${beneficiary}`
+      });
+    } catch (e) {
+      return null;
+    }
+  }, [clinicPixKey, clinicPixBeneficiary, clinicName, clinicPixCity]);
 
   // Booking state
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>(proceduresList[0] || 'Limpeza & Profilaxia');
@@ -571,42 +599,67 @@ export default function PatientPortalView({
             <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 flex flex-col sm:flex-row items-center gap-6">
               {/* Dynamic Pix QR Code Box */}
               <div className="w-40 h-40 bg-white p-3 rounded-2xl border-2 border-slate-200 shadow-xs flex flex-col items-center justify-center shrink-0">
-                <div className="w-full h-full bg-slate-950 rounded-lg flex items-center justify-center text-white relative overflow-hidden">
-                  {/* Visual QR Code Pattern */}
-                  <QrCode className="w-28 h-28 text-cyan-400" />
-                </div>
+                {pixData?.qrCodeUrl ? (
+                  <img 
+                    src={pixData.qrCodeUrl} 
+                    alt="QR Code Pix" 
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-slate-950 rounded-lg flex items-center justify-center text-white relative overflow-hidden">
+                    <QrCode className="w-28 h-28 text-cyan-400" />
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3 flex-1 text-center sm:text-left">
                 <div>
                   <span className="text-[10px] font-bold uppercase text-slate-400">Beneficiário</span>
-                  <p className="text-sm font-black text-slate-900">{clinicName}</p>
+                  <p className="text-sm font-black text-slate-900">{clinicPixBeneficiary || clinicName}</p>
                 </div>
+
+                {clinicPixKey && (
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400">Chave Pix</span>
+                    <p className="text-xs font-mono font-bold text-slate-800">{clinicPixKey}</p>
+                  </div>
+                )}
+
+                {clinicPixBank && (
+                  <div>
+                    <span className="text-[10px] font-bold uppercase text-slate-400">Banco / Instituição</span>
+                    <p className="text-xs font-bold text-slate-800">{clinicPixBank} • {clinicPixCity || 'SAO PAULO'}</p>
+                  </div>
+                )}
 
                 <div>
                   <span className="text-[10px] font-bold uppercase text-slate-400">Valor Sugerido</span>
                   <p className="text-xl font-black text-emerald-600">R$ 200,00</p>
                 </div>
 
-                <button
-                  onClick={() => handleCopyPix('00020126580014br.gov.bcb.pix0136123e4567-e89b-12d3-a456-4266141740005204000053039865406200.005802BR5913OdontoDash6009SaoPaulo62070503***6304E2CA')}
-                  className={cn(
-                    "w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs",
-                    copiedPix ? "bg-emerald-600 text-white" : "bg-brand-cyan hover:bg-cyan-600 text-white"
-                  )}
-                >
-                  {copiedPix ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      Código Pix Copiado!
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      Copiar Código Pix (Copia e Cola)
-                    </>
-                  )}
-                </button>
+                {pixData?.payload ? (
+                  <button
+                    onClick={() => handleCopyPix(pixData.payload)}
+                    className={cn(
+                      "w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs",
+                      copiedPix ? "bg-emerald-600 text-white" : "bg-brand-cyan hover:bg-cyan-600 text-white"
+                    )}
+                  >
+                    {copiedPix ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                        Código Pix Copiado!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        Copiar Código Pix (Copia e Cola)
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <div className="text-xs text-slate-400 font-medium">Chave Pix não configurada pela clínica</div>
+                )}
               </div>
             </div>
           </div>

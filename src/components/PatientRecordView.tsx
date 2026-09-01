@@ -73,6 +73,11 @@ interface PatientRecordViewProps {
   onUploadDocument: (doc: any) => Promise<boolean>;
   currentUser: any;
   canSeeClinical?: boolean;
+  clinicName?: string;
+  clinicPixKey?: string;
+  clinicPixBeneficiary?: string;
+  clinicPixCity?: string;
+  clinicPixBank?: string;
 }
 
 export default function PatientRecordView({
@@ -92,7 +97,12 @@ export default function PatientRecordView({
   onDeleteDocument,
   onUploadDocument,
   currentUser,
-  canSeeClinical = true
+  canSeeClinical = true,
+  clinicName = 'Consultório Odontológico',
+  clinicPixKey = '',
+  clinicPixBeneficiary = '',
+  clinicPixCity = 'SAO PAULO',
+  clinicPixBank = ''
 }: PatientRecordViewProps) {
   const [activeTab, setActiveTab] = useState<
     'Resumo' | 'Odontograma' | 'Anamnese' | 'Evolução' | 'Documentos' | 'Imagens' | 'Planos' | 'Orçamentos' | 'Histórico'
@@ -1728,6 +1738,11 @@ export default function PatientRecordView({
             dentist: patientData.dentist,
           }}
           currentUser={currentUser}
+          clinicName={clinicName}
+          clinicPixKey={clinicPixKey}
+          clinicPixBeneficiary={clinicPixBeneficiary}
+          clinicPixCity={clinicPixCity}
+          clinicPixBank={clinicPixBank}
           onSaveBudget={handleSaveBudget}
         />
       )}

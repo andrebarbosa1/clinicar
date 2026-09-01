@@ -34,7 +34,9 @@ import {
   Activity,
   Award,
   LogIn,
-  ExternalLink
+  ExternalLink,
+  CheckCircle2,
+  RotateCcw
 } from 'lucide-react';
 import { 
   doc, 
@@ -45,6 +47,13 @@ import {
   onSnapshot, 
   updateDoc 
 } from 'firebase/firestore';
+import { 
+  SaaSPlanConfig, 
+  DEFAULT_SAAS_PLANS, 
+  subscribeSaaSPlans, 
+  saveSaaSPlans, 
+  resetSaaSPlans 
+} from '../lib/saasPlans';
 
 interface UserProfile {
   id: string;
@@ -108,7 +117,7 @@ interface SuperAdminViewProps {
   db: any; // Firestore instance
 }
 
-type TabType = 'users' | 'metrics' | 'security' | 'announcements' | 'vouchers';
+type TabType = 'users' | 'metrics' | 'plans' | 'security' | 'announcements' | 'vouchers';
 
 export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAccessClinic, clinicName, db }: SuperAdminViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>('users');
@@ -121,6 +130,11 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
   const [isDeleting, setIsDeleting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // SaaS Plans Management State
+  const [saasPlans, setSaasPlans] = useState<SaaSPlanConfig[]>(DEFAULT_SAAS_PLANS);
+  const [isSavingPlans, setIsSavingPlans] = useState(false);
+  const [newFeatureInputs, setNewFeatureInputs] = useState<{ [planId: string]: string }>({});
 
   // States for live fetched metrics and logs
   const [recordsCountByClinic, setRecordsCountByClinic] = useState<Record<string, number>>({});
@@ -253,12 +267,18 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
     };
     fetchClinicActivityRecords();
 
+    // 6. Subscribe to real-time SaaS plans configuration
+    const unsubPlans = subscribeSaaSPlans(db, (plans) => {
+      setSaasPlans(plans);
+    });
+
     return () => {
       unsubSecurityLogs();
       unsubDeviceLogs();
       unsubNotice();
       unsubCoupons();
       unsubSettings();
+      unsubPlans();
     };
   }, [db]);
 
@@ -558,6 +578,128 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
     }
   };
 
+  // Action: Save SaaS Plans Configuration to Firestore
+  const handleSaveAllPlans = async () => {
+    if (!db) return;
+    setIsSavingPlans(true);
+    setSuccessMsg(null);
+    setErrorMsg(null);
+
+    try {
+      await saveSaaSPlans(db, saasPlans);
+      setSuccessMsg("Tabela de Preços e Recursos dos Planos SaaS salva com sucesso no Firestore!");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to save SaaS plans:", err);
+      setErrorMsg(`Erro ao salvar planos: ${err?.message || err}`);
+    } finally {
+      setIsSavingPlans(false);
+    }
+  };
+
+  // Action: Reset SaaS Plans to system default
+  const handleResetPlansToDefault = async () => {
+    if (!db) return;
+    if (!window.confirm("Deseja realmente restaurar os preços e recursos padrão dos planos SaaS (Lite R$149, Pro R$299, Platinum R$599)?")) return;
+    
+    setIsSavingPlans(true);
+    try {
+      await resetSaaSPlans(db);
+      setSaasPlans(DEFAULT_SAAS_PLANS);
+      setSuccessMsg("Planos SaaS restaurados para os valores padrão com sucesso!");
+      setTimeout(() => setSuccessMsg(null), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg("Erro ao restaurar planos padrão: " + (err?.message || err));
+    } finally {
+      setIsSavingPlans(false);
+    }
+  };
+
+  // Action: Update field of a plan
+  const handleUpdatePlanField = (index: number, field: keyof SaaSPlanConfig, value: any) => {
+    setSaasPlans(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: value };
+      return updated;
+    });
+  };
+
+  // Action: Update limits of a plan
+  const handleUpdatePlanLimits = (index: number, limitKey: 'dentists' | 'patients', value: number) => {
+    setSaasPlans(prev => {
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        limits: {
+          ...updated[index].limits,
+          [limitKey]: value
+        }
+      };
+      return updated;
+    });
+  };
+
+  // Action: Add feature to plan
+  const handleAddFeatureToPlan = (planId: string, index: number) => {
+    const text = newFeatureInputs[planId]?.trim();
+    if (!text) return;
+    setSaasPlans(prev => {
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        features: [...updated[index].features, text]
+      };
+      return updated;
+    });
+    setNewFeatureInputs(prev => ({ ...prev, [planId]: '' }));
+  };
+
+  // Action: Remove feature from plan
+  const handleRemoveFeatureFromPlan = (planIndex: number, featureIndex: number) => {
+    setSaasPlans(prev => {
+      const updated = [...prev];
+      const newFeatures = [...updated[planIndex].features];
+      newFeatures.splice(featureIndex, 1);
+      updated[planIndex] = {
+        ...updated[planIndex],
+        features: newFeatures
+      };
+      return updated;
+    });
+  };
+
+  // Action: Add new custom plan
+  const handleAddNewPlan = () => {
+    const newId = `Custom_${Date.now().toString(36).toUpperCase()}`;
+    const newPlan: SaaSPlanConfig = {
+      id: newId,
+      name: 'Novo Plano',
+      price: 399,
+      period: 'mês',
+      color: 'from-purple-500 to-indigo-600',
+      badgeColor: 'bg-purple-50 text-purple-600 border-purple-100',
+      tagline: 'Descrição do novo plano customizado.',
+      limits: { dentists: 10, patients: 2000 },
+      features: [
+        'Acesso completo a todos os módulos',
+        'Suporte prioritário via WhatsApp'
+      ],
+      active: true
+    };
+    setSaasPlans(prev => [...prev, newPlan]);
+  };
+
+  // Action: Delete a plan
+  const handleDeletePlan = (index: number) => {
+    if (saasPlans.length <= 1) {
+      alert("É necessário manter ao menos 1 plano no sistema.");
+      return;
+    }
+    if (!window.confirm(`Deseja excluir o plano "${saasPlans[index].name}"?`)) return;
+    setSaasPlans(prev => prev.filter((_, i) => i !== index));
+  };
+
   // Action: Save the edited user parameters
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -708,6 +850,14 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
         >
           <BarChart3 className="w-4 h-4" />
           Painel de Conversão & Métricas
+        </button>
+
+        <button
+          onClick={() => setActiveTab('plans')}
+          className={`px-4 py-3 rounded-xl font-bold text-xs shrink-0 flex items-center gap-2 transition-all ${activeTab === 'plans' ? 'bg-slate-900 text-white' : 'hover:bg-slate-50 text-slate-600'}`}
+        >
+          <Sparkles className="w-4 h-4 text-brand-cyan" />
+          Planos & Preços SaaS
         </button>
 
         <button
@@ -1631,6 +1781,282 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
               Os cupons podem ser divulgados para os clientes utilizarem no menu de suas assinaturas (no painel e botão de faturamento) para expandir e testar os planos.
             </div>
           </div>
+        </div>
+      )}
+
+      {/* TAB: SAAS PLANS & PRICING MANAGER */}
+      {activeTab === 'plans' && (
+        <div className="space-y-6 text-left animate-in fade-in duration-300">
+          
+          {/* Header Banner & Global Actions */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-2xl bg-brand-cyan/10 text-brand-cyan flex items-center justify-center">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">Gestão de Planos & Preços SaaS</h3>
+                  <p className="text-xs text-slate-500">Configure os valores cobrados em reais (R$), limites de dentistas/pacientes, slogans e recursos inclusos.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+              <button
+                type="button"
+                disabled={isSavingPlans}
+                onClick={handleResetPlansToDefault}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Restaurar planos para valores padrão (Lite R$149, Pro R$299, Platinum R$599)"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Restaurar Padrão
+              </button>
+
+              <button
+                type="button"
+                onClick={handleAddNewPlan}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Novo Plano
+              </button>
+
+              <button
+                type="button"
+                disabled={isSavingPlans}
+                onClick={handleSaveAllPlans}
+                className="px-5 py-2.5 bg-brand-cyan hover:bg-brand-cyan-dark disabled:opacity-50 text-slate-900 text-xs font-black uppercase tracking-wider rounded-xl transition-all shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                {isSavingPlans ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Salvando Firestore...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" /> Salvar Todos os Preços
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Notice */}
+          <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl flex items-center gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <p className="text-xs text-emerald-800 leading-relaxed">
+              <strong>Sincronização em Tempo Real:</strong> As alterações salvas nesta tela refletem imediatamente na página <strong>Assinatura & Planos</strong> de todos os usuários, atualizando a geração de <strong>QR Codes Pix</strong>, checkout com <strong>cartão</strong> e faturamento.
+            </p>
+          </div>
+
+          {/* Grid of Editable Plan Cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+            {saasPlans.map((plan, planIdx) => {
+              const isDefaultPlan = ['Lite', 'Pro', 'Platinum'].includes(plan.id);
+
+              return (
+                <div 
+                  key={plan.id || planIdx}
+                  className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden flex flex-col justify-between transition-all hover:border-slate-300"
+                >
+                  {/* Card Top / Header */}
+                  <div className="p-6 bg-slate-50 border-b border-slate-100 space-y-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-brand-cyan" />
+                        <span className="text-xs font-black uppercase tracking-wider text-slate-800">
+                          {plan.name} ({plan.id})
+                        </span>
+                      </div>
+
+                      {!isDefaultPlan && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePlan(planIdx)}
+                          className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Excluir este plano customizado"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Editable Plan Name & Flag */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Nome do Plano</label>
+                        <input
+                          type="text"
+                          value={plan.name}
+                          onChange={(e) => handleUpdatePlanField(planIdx, 'name', e.target.value)}
+                          className="w-full text-xs font-bold p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Destaque / Badge</label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Mais Vendido"
+                          value={plan.flag || ''}
+                          onChange={(e) => handleUpdatePlanField(planIdx, 'flag', e.target.value)}
+                          className="w-full text-xs p-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Editable Price (R$) & Period */}
+                    <div className="grid grid-cols-2 gap-3 bg-white p-3 rounded-2xl border border-slate-200/80">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                          <CreditCard className="w-3 h-3 text-brand-cyan" /> Preço (R$)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">R$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={plan.price}
+                            onChange={(e) => handleUpdatePlanField(planIdx, 'price', Number(e.target.value) || 0)}
+                            className="w-full text-base font-black pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-900 font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Período de Cobrança</label>
+                        <select
+                          value={plan.period || 'mês'}
+                          onChange={(e) => handleUpdatePlanField(planIdx, 'period', e.target.value)}
+                          className="w-full text-xs font-semibold p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                        >
+                          <option value="mês">mês (Mensal)</option>
+                          <option value="ano">ano (Anual)</option>
+                          <option value="trimestre">trimestre (Trimestral)</option>
+                          <option value="semestre">semestre (Semestral)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card Body: Tagline, Limits & Features */}
+                  <div className="p-6 space-y-4 flex-1">
+                    {/* Tagline */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Subtítulo / Slogan</label>
+                      <input
+                        type="text"
+                        value={plan.tagline || ''}
+                        onChange={(e) => handleUpdatePlanField(planIdx, 'tagline', e.target.value)}
+                        placeholder="Ex: Ideal para clínicas em expansão"
+                        className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-700"
+                      />
+                    </div>
+
+                    {/* Limits (Dentists & Patients) */}
+                    <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-100">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
+                          <span>Dentistas</span>
+                          <span className="text-[9px] text-slate-400 font-normal">9999=Ilimitado</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={plan.limits?.dentists ?? 1}
+                          onChange={(e) => handleUpdatePlanLimits(planIdx, 'dentists', Number(e.target.value) || 1)}
+                          className="w-full text-xs font-bold p-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center justify-between">
+                          <span>Pacientes</span>
+                          <span className="text-[9px] text-slate-400 font-normal">99999=Ilimitado</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={plan.limits?.patients ?? 100}
+                          onChange={(e) => handleUpdatePlanLimits(planIdx, 'patients', Number(e.target.value) || 100)}
+                          className="w-full text-xs font-bold p-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Features List */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+                        Recursos Inclusos ({plan.features?.length || 0})
+                      </label>
+
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        {plan.features?.map((feat, fIdx) => (
+                          <div 
+                            key={fIdx}
+                            className="flex items-center justify-between gap-2 p-2 bg-slate-50 rounded-xl border border-slate-100 text-xs text-slate-700 group hover:bg-slate-100/70 transition-all"
+                          >
+                            <span className="truncate flex-1">• {feat}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveFeatureFromPlan(planIdx, fIdx)}
+                              className="text-slate-400 hover:text-rose-500 p-1 transition-colors cursor-pointer"
+                              title="Remover este item"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Add new feature input */}
+                      <div className="flex gap-2 pt-1">
+                        <input
+                          type="text"
+                          placeholder="Adicionar recurso..."
+                          value={newFeatureInputs[plan.id] || ''}
+                          onChange={(e) => setNewFeatureInputs({ ...newFeatureInputs, [plan.id]: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddFeatureToPlan(plan.id, planIdx);
+                            }
+                          }}
+                          className="flex-1 text-xs p-2 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-cyan text-slate-700"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAddFeatureToPlan(plan.id, planIdx)}
+                          className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-all shrink-0"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Inserir
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card Footer / Quick Status */}
+                  <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
+                    <span className="text-slate-500 text-[11px]">
+                      Valor final no checkout: <strong className="text-slate-800 font-bold">R$ {plan.price}/{plan.period}</strong>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isSavingPlans}
+                      onClick={handleSaveAllPlans}
+                      className="px-3 py-1.5 bg-slate-900 hover:bg-black text-white text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                    >
+                      Salvar
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
         </div>
       )}
 

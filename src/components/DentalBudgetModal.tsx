@@ -17,11 +17,15 @@ import {
   Stethoscope,
   ShieldCheck,
   Clock,
-  ChevronDown
+  ChevronDown,
+  QrCode,
+  Copy,
+  Check
 } from 'lucide-react';
 import { format, addDays, isValid, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { formatCurrency, cn } from '../lib/utils';
+import { generatePixPayload } from '../lib/pix';
 
 export interface BudgetItem {
   id: string;
@@ -75,6 +79,10 @@ interface DentalBudgetModalProps {
   };
   currentUser?: any;
   clinicName?: string;
+  clinicPixKey?: string;
+  clinicPixBeneficiary?: string;
+  clinicPixCity?: string;
+  clinicPixBank?: string;
   onSaveBudget: (budget: DentalBudget) => void | Promise<any>;
 }
 
@@ -103,11 +111,16 @@ export default function DentalBudgetModal({
   patient,
   currentUser,
   clinicName = 'Consultório Odontológico',
+  clinicPixKey = '',
+  clinicPixBeneficiary = '',
+  clinicPixCity = 'SAO PAULO',
+  clinicPixBank = '',
   onSaveBudget,
 }: DentalBudgetModalProps) {
   const currentBudget = initialBudget || existingBudget;
   const [activeView, setActiveView] = useState<'editor' | 'preview'>(currentBudget ? 'preview' : 'editor');
   const [isSaving, setIsSaving] = useState(false);
+  const [copiedPixPayload, setCopiedPixPayload] = useState(false);
 
   // Form States
   const [budgetNumber, setBudgetNumber] = useState('');
@@ -236,6 +249,32 @@ export default function DentalBudgetModal({
     return finalTotal / inst;
   }, [finalTotal, installments]);
 
+  // Real EMV Pix Payload & QR Code calculation for this budget
+  const budgetPixData = useMemo(() => {
+    if (!clinicPixKey || !clinicPixKey.trim() || finalTotal <= 0) return null;
+    try {
+      return generatePixPayload({
+        key: clinicPixKey.trim(),
+        name: clinicPixBeneficiary || clinicName || 'CLINICA ODONTOLOGICA',
+        city: clinicPixCity || 'SAO PAULO',
+        amount: finalTotal,
+        txid: (budgetNumber || `ORC${Date.now()}`).replace(/[^a-zA-Z0-9]/g, '').slice(0, 25),
+        description: `Orcamento ${budgetNumber} - ${patient.name}`.slice(0, 50)
+      });
+    } catch (e) {
+      console.warn("Could not generate Pix for budget:", e);
+      return null;
+    }
+  }, [clinicPixKey, clinicPixBeneficiary, clinicName, clinicPixCity, finalTotal, budgetNumber, patient.name]);
+
+  const handleCopyBudgetPix = () => {
+    if (budgetPixData?.payload) {
+      navigator.clipboard.writeText(budgetPixData.payload);
+      setCopiedPixPayload(true);
+      setTimeout(() => setCopiedPixPayload(false), 2500);
+    }
+  };
+
   const handleAddItem = (procedureName: string, price: number, teeth?: string) => {
     const newItem: BudgetItem = {
       id: `item-${Date.now()}-${Math.random()}`,
@@ -335,6 +374,13 @@ export default function DentalBudgetModal({
       paymentDesc = `${paymentMethod}: ${formatCurrency(finalTotal)}`;
     }
 
+    const pixSection = (clinicPixKey && clinicPixKey.trim()) ? 
+`\n📱 *DADOS PARA PAGAMENTO PIX:*
+*Beneficiário:* ${clinicPixBeneficiary || clinicName}
+*Chave Pix:* ${clinicPixKey}
+${clinicPixBank ? `*Banco:* ${clinicPixBank}\n` : ''}*Cidade:* ${clinicPixCity || 'SAO PAULO'}
+${budgetPixData?.payload ? `\n*Código Pix Copia e Cola:*\n\`\`\`${budgetPixData.payload}\`\`\`\n` : ''}` : '';
+
     const msg = 
 `🦷 *ORÇAMENTO ODONTOLÓGICO - ${clinicName.toUpperCase()}*
 
@@ -356,7 +402,7 @@ ${itemsSummary}
 
 💳 *CONDIÇÕES DE PAGAMENTO:*
 ${paymentDesc}
-
+${pixSection}
 ${notes ? `📝 *Observações:* ${notes}\n\n` : ''}Ficamos à total disposição para tirar dúvidas e agendar o início do seu tratamento! ✨`;
 
     window.open(`https://wa.me/${finalPhone}?text=${encodeURIComponent(msg)}`, '_blank');
@@ -692,6 +738,21 @@ ${notes ? `📝 *Observações:* ${notes}\n\n` : ''}Ficamos à total disposiçã
                     ))}
                   </div>
 
+                  {paymentMethod === 'À Vista (PIX/Dinheiro)' && clinicPixKey && (
+                    <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl space-y-1">
+                      <div className="flex items-center gap-1.5 text-emerald-800 text-[11px] font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Chave Pix configurada: <span className="font-mono">{clinicPixKey}</span>
+                      </div>
+                      <p className="text-[10px] text-emerald-700">
+                        {clinicPixBeneficiary ? `Beneficiário: ${clinicPixBeneficiary}` : ''} {clinicPixBank ? `• Banco: ${clinicPixBank}` : ''} {clinicPixCity ? `• Cidade: ${clinicPixCity}` : ''}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        O QR Code oficial e o código Copia e Cola serão gerados automaticamente no orçamento e no WhatsApp.
+                      </p>
+                    </div>
+                  )}
+
                   {paymentMethod === 'Cartão de Crédito' && (
                     <div className="p-3 bg-cyan-50/50 border border-cyan-200/60 rounded-xl space-y-2">
                       <div className="flex items-center justify-between">
@@ -904,6 +965,47 @@ ${notes ? `📝 *Observações:* ${notes}\n\n` : ''}Ficamos à total disposiçã
                   {paymentMethod === 'Cartão de Crédito' && installments > 1 ? ` (${installments}x de ${formatCurrency(installmentValue)} sem juros)` : ''}
                 </div>
               </div>
+
+              {/* PIX Payment Section (Real Data Injection) */}
+              {clinicPixKey && (
+                <div className="p-4 rounded-2xl bg-cyan-50/60 border border-cyan-200/80 flex flex-col sm:flex-row items-center gap-4 text-xs">
+                  {budgetPixData?.qrCodeUrl && (
+                    <div className="w-24 h-24 bg-white p-1.5 rounded-xl border border-cyan-200 shrink-0 shadow-xs flex items-center justify-center">
+                      <img src={budgetPixData.qrCodeUrl} alt="QR Code Pix" className="w-full h-full object-contain" />
+                    </div>
+                  )}
+                  <div className="space-y-1 flex-1 w-full">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-cyan-950 flex items-center gap-1.5 uppercase tracking-wide text-[11px]">
+                        <QrCode className="w-3.5 h-3.5 text-cyan-700 inline" /> Dados para Pagamento via Pix
+                      </span>
+                      {budgetPixData?.payload && (
+                        <button
+                          type="button"
+                          onClick={handleCopyBudgetPix}
+                          className="print:hidden text-[10px] font-bold text-cyan-800 bg-white hover:bg-cyan-100 px-2 py-1 rounded border border-cyan-300 flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          {copiedPixPayload ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                          {copiedPixPayload ? 'Pix Copiado!' : 'Copiar Chave/Código'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-slate-700 pt-1 text-[11px]">
+                      <p><span className="font-semibold text-slate-900">Beneficiário:</span> {clinicPixBeneficiary || clinicName}</p>
+                      <p><span className="font-semibold text-slate-900">Chave PIX:</span> <span className="font-mono">{clinicPixKey}</span></p>
+                      {clinicPixBank && <p><span className="font-semibold text-slate-900">Banco / Instituição:</span> {clinicPixBank}</p>}
+                      <p><span className="font-semibold text-slate-900">Cidade:</span> {clinicPixCity || 'SAO PAULO'}</p>
+                    </div>
+                    {budgetPixData?.payload && (
+                      <div className="mt-1 pt-1 border-t border-cyan-200/60">
+                        <p className="text-[10px] text-slate-500 truncate font-mono select-all">
+                          <span className="font-semibold text-slate-700">Copia e Cola: </span>{budgetPixData.payload}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {notes && (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">

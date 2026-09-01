@@ -20,8 +20,13 @@ import {
   Percent,
   Layers,
   Building2,
-  User
+  User,
+  QrCode,
+  CreditCard,
+  Zap,
+  Plus
 } from 'lucide-react';
+import RealPaymentModal from './RealPaymentModal';
 import { 
   ResponsiveContainer, 
   BarChart, 
@@ -44,6 +49,10 @@ interface FinanceViewProps {
   patients: any[];
   onUpdatePayment: (id: string, status: any) => void;
   clinicName?: string;
+  clinicPixKey?: string;
+  clinicPixBeneficiary?: string;
+  clinicPixCity?: string;
+  clinicPixBank?: string;
   users?: any[];
   currentUser?: any;
 }
@@ -68,10 +77,15 @@ export default function FinanceView({
   patients,
   onUpdatePayment,
   clinicName = 'Oral Admin Odontologia',
+  clinicPixKey,
+  clinicPixBeneficiary,
+  clinicPixCity,
+  clinicPixBank,
   users = [],
   currentUser
 }: FinanceViewProps) {
   const [selectedReceipt, setSelectedReceipt] = useState<DentalRecord | null>(null);
+  const [paymentChargeModalRecord, setPaymentChargeModalRecord] = useState<DentalRecord | null>(null);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [filterStatus, setFilterStatus] = useState<string>('todos');
   const [filterDentist, setFilterDentist] = useState<string>('todos');
@@ -422,6 +436,33 @@ export default function FinanceView({
               </select>
             </div>
           )}
+
+          {/* Real Payment Quick Action */}
+          <button
+            onClick={() => {
+              // Pick first pending record or generic charge
+              const firstPending = data.find(d => d.statusPagamento !== 'Pago');
+              if (firstPending) {
+                setPaymentChargeModalRecord(firstPending);
+              } else if (data.length > 0) {
+                setPaymentChargeModalRecord(data[0]);
+              } else {
+                setPaymentChargeModalRecord({
+                  id: 'charge-' + Date.now(),
+                  paciente: 'Paciente Avulso',
+                  procedimento: 'Procedimento Clínico',
+                  dentista: currentUser?.name || 'Cirurgião Dentista',
+                  valor: 150,
+                  statusPagamento: 'Pendente',
+                  data: new Date().toISOString().split('T')[0]
+                } as any);
+              }
+            }}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span>Cobrança Pix/Cartão</span>
+          </button>
         </div>
       </div>
 
@@ -823,6 +864,7 @@ export default function FinanceView({
                 <th className="px-4 py-3">Profissional</th>
                 <th className="px-4 py-3 text-right">Valor</th>
                 <th className="px-4 py-3 text-center">Status Pagamento</th>
+                <th className="px-4 py-3 text-center">Cobrança Real</th>
                 <th className="px-4 py-3 text-center">Recibo</th>
               </tr>
             </thead>
@@ -863,6 +905,21 @@ export default function FinanceView({
                     </td>
                     <td className="px-4 py-3 text-center">
                       <button
+                        onClick={() => setPaymentChargeModalRecord(r)}
+                        className={cn(
+                          "px-2.5 py-1 rounded-lg text-[11px] font-black inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs",
+                          r.statusPagamento === 'Pago'
+                            ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200/80"
+                            : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white"
+                        )}
+                        title="Gerar Pix Copia e Cola Oficial, QR Code e Link de Cartão"
+                      >
+                        <QrCode className="w-3 h-3" />
+                        <span>{r.statusPagamento === 'Pago' ? 'Ver Cobrança' : 'Cobrar Pix/Cartão'}</span>
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <button
                         onClick={() => setSelectedReceipt(r)}
                         disabled={r.statusPagamento !== 'Pago'}
                         className={cn(
@@ -881,7 +938,7 @@ export default function FinanceView({
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400 text-xs">
+                  <td colSpan={8} className="px-4 py-12 text-center text-slate-400 text-xs">
                     Nenhum lançamento financeiro encontrado com os filtros selecionados.
                   </td>
                 </tr>
@@ -975,6 +1032,14 @@ export default function FinanceView({
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Valor Quitado</span>
                       <span className="text-2xl font-black text-brand-cyan font-mono">{formatCurrency(selectedReceipt.valor)}</span>
                     </div>
+
+                    {clinicPixKey && (
+                      <div className="pt-2 text-[10px] text-slate-400 border-t border-dashed border-slate-200 text-center space-y-0.5">
+                        <p className="font-semibold text-slate-600">Dados Pix da Clínica:</p>
+                        <p>Beneficiário: <strong className="text-slate-700">{clinicPixBeneficiary || clinicName}</strong> • Chave: <strong className="font-mono text-slate-700">{clinicPixKey}</strong></p>
+                        {clinicPixBank && <p>Instituição Financeira: <strong className="text-slate-700">{clinicPixBank}</strong> • {clinicPixCity || 'SAO PAULO'}</p>}
+                      </div>
+                    )}
                   </div>
 
                   <div className="pt-6 flex flex-col items-center text-center">
@@ -988,6 +1053,28 @@ export default function FinanceView({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Real Payment Modal (PIX / Stripe / Other methods) */}
+      {paymentChargeModalRecord && (
+        <RealPaymentModal
+          isOpen={!!paymentChargeModalRecord}
+          onClose={() => setPaymentChargeModalRecord(null)}
+          title={`Cobrança: ${paymentChargeModalRecord.procedimento || 'Procedimento Clínico'}`}
+          description={`Atendimento odontológico de ${paymentChargeModalRecord.paciente}`}
+          amount={paymentChargeModalRecord.valor || 0}
+          patientName={paymentChargeModalRecord.paciente}
+          patientPhone={patients.find(p => p.name === paymentChargeModalRecord.paciente)?.phone}
+          patientEmail={patients.find(p => p.name === paymentChargeModalRecord.paciente)?.email}
+          recordId={paymentChargeModalRecord.id}
+          clinicPixKey={clinicPixKey}
+          clinicPixName={clinicPixBeneficiary || clinicName}
+          clinicPixBank={clinicPixBank}
+          clinicCity={clinicPixCity || 'SAO PAULO'}
+          onPaymentConfirmed={({ method }) => {
+            onUpdatePayment(paymentChargeModalRecord.id, 'Pago');
+          }}
+        />
+      )}
     </div>
   );
 }

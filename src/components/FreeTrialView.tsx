@@ -70,14 +70,17 @@ export function FreeTrialView({ onBack, onStartTrial, clinicLogo, footerText }: 
     try {
       await onStartTrial({
         name: name.trim(),
+        fullName: name.trim(),
         clinicName: clinicName.trim(),
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
         cpf: cpf.trim(),
         username: username.trim(),
         password: password.trim(),
-        plan: selectedPlan,
-        modules: selectedModules
+        plan: selectedPlan || 'Pro',
+        modules: selectedModules,
+        selectedModules: selectedModules,
+        specialty: 'Geral'
       });
     } catch (err: any) {
       console.error(err);

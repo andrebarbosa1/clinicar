@@ -130,6 +130,7 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { app, db, auth, isFirebaseConfigured } from './lib/firebase';
+import { cleanFirestorePayload } from './lib/firestoreUtils';
 export { app, db, auth };
 
 import SaaSAssinaturaView from './components/SaaSAssinaturaView';
@@ -763,6 +764,11 @@ export default function App() {
   const [footerText, setFooterText] = useState('© 2026 Clínica Odontológica | CRO-SP 123456');
   const [providerPhone, setProviderPhone] = useState(() => localStorage.getItem('odonto_cfg_providerPhone') || '+55 (47) 99999-9999');
   const [providerName, setProviderName] = useState(() => localStorage.getItem('odonto_cfg_providerName') || 'MB.SISTEMAS');
+  const [clinicPixKey, setClinicPixKey] = useState(() => localStorage.getItem('odonto_cfg_pixKey') || '');
+  const [clinicPixType, setClinicPixType] = useState(() => localStorage.getItem('odonto_cfg_pixType') || 'EMAIL');
+  const [clinicPixBeneficiary, setClinicPixBeneficiary] = useState(() => localStorage.getItem('odonto_cfg_pixBeneficiary') || '');
+  const [clinicPixCity, setClinicPixCity] = useState(() => localStorage.getItem('odonto_cfg_pixCity') || 'SAO PAULO');
+  const [clinicPixBank, setClinicPixBank] = useState(() => localStorage.getItem('odonto_cfg_pixBank') || '');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isFreeTrialView, setIsFreeTrialView] = useState(false);
   const [showTreatmentPlanModal, setShowTreatmentPlanModal] = useState(false);
@@ -1131,6 +1137,26 @@ export default function App() {
           setProviderName(d.providerName);
           localStorage.setItem('odonto_cfg_providerName', d.providerName);
         }
+        if (d.pixKey !== undefined) {
+          setClinicPixKey(d.pixKey);
+          localStorage.setItem('odonto_cfg_pixKey', d.pixKey);
+        }
+        if (d.pixType) {
+          setClinicPixType(d.pixType);
+          localStorage.setItem('odonto_cfg_pixType', d.pixType);
+        }
+        if (d.pixBeneficiary) {
+          setClinicPixBeneficiary(d.pixBeneficiary);
+          localStorage.setItem('odonto_cfg_pixBeneficiary', d.pixBeneficiary);
+        }
+        if (d.pixCity) {
+          setClinicPixCity(d.pixCity);
+          localStorage.setItem('odonto_cfg_pixCity', d.pixCity);
+        }
+        if (d.pixBank) {
+          setClinicPixBank(d.pixBank);
+          localStorage.setItem('odonto_cfg_pixBank', d.pixBank);
+        }
       } else {
         // Valores padrão para clínicas que ainda não customizaram suas configurações
         const fallbackName = currentUser?.clinicName || 'mbsolucoes';
@@ -1257,10 +1283,10 @@ export default function App() {
               const userSnap = await getDoc(userRef);
               if (!userSnap.exists()) {
                 console.log(`Seeding initial user: ${initialUser.name}`);
-                await setDoc(userRef, {
+                await setDoc(userRef, cleanFirestorePayload({
                   ...initialUser,
                   createdAt: new Date().toISOString()
-                });
+                }));
               } else if (initialUser.id === '1' && !seedFlag) {
                 // Special case for first run only if needed, but usually we just want the seed
                 console.log(`Initial admin ${initialUser.name} already exists.`);
@@ -1277,12 +1303,12 @@ export default function App() {
             const foundInitial = INITIAL_USERS.find(u => (u as any).email === auth.currentUser?.email);
             
             if (foundInitial) {
-               await setDoc(mappingRef, {
+               await setDoc(mappingRef, cleanFirestorePayload({
                  userDocId: foundInitial.id,
-                 name: foundInitial.name,
-                 role: foundInitial.role,
+                 name: foundInitial.name || 'Admin',
+                 role: foundInitial.role || 'Admin',
                  updatedAt: new Date().toISOString()
-               });
+               }));
             }
           }
 
@@ -1356,12 +1382,12 @@ export default function App() {
                 finalUserData = { ...docFound.data(), id: docFound.id, firebaseUid: user.uid };
                 
                 // Create the missing mapping
-                await setDoc(doc(db, 'users_by_uid', user.uid), {
+                await setDoc(doc(db, 'users_by_uid', user.uid), cleanFirestorePayload({
                   userDocId: finalUserData.id,
-                  name: finalUserData.name,
-                  role: finalUserData.role,
+                  name: finalUserData.name || finalUserData.username || 'Usuário',
+                  role: finalUserData.role || 'Admin',
                   updatedAt: new Date().toISOString()
-                });
+                }));
                 console.log("Auto-mapped new user:", finalUserData.name);
               }
             }
@@ -1386,12 +1412,12 @@ export default function App() {
              
              // Create the mapping for future lookups
              try {
-                await setDoc(doc(db, 'users_by_uid', user.uid), {
+                await setDoc(doc(db, 'users_by_uid', user.uid), cleanFirestorePayload({
                   userDocId: foundInitial.id,
-                  name: foundInitial.name,
-                  role: foundInitial.role,
+                  name: foundInitial.name || 'Admin',
+                  role: foundInitial.role || 'Admin',
                   updatedAt: new Date().toISOString()
-                });
+                }));
              } catch(e) { console.error("Mapping creation failed:", e); }
           } else {
              // Truly unknown user
@@ -1840,8 +1866,8 @@ export default function App() {
 
     const user: any = {
       id,
-      name: newUser.name,
-      role: newUser.role,
+      name: newUser.name || newUser.fullName || newUser.username || 'Profissional',
+      role: newUser.role || 'Dentista',
       modules: newUser.modules || (newUser.role === 'Admin' ? 'Todos' : (newUser.role === 'Dentista' ? 'Dashboard, Agenda, Pacientes' : (newUser.role === 'Recepcionista' ? 'Dashboard, Agenda, Pacientes' : 'Agenda, Pacientes, Financeiro'))),
       username: newUser.username || (newUser.name || "user").toLowerCase().replace(' ', '.'),
       password: newUser.password || '123',
@@ -1855,7 +1881,7 @@ export default function App() {
     
     try {
       console.log("Iniciando criação de usuário no Firestore:", user);
-      await setDoc(doc(db, 'users', id), user);
+      await setDoc(doc(db, 'users', id), cleanFirestorePayload(user));
       console.log("Sucesso: Usuário gravado!");
       return true;
     } catch (e: any) {
@@ -1871,11 +1897,11 @@ export default function App() {
       // Remove id from the data to be updated in the document content
       const { id, ...dataToUpdate } = updatedData;
       
-      // Update with exact data from UI
-      await setDoc(userRef, {
+      // Update with exact data from UI sanitized against undefined values
+      await setDoc(userRef, cleanFirestorePayload({
         ...dataToUpdate,
         updatedAt: new Date().toISOString()
-      }, { merge: true });
+      }), { merge: true });
       
       console.log(`[Users] Usuário ${userId} salvo em Firestore com sucesso.`, {
         username: dataToUpdate.username,
@@ -2167,13 +2193,13 @@ export default function App() {
       }, { merge: true });
 
       // 2. Update current doctor status in Firestore
-      if (doctor) {
+      if (doctor && doctor.id) {
         try {
-          await setDoc(doc(db, 'users', doctor.id), {
+          await setDoc(doc(db, 'users', doctor.id), cleanFirestorePayload({
             availability: 'em_atendimento',
-            currentPatient: record.paciente,
-            servingSince: servingTime
-          }, { merge: true });
+            currentPatient: record.paciente || null,
+            servingSince: servingTime || null
+          }), { merge: true });
         } catch (doctorErr) {
           console.warn("Could not update doctor status in Firestore (continuing anyway):", doctorErr);
         }
@@ -2215,13 +2241,13 @@ export default function App() {
       }, { merge: true });
 
       // 2. Update doctor status in Firestore
-      if (doctor) {
+      if (doctor && doctor.id) {
         try {
-          await setDoc(doc(db, 'users', doctor.id), {
+          await setDoc(doc(db, 'users', doctor.id), cleanFirestorePayload({
             availability: 'disponivel',
             currentPatient: null,
             servingSince: null
-          }, { merge: true });
+          }), { merge: true });
         } catch (doctorErr) {
           console.warn("Could not update doctor status in Firestore (continuing anyway):", doctorErr);
         }
@@ -2240,22 +2266,22 @@ export default function App() {
 
   const handleLogin = async (userProfile: any) => {
     // Link the logical user to the current Firebase Auth session if present
-    if (auth.currentUser) {
+    if (auth.currentUser && userProfile?.id) {
       try {
         console.log("Sincronizando perfil com Firebase...");
         // Link logical ID to UID
-        await setDoc(doc(db, 'users_by_uid', auth.currentUser.uid), {
+        await setDoc(doc(db, 'users_by_uid', auth.currentUser.uid), cleanFirestorePayload({
           userDocId: userProfile.id,
-          name: userProfile.name,
-          role: userProfile.role,
+          name: userProfile.name || userProfile.username || 'Usuário',
+          role: userProfile.role || 'Admin',
           updatedAt: new Date().toISOString()
-        });
+        }));
 
         // Update main user record
-        await setDoc(doc(db, 'users', userProfile.id), {
+        await setDoc(doc(db, 'users', userProfile.id), cleanFirestorePayload({
           firebaseUid: auth.currentUser.uid,
           lastLogin: new Date().toISOString()
-        }, { merge: true });
+        }), { merge: true });
 
         userProfile.firebaseUid = auth.currentUser.uid;
       } catch (e) {
@@ -2353,25 +2379,41 @@ export default function App() {
     }
   };
 
-  const handleUpdateSettings = async (updates: { clinicName?: string; clinicLogo?: string | null; footerText?: string; providerPhone?: string; providerName?: string }) => {
+  const handleUpdateSettings = async (updates: { 
+    clinicName?: string; 
+    clinicLogo?: string | null; 
+    footerText?: string; 
+    providerPhone?: string; 
+    providerName?: string;
+    pixKey?: string;
+    pixType?: string;
+    pixBeneficiary?: string;
+    pixCity?: string;
+    pixBank?: string;
+  }) => {
     const clinicOwnerId = currentUser?.parentTrialId || currentUser?.clinicId || (currentUser?.isTrial ? currentUser.id : (currentUser?.role === 'Admin' ? currentUser.id : (currentUser?.id === '2' || currentUser?.id === '3' ? '1' : currentUser?.id || '1')));
     const docId = `clinic-${clinicOwnerId}`;
 
     try {
-      await setDoc(doc(db, 'settings', docId), {
+      await setDoc(doc(db, 'settings', docId), cleanFirestorePayload({
         id: docId,
         ...updates,
         updatedAt: new Date().toISOString()
-      }, { merge: true });
+      }), { merge: true });
 
       // Atualiza também no perfil do usuário no Firestore para persistir com o usuário admin
       if (currentUser?.id) {
         try {
           const userUpdates: any = { updatedAt: new Date().toISOString() };
           if (updates.clinicName) userUpdates.clinicName = updates.clinicName;
-          await setDoc(doc(db, 'users', currentUser.id), userUpdates, { merge: true });
+          if (updates.pixKey !== undefined && updates.pixKey !== null) userUpdates.pixKey = updates.pixKey;
+          if (updates.pixType) userUpdates.pixType = updates.pixType;
+          if (updates.pixBeneficiary) userUpdates.pixBeneficiary = updates.pixBeneficiary;
+          if (updates.pixCity) userUpdates.pixCity = updates.pixCity;
+          if (updates.pixBank) userUpdates.pixBank = updates.pixBank;
+          await setDoc(doc(db, 'users', currentUser.id), cleanFirestorePayload(userUpdates), { merge: true });
         } catch (uErr) {
-          console.warn("Could not sync clinicName to user doc:", uErr);
+          console.warn("Could not sync pix/clinic info to user doc:", uErr);
         }
       }
 
@@ -2382,6 +2424,26 @@ export default function App() {
       if (updates.providerName) {
         setProviderName(updates.providerName);
         localStorage.setItem('odonto_cfg_providerName', updates.providerName);
+      }
+      if (updates.pixKey !== undefined) {
+        setClinicPixKey(updates.pixKey);
+        localStorage.setItem('odonto_cfg_pixKey', updates.pixKey);
+      }
+      if (updates.pixType) {
+        setClinicPixType(updates.pixType);
+        localStorage.setItem('odonto_cfg_pixType', updates.pixType);
+      }
+      if (updates.pixBeneficiary) {
+        setClinicPixBeneficiary(updates.pixBeneficiary);
+        localStorage.setItem('odonto_cfg_pixBeneficiary', updates.pixBeneficiary);
+      }
+      if (updates.pixCity) {
+        setClinicPixCity(updates.pixCity);
+        localStorage.setItem('odonto_cfg_pixCity', updates.pixCity);
+      }
+      if (updates.pixBank) {
+        setClinicPixBank(updates.pixBank);
+        localStorage.setItem('odonto_cfg_pixBank', updates.pixBank);
       }
     } catch (e: any) {
       handleFirestoreError(e, OperationType.UPDATE, `settings/${docId}`);
@@ -2566,42 +2628,48 @@ export default function App() {
               const trialIdGenerated = `trial-${Date.now()}`;
               try {
                 // Salva as configurações diretamente no documento isolado do trial gerado
-                await setDoc(doc(db, 'settings', `clinic-${trialIdGenerated}`), {
+                await setDoc(doc(db, 'settings', `clinic-${trialIdGenerated}`), cleanFirestorePayload({
                   id: `clinic-${trialIdGenerated}`,
                   clinicName: clinicNameValue,
                   updatedAt: new Date().toISOString()
-                }, { merge: true });
+                }), { merge: true });
               } catch (e) {
                 console.error("Erro ao atualizar configurações no Firestore:", e);
               }
               
-              const selectedMods = details.selectedModules && details.selectedModules.length > 0
+              const rawName = (details.name || details.fullName || details.username || 'Dr(a). Usuário').trim();
+              const rawCpf = (details.cpf || '').replace(/\D/g, '');
+              const selectedMods = (details.selectedModules && details.selectedModules.length > 0)
                 ? details.selectedModules
-                : ['Dashboard', 'Agenda', 'Pacientes', 'Documentos', 'Retorno', 'Mensagens', 'Estoque', 'Financeiro', 'Administração'];
+                : (details.modules && details.modules.length > 0)
+                  ? details.modules
+                  : ['Dashboard', 'Agenda', 'Pacientes', 'Documentos', 'Retorno', 'Mensagens', 'Estoque', 'Financeiro', 'Administração'];
               const modulesString = selectedMods.length >= 9 ? 'Todos' : selectedMods.join(',');
 
-              const trialUserProfile = {
+              const trialUserProfile: any = {
                 id: trialIdGenerated,
-                name: details.fullName,
-                clinicName: clinicNameValue,
+                name: rawName || 'Dr(a). Usuário',
+                clinicName: clinicNameValue || 'mbsolucoes',
                 clinicId: trialIdGenerated,
                 role: 'Admin',
                 modules: modulesString,
-                username: usernameTrimmed,
-                password: details.password.trim(),
-                email: emailNormalized,
-                phone: phoneTrimmed,
-                normalizedPhone: phoneDigits,   // Field stored for future digit-normalized lookup checks
-                cpf: details.cpf.replace(/\D/g, ''), // Store raw digits only
+                username: usernameTrimmed || `trial_${Date.now()}`,
+                password: (details.password || '123456').trim(),
+                email: emailNormalized || '',
+                phone: phoneTrimmed || '',
+                normalizedPhone: phoneDigits || '',
+                cpf: rawCpf || '',
                 isTrial: true,
-                trialPlan: details.plan,
-                trialSpecialty: details.specialty,
-                trialModules: selectedMods,
-                trialStartedAt: new Date().toISOString()
+                trialPlan: details.plan || 'Pro',
+                trialSpecialty: details.specialty || 'Geral',
+                trialModules: selectedMods || [],
+                trialStartedAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
               };
 
               try {
-                await setDoc(doc(db, 'users', trialUserProfile.id), trialUserProfile);
+                await setDoc(doc(db, 'users', trialUserProfile.id), cleanFirestorePayload(trialUserProfile));
               } catch (e) {
                 console.error("Erro ao persistir profil de trial no Firestore:", e);
                 throw e; // Bubble up to let the View display the error
@@ -2679,6 +2747,11 @@ export default function App() {
             setSubPage('Editar');
           }}
           currentUser={currentUser}
+          clinicName={clinicName}
+          clinicPixKey={clinicPixKey}
+          clinicPixBeneficiary={clinicPixBeneficiary}
+          clinicPixCity={clinicPixCity}
+          clinicPixBank={clinicPixBank}
         />
       );
     }
@@ -2912,6 +2985,10 @@ export default function App() {
             patients={patientsForUser}
             onUpdatePayment={handleUpdatePaymentStatus}
             clinicName={clinicName}
+            clinicPixKey={clinicPixKey}
+            clinicPixBeneficiary={clinicPixBeneficiary || clinicName}
+            clinicPixCity={clinicPixCity}
+            clinicPixBank={clinicPixBank}
             users={users}
             currentUser={currentUser}
           />
@@ -2934,6 +3011,11 @@ export default function App() {
             footerText={footerText}
             providerPhone={providerPhone}
             providerName={providerName}
+            clinicPixKey={clinicPixKey}
+            clinicPixType={clinicPixType}
+            clinicPixBeneficiary={clinicPixBeneficiary}
+            clinicPixCity={clinicPixCity}
+            clinicPixBank={clinicPixBank}
             onUpdateSettings={handleUpdateSettings}
             deferredPrompt={deferredPrompt}
             onInstallPWA={handleInstallPWA}
@@ -2986,6 +3068,10 @@ export default function App() {
             documents={documents}
             doctorsList={doctorsList.filter(d => d !== 'Todos')}
             proceduresList={procedures.filter(p => p !== 'Todos')}
+            clinicPixKey={clinicPixKey}
+            clinicPixBeneficiary={clinicPixBeneficiary || clinicName}
+            clinicPixCity={clinicPixCity}
+            clinicPixBank={clinicPixBank}
             onBookAppointment={(newBooking) => {
               handleCreateAppointment(newBooking);
             }}

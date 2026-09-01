@@ -20,6 +20,7 @@ import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { cn } from '../lib/utils';
 import { INITIAL_USERS } from '../types';
+import { cleanFirestorePayload } from '../lib/firestoreUtils';
 
 // Brute force & security utilities
 const SecurityUtils = {
@@ -231,12 +232,11 @@ export default function LoginView({
       try {
         if (db && user.id) {
           const userRef = doc(db, 'users', user.id);
-          await setDoc(userRef, {
-            ...user,
+          await setDoc(userRef, cleanFirestorePayload({
             loginAttempts: 0,
             blocked: false,
             updatedAt: new Date().toISOString()
-          }, { merge: true });
+          }), { merge: true });
         }
       } catch (err) {
         console.warn("Failed reset of login attempts:", err);
@@ -305,7 +305,7 @@ export default function LoginView({
 
     try {
       if (db) {
-        await setDoc(doc(db, 'users', 'super-admin-01'), superAdminUser, { merge: true });
+        await setDoc(doc(db, 'users', 'super-admin-01'), cleanFirestorePayload(superAdminUser), { merge: true });
       }
       await onLogin(superAdminUser);
     } catch (e: any) {
