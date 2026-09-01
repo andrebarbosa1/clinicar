@@ -152,23 +152,23 @@ export default function Sidebar({
 
   return (
     <aside className={cn(
-      "w-64 bg-[#0d1527] text-white border-r border-slate-800 flex flex-col fixed left-0 z-40 select-none shadow-2xl transition-all",
+      "w-64 bg-slate-50/90 backdrop-blur-md text-slate-800 border-r border-slate-200/90 flex flex-col fixed left-0 z-40 select-none shadow-sm transition-all",
       isImpersonating ? "top-10 h-[calc(100vh-2.5rem)]" : "top-0 h-screen"
     )}>
       
       {/* Branding Header */}
-      <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/90 bg-[#0a101f] shrink-0">
+      <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-200/80 bg-white/80 shrink-0">
         <button 
           onClick={() => onNavigate('Dashboard', null)}
-          className="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-cyan to-cyan-400 flex items-center justify-center text-slate-950 shadow-md shadow-cyan-500/20 font-black shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all"
+          className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-600 to-cyan-500 flex items-center justify-center text-white shadow-sm shadow-cyan-600/20 font-black shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all"
         >
-          <Stethoscope className="w-5 h-5 text-slate-950" />
+          <Stethoscope className="w-5 h-5 text-white" />
         </button>
         <div className="min-w-0 flex-1 text-left">
-          <h2 className="text-sm font-black text-white tracking-tight truncate flex items-center gap-1.5">
+          <h2 className="text-sm font-bold text-slate-900 tracking-tight truncate flex items-center gap-1.5">
             <span>{clinicName || 'mbsolucoes'}</span>
           </h2>
-          <p className="text-[10px] text-cyan-400 font-bold tracking-wider uppercase truncate">
+          <p className="text-[10px] text-cyan-600 font-bold tracking-wider uppercase truncate">
             Gestão Odontológica
           </p>
         </div>
@@ -182,7 +182,7 @@ export default function Sidebar({
 
           return (
             <div key={section.title} className="space-y-1">
-              <div className="px-3 text-[10px] font-black tracking-widest text-slate-400 uppercase mb-1.5">
+              <div className="px-3 text-[10px] font-bold tracking-widest text-slate-500 uppercase mb-1.5">
                 {section.title}
               </div>
               
@@ -195,16 +195,16 @@ export default function Sidebar({
                     key={item.id}
                     onClick={() => onNavigate(item.id, null)}
                     className={cn(
-                      "w-full px-3 py-2.5 rounded-xl flex items-center justify-between gap-3 text-xs font-bold transition-all cursor-pointer group",
+                      "w-full px-3 py-2.5 rounded-xl flex items-center justify-between gap-3 text-xs font-semibold transition-all cursor-pointer group",
                       isActive 
-                        ? "bg-brand-cyan text-slate-950 shadow-md shadow-cyan-500/25 font-black scale-[1.01]" 
-                        : "text-slate-300 hover:text-white hover:bg-white/10 active:scale-[0.99]"
+                        ? "bg-cyan-600 text-white shadow-md shadow-cyan-600/20 font-bold" 
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 active:scale-[0.99]"
                     )}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <span className={cn(
                         "transition-colors",
-                        isActive ? "text-slate-950" : "text-slate-400 group-hover:text-cyan-400"
+                        isActive ? "text-white" : "text-slate-500 group-hover:text-cyan-600"
                       )}>
                         {item.icon}
                       </span>
@@ -214,17 +214,17 @@ export default function Sidebar({
                     <div className="flex items-center gap-1.5 shrink-0">
                       {item.badge && (
                         <span className={cn(
-                          "px-2 py-0.5 rounded-full text-[10px] font-black",
+                          "px-2 py-0.5 rounded-full text-[10px] font-bold",
                           isActive 
-                            ? "bg-slate-950 text-white" 
-                            : "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                            ? "bg-white/20 text-white" 
+                            : "bg-cyan-50 text-cyan-700 border border-cyan-200/80"
                         )}>
                           {item.badge}
                         </span>
                       )}
 
                       {isLocked && (
-                        <span className="text-[10px] text-amber-400 font-bold" title="Requer upgrade de plano">
+                        <span className="text-[10px] text-amber-500 font-bold" title="Requer upgrade de plano">
                           ⭐
                         </span>
                       )}
@@ -237,24 +237,24 @@ export default function Sidebar({
         })}
 
         {/* Plan / SaaS Section */}
-        <div className="pt-2 border-t border-slate-800 space-y-1">
-          <div className="px-3 text-[10px] font-black tracking-widest text-slate-400 uppercase mb-1.5">
+        <div className="pt-2 border-t border-slate-200/80 space-y-1">
+          <div className="px-3 text-[10px] font-bold tracking-widest text-slate-500 uppercase mb-1.5">
             CONTA
           </div>
           <button
             onClick={() => onNavigate('Assinatura', null)}
             className={cn(
-              "w-full px-3 py-2 rounded-xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer",
+              "w-full px-3 py-2 rounded-xl flex items-center justify-between text-xs font-semibold transition-all cursor-pointer",
               activePage === 'Assinatura' 
-                ? "bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-black" 
-                : "text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20"
+                ? "bg-amber-500 text-white shadow-md shadow-amber-500/20 font-bold" 
+                : "text-amber-800 bg-amber-50 hover:bg-amber-100/80 border border-amber-200/70"
             )}
           >
             <div className="flex items-center gap-3">
-              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
               <span>Meu Plano</span>
             </div>
-            <span className="text-[10px] font-bold bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded-md border border-amber-400/30">
+            <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-md border border-amber-300/50">
               Pro
             </span>
           </button>
@@ -263,13 +263,13 @@ export default function Sidebar({
             <button
               onClick={() => onNavigate('SuperAdmin', null)}
               className={cn(
-                "w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-bold transition-all cursor-pointer",
+                "w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-semibold transition-all cursor-pointer",
                 activePage === 'SuperAdmin' 
-                  ? "bg-slate-800 text-cyan-300 border border-cyan-500/30 font-black" 
-                  : "text-slate-300 hover:text-white hover:bg-white/10"
+                  ? "bg-cyan-600 text-white shadow-md shadow-cyan-600/20 font-bold" 
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
               )}
             >
-              <Shield className="w-4 h-4 text-brand-cyan shrink-0" />
+              <Shield className="w-4 h-4 text-cyan-600 shrink-0" />
               <span>Painel Master</span>
             </button>
           )}
@@ -277,9 +277,9 @@ export default function Sidebar({
           {isImpersonating && onExitImpersonation && (
             <button
               onClick={onExitImpersonation}
-              className="w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-black bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-xs cursor-pointer"
+              className="w-full px-3 py-2 rounded-xl flex items-center gap-3 text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-xs cursor-pointer"
             >
-              <Shield className="w-4 h-4 text-slate-950 shrink-0" />
+              <Shield className="w-4 h-4 text-white shrink-0" />
               <span>Sair da Clínica</span>
             </button>
           )}
@@ -287,17 +287,17 @@ export default function Sidebar({
       </div>
 
       {/* User Profile & Logout Bottom Area */}
-      <div className="p-3 border-t border-slate-800 bg-[#0a101f] shrink-0">
+      <div className="p-3 border-t border-slate-200/80 bg-white/80 shrink-0">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-slate-800 border border-slate-700 text-cyan-400 font-black text-xs flex items-center justify-center shrink-0 uppercase shadow-xs">
+            <div className="w-8 h-8 rounded-xl bg-cyan-50 border border-cyan-200 text-cyan-700 font-bold text-xs flex items-center justify-center shrink-0 uppercase shadow-2xs">
               {currentUser?.name ? currentUser.name.slice(0, 2) : 'US'}
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-bold text-white truncate leading-tight">
+              <p className="text-xs font-bold text-slate-800 truncate leading-tight">
                 {currentUser?.name || currentUser?.username || 'Usuário'}
               </p>
-              <p className="text-[10px] text-cyan-400/80 font-medium truncate">
+              <p className="text-[10px] text-cyan-700 font-medium truncate">
                 {currentUser?.role || 'Profissional'}
               </p>
             </div>
@@ -305,7 +305,7 @@ export default function Sidebar({
 
           <button
             onClick={onLogout}
-            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
             title="Encerrar Sessão"
           >
             <LogOut className="w-4 h-4" />
