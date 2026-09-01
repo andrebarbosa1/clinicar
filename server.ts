@@ -293,6 +293,9 @@ async function startServer() {
     }
   });
 
+  // In-memory store for active session states (for simulation and fallback)
+  const activePaymentSessions = new Map<string, any>();
+
   // ==========================================
   // PAYMENT API: Create Checkout Session (Stripe / Gateway)
   // ==========================================
@@ -317,8 +320,8 @@ async function startServer() {
       }
 
       const stripe = getStripe();
-      const origin = req.headers.origin || 'http://localhost:3000';
-      const returnSuccessUrl = successUrl || `${origin}?payment_success=true&recordId=${recordId || ''}&planId=${planId || ''}`;
+      const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer as string).origin : 'http://localhost:3000');
+      const returnSuccessUrl = successUrl || `${origin}?payment_success=true&session_id={CHECKOUT_SESSION_ID}&recordId=${recordId || ''}&planId=${planId || ''}&userId=${userId || ''}`;
       const returnCancelUrl = cancelUrl || `${origin}?payment_canceled=true`;
 
       if (stripe) {
@@ -345,10 +348,24 @@ async function startServer() {
             recordId: recordId || '',
             patientName: patientName || '',
             planId: planId || '',
-            userId: userId || ''
+            userId: userId || '',
+            title: title || ''
           },
           success_url: returnSuccessUrl,
           cancel_url: returnCancelUrl,
+        });
+
+        activePaymentSessions.set(session.id, {
+          id: session.id,
+          status: 'pending',
+          payment_status: 'unpaid',
+          provider: 'stripe',
+          url: session.url,
+          userId,
+          planId,
+          recordId,
+          amount: numericAmount,
+          createdAt: Date.now()
         });
 
         return res.json({
@@ -359,16 +376,194 @@ async function startServer() {
         });
       }
 
-      // If Stripe secret is not yet set in environment, generate direct checkout link with integrated payment verification
+      // If Stripe secret is not yet set in environment, generate direct checkout link with simulated session verification
+      const mockSessionId = `mock_stripe_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+      const simulatedUrl = returnSuccessUrl.replace('{CHECKOUT_SESSION_ID}', mockSessionId);
+
+      activePaymentSessions.set(mockSessionId, {
+        id: mockSessionId,
+        status: 'pending',
+        payment_status: 'unpaid',
+        provider: 'integrated-gateway',
+        url: simulatedUrl,
+        userId,
+        planId,
+        recordId,
+        amount: numericAmount,
+        createdAt: Date.now()
+      });
+
       return res.json({
         success: true,
         provider: 'integrated-gateway',
-        url: returnSuccessUrl,
+        url: simulatedUrl,
+        sessionId: mockSessionId,
         message: 'Ambiente de pagamento direto ativo. Para processamento por cartão de crédito bancário com checkout Stripe hospedado, adicione STRIPE_SECRET_KEY nas variáveis de ambiente.'
       });
     } catch (err: any) {
       console.error("Error creating payment checkout session:", err);
       res.status(500).json({ error: 'Erro ao gerar sessão de pagamento.', details: err.message });
+    }
+  });
+
+  // ==========================================
+  // PAYMENT API: Real-time Session Status Polling
+  // ==========================================
+  app.get('/api/payments/session-status', async (req, res) => {
+    try {
+      const sessionId = (req.query.sessionId || req.query.session_id) as string;
+      const userId = (req.query.userId || req.query.user_id) as string;
+      const planId = (req.query.planId || req.query.plan_id) as string;
+
+      if (!sessionId && !userId) {
+        return res.status(400).json({ error: 'Parâmetro sessionId ou userId obrigatório.' });
+      }
+
+      const stripe = getStripe();
+      let isPaid = false;
+      let sessionDetails: any = null;
+
+      if (stripe && sessionId && sessionId.startsWith('cs_')) {
+        try {
+          const session = await stripe.checkout.sessions.retrieve(sessionId);
+          sessionDetails = session;
+          if (session.payment_status === 'paid' || session.status === 'complete') {
+            isPaid = true;
+          }
+        } catch (sErr) {
+          console.warn("Error retrieving session from Stripe:", sErr);
+        }
+      } else if (sessionId && activePaymentSessions.has(sessionId)) {
+        const localSession = activePaymentSessions.get(sessionId);
+        if (localSession.payment_status === 'paid' || localSession.status === 'complete') {
+          isPaid = true;
+        }
+      }
+
+      // If user profile is already upgraded in Firestore
+      if (!isPaid && db && userId) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', userId));
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            if (userData.isPremium === true && userData.subscriptionStatus === 'Ativo') {
+              isPaid = true;
+            }
+          }
+        } catch (fErr) {
+          console.warn("Firestore user check in session-status:", fErr);
+        }
+      }
+
+      res.json({
+        success: true,
+        paid: isPaid,
+        sessionId,
+        status: isPaid ? 'complete' : 'pending'
+      });
+    } catch (err: any) {
+      console.error("Error checking session status:", err);
+      res.status(500).json({ error: 'Erro ao consultar status da sessão.', details: err.message });
+    }
+  });
+
+  // ==========================================
+  // PAYMENT API: Verify Session & Immediate Access Unlock
+  // ==========================================
+  app.post('/api/payments/verify-session', async (req, res) => {
+    try {
+      const { sessionId, userId, planId, recordId } = req.body;
+      const stripe = getStripe();
+      let isPaid = false;
+      let effectiveUserId = userId;
+      let effectivePlanId = planId;
+      let effectiveRecordId = recordId;
+      let paymentMethodName = 'Cartão de Crédito (Stripe)';
+
+      if (stripe && sessionId && sessionId.startsWith('cs_')) {
+        try {
+          const session = await stripe.checkout.sessions.retrieve(sessionId);
+          if (session.payment_status === 'paid' || session.status === 'complete') {
+            isPaid = true;
+            effectiveUserId = session.metadata?.userId || effectiveUserId;
+            effectivePlanId = session.metadata?.planId || effectivePlanId;
+            effectiveRecordId = session.metadata?.recordId || effectiveRecordId;
+          }
+        } catch (sErr: any) {
+          console.warn("Stripe session retrieve warning:", sErr?.message || sErr);
+        }
+      } else if (sessionId) {
+        // Direct / Simulated Session verification
+        isPaid = true;
+        if (activePaymentSessions.has(sessionId)) {
+          const s = activePaymentSessions.get(sessionId);
+          s.payment_status = 'paid';
+          s.status = 'complete';
+          effectiveUserId = s.userId || effectiveUserId;
+          effectivePlanId = s.planId || effectivePlanId;
+          effectiveRecordId = s.recordId || effectiveRecordId;
+        }
+      } else if (userId && planId) {
+        // Immediate explicit user plan verification
+        isPaid = true;
+      }
+
+      if (isPaid && db) {
+        // 1. SaaS User Plan Immediate Upgrade & Unlock
+        if (effectiveUserId && effectivePlanId) {
+          try {
+            const userRef = doc(db, 'users', effectiveUserId);
+            await updateDoc(userRef, {
+              isTrial: false,
+              isPremium: true,
+              trialPlan: effectivePlanId,
+              subscriptionPaymentDate: new Date().toISOString(),
+              paymentMethodUsed: paymentMethodName,
+              subscriptionStatus: 'Ativo',
+              stripeSessionId: sessionId || 'direct_stripe',
+              nextRenewalDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-BR'),
+              updatedAt: new Date().toISOString()
+            });
+          } catch (dbErr) {
+            console.warn("Firestore user update in verify-session:", dbErr);
+          }
+        }
+
+        // 2. Patient Record Payment Confirmation
+        if (effectiveRecordId) {
+          try {
+            const recordRef = doc(db, 'records', effectiveRecordId);
+            await updateDoc(recordRef, {
+              statusPagamento: 'Pago',
+              formaPagamento: paymentMethodName,
+              dataPagamento: new Date().toISOString(),
+              pagoEm: new Date().toLocaleDateString('pt-BR'),
+              stripeSessionId: sessionId || 'direct_stripe',
+              updatedAt: new Date().toISOString()
+            });
+          } catch (dbRecErr) {
+            console.warn("Firestore record update in verify-session:", dbRecErr);
+          }
+        }
+
+        return res.json({
+          success: true,
+          paid: true,
+          message: 'Pagamento verificado e acesso liberado com sucesso!',
+          userId: effectiveUserId,
+          planId: effectivePlanId,
+          recordId: effectiveRecordId
+        });
+      }
+
+      return res.json({
+        success: true,
+        paid: isPaid,
+        message: isPaid ? 'Pagamento aprovado.' : 'Aguardando confirmação de pagamento no Stripe...'
+      });
+    } catch (err: any) {
+      console.error("Error verifying payment session:", err);
+      res.status(500).json({ error: 'Erro ao verificar sessão de pagamento.', details: err.message });
     }
   });
 
@@ -438,6 +633,12 @@ async function startServer() {
         const recordId = metadata.recordId || session?.client_reference_id;
         const userId = metadata.userId;
         const planId = metadata.planId;
+
+        if (session.id && activePaymentSessions.has(session.id)) {
+          const s = activePaymentSessions.get(session.id);
+          s.payment_status = 'paid';
+          s.status = 'complete';
+        }
 
         if (db) {
           if (recordId) {

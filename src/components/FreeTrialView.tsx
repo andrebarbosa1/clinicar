@@ -103,7 +103,7 @@ export function FreeTrialView({ onBack, onStartTrial, clinicLogo, footerText }: 
           </button>
           <div className="flex items-center gap-2 text-brand-cyan text-xs font-black uppercase tracking-wider bg-brand-cyan/10 px-3 py-1.5 rounded-full border border-brand-cyan/20">
             <Sparkles className="w-3.5 h-3.5" />
-            7 Dias Grátis • Sem Cartão
+            15 Dias Grátis • Sem Cartão
           </div>
         </div>
 

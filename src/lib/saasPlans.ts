@@ -81,6 +81,81 @@ export const DEFAULT_SAAS_PLANS: SaaSPlanConfig[] = [
 ];
 
 export const PLANS_CONFIG_DOC = 'saas_plans';
+export const SAAS_PIX_CONFIG_DOC = 'saas_pix_config';
+
+export interface SaaSPixConfig {
+  key: string;
+  name: string;
+  city: string;
+  bank?: string;
+  description?: string;
+}
+
+export const DEFAULT_SAAS_PIX: SaaSPixConfig = {
+  key: '',
+  name: 'ODONTODASH SAAS',
+  city: 'SAO PAULO',
+  bank: '',
+  description: 'Assinatura Plano Odonto'
+};
+
+/**
+ * Subscribes to real-time global SaaS PIX configuration in Firestore.
+ */
+export function subscribeSaaSPixConfig(
+  db: any,
+  callback: (config: SaaSPixConfig) => void
+): () => void {
+  if (!db) {
+    callback(DEFAULT_SAAS_PIX);
+    return () => {};
+  }
+
+  try {
+    const pixDocRef = doc(db, 'system_settings', SAAS_PIX_CONFIG_DOC);
+    const unsubscribe = onSnapshot(pixDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        callback({
+          key: data.key || '',
+          name: data.name || 'ODONTODASH SAAS',
+          city: data.city || 'SAO PAULO',
+          bank: data.bank || '',
+          description: data.description || 'Assinatura Plano Odonto'
+        });
+        return;
+      }
+      callback(DEFAULT_SAAS_PIX);
+    }, (error) => {
+      console.warn("Could not load real-time SaaS PIX config:", error);
+      callback(DEFAULT_SAAS_PIX);
+    });
+
+    return unsubscribe;
+  } catch (err) {
+    console.warn("Failed to subscribe to SaaS PIX config:", err);
+    callback(DEFAULT_SAAS_PIX);
+    return () => {};
+  }
+}
+
+/**
+ * Persists global SaaS PIX configuration in Firestore.
+ */
+export async function saveSaaSPixConfig(db: any, config: SaaSPixConfig): Promise<boolean> {
+  if (!db) return false;
+  try {
+    const pixDocRef = doc(db, 'system_settings', SAAS_PIX_CONFIG_DOC);
+    await setDoc(pixDocRef, {
+      ...config,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+    return true;
+  } catch (err) {
+    console.error("Error saving SaaS PIX config:", err);
+    throw err;
+  }
+}
 
 /**
  * Subscribes to real-time SaaS plans configuration in Firestore.

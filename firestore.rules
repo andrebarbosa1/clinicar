@@ -61,6 +61,10 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
+
     match /system_announcements/{announcementId} {
       allow read, write: if true;
     }

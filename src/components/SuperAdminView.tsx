@@ -52,7 +52,11 @@ import {
   DEFAULT_SAAS_PLANS, 
   subscribeSaaSPlans, 
   saveSaaSPlans, 
-  resetSaaSPlans 
+  resetSaaSPlans,
+  SaaSPixConfig,
+  DEFAULT_SAAS_PIX,
+  subscribeSaaSPixConfig,
+  saveSaaSPixConfig
 } from '../lib/saasPlans';
 
 interface UserProfile {
@@ -135,6 +139,10 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
   const [saasPlans, setSaasPlans] = useState<SaaSPlanConfig[]>(DEFAULT_SAAS_PLANS);
   const [isSavingPlans, setIsSavingPlans] = useState(false);
   const [newFeatureInputs, setNewFeatureInputs] = useState<{ [planId: string]: string }>({});
+
+  // SaaS Global PIX Management State
+  const [saasPixConfig, setSaasPixConfig] = useState<SaaSPixConfig>(DEFAULT_SAAS_PIX);
+  const [isSavingPix, setIsSavingPix] = useState(false);
 
   // States for live fetched metrics and logs
   const [recordsCountByClinic, setRecordsCountByClinic] = useState<Record<string, number>>({});
@@ -272,6 +280,11 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
       setSaasPlans(plans);
     });
 
+    // 7. Subscribe to real-time SaaS PIX configuration
+    const unsubPix = subscribeSaaSPixConfig(db, (pixConfig) => {
+      setSaasPixConfig(pixConfig);
+    });
+
     return () => {
       unsubSecurityLogs();
       unsubDeviceLogs();
@@ -279,6 +292,7 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
       unsubCoupons();
       unsubSettings();
       unsubPlans();
+      unsubPix();
     };
   }, [db]);
 
@@ -575,6 +589,24 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
       setTimeout(() => setSuccessMsg(null), 2500);
     } catch (err) {
       console.warn(err);
+    }
+  };
+
+  // Action: Save SaaS Global PIX Configuration
+  const handleSaveSaaSPix = async () => {
+    if (!db) return;
+    setIsSavingPix(true);
+    setSuccessMsg(null);
+    setErrorMsg(null);
+    try {
+      await saveSaaSPixConfig(db, saasPixConfig);
+      setSuccessMsg("Dados da Chave PIX do SaaS salvos com sucesso no Firestore!");
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error("Failed to save SaaS PIX config:", err);
+      setErrorMsg(`Erro ao salvar Chave Pix do SaaS: ${err?.message || err}`);
+    } finally {
+      setIsSavingPix(false);
     }
   };
 
@@ -1848,6 +1880,117 @@ export default function SuperAdminView({ users, onUpdateUser, onDeleteUser, onAc
             <p className="text-xs text-emerald-800 leading-relaxed">
               <strong>Sincronização em Tempo Real:</strong> As alterações salvas nesta tela refletem imediatamente na página <strong>Assinatura & Planos</strong> de todos os usuários, atualizando a geração de <strong>QR Codes Pix</strong>, checkout com <strong>cartão</strong> e faturamento.
             </p>
+          </div>
+
+          {/* SaaS Global PIX Receiver Configuration Card */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center shrink-0">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                    Chave PIX Oficial de Recebimento de Assinaturas (SaaS)
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
+                      Padrão EMV Bacen
+                    </span>
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Esta é a chave Pix real inserida no painel utilizada para gerar o QR Code Oficial e o Pix Copia e Cola na hora da contratação/ativação dos planos.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isSavingPix}
+                onClick={handleSaveSaaSPix}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
+              >
+                {isSavingPix ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Salvando Pix...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" /> Salvar Chave PIX SaaS
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                  Chave PIX de Recebimento (E-mail, CNPJ, CPF, Celular ou EVP) *
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: financeiro@odontodash.com.br ou 00.000.000/0001-00"
+                  value={saasPixConfig.key}
+                  onChange={(e) => setSaasPixConfig({ ...saasPixConfig, key: e.target.value })}
+                  className="w-full text-xs font-mono font-bold p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:bg-white text-slate-900 transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                  Nome do Beneficiário / Empresa *
+                </label>
+                <input
+                  type="text"
+                  maxLength={25}
+                  placeholder="Ex: ODONTODASH SAAS"
+                  value={saasPixConfig.name}
+                  onChange={(e) => setSaasPixConfig({ ...saasPixConfig, name: e.target.value })}
+                  className="w-full text-xs font-bold p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:bg-white text-slate-900 transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                  Cidade do Titular *
+                </label>
+                <input
+                  type="text"
+                  maxLength={15}
+                  placeholder="Ex: SAO PAULO"
+                  value={saasPixConfig.city}
+                  onChange={(e) => setSaasPixConfig({ ...saasPixConfig, city: e.target.value })}
+                  className="w-full text-xs font-bold p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:bg-white text-slate-900 transition-all"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                  Banco / Instituição Financeira (Opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Nubank, Banco Inter, Itaú, Cora"
+                  value={saasPixConfig.bank || ''}
+                  onChange={(e) => setSaasPixConfig({ ...saasPixConfig, bank: e.target.value })}
+                  className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:bg-white text-slate-800 transition-all"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                  Descrição da Cobrança Pix (Opcional)
+                </label>
+                <input
+                  type="text"
+                  maxLength={40}
+                  placeholder="Ex: Assinatura Mensal OdontoDash"
+                  value={saasPixConfig.description || ''}
+                  onChange={(e) => setSaasPixConfig({ ...saasPixConfig, description: e.target.value })}
+                  className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:bg-white text-slate-800 transition-all"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Grid of Editable Plan Cards */}

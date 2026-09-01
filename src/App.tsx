@@ -645,10 +645,10 @@ export default function App() {
   const isPremiumActive = currentUser?.isPremium === true;
 
   const getTrialDaysRemaining = () => {
-    if (!currentUser?.trialStartedAt) return 14;
+    if (!currentUser?.trialStartedAt) return 15;
     const start = new Date(currentUser.trialStartedAt);
     const bonusDays = Number(currentUser?.trialExtensionDays) || 0;
-    const end = new Date(start.getTime() + (14 + bonusDays) * 24 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + (15 + bonusDays) * 24 * 60 * 60 * 1000);
     const diff = end.getTime() - new Date().getTime();
     const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
     return days > 0 ? days : 0;
@@ -693,7 +693,7 @@ export default function App() {
     }
   }, [isTrialActive, trialDaysRemaining, currentUser?.email]);
 
-  // Handle public booking and confirmation URLs
+  // Handle public booking, confirmation URLs and Stripe Payment Returns
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -709,6 +709,51 @@ export default function App() {
       const apptId = params.get('confirmAppt');
       if (apptId) {
         setConfirmApptId(apptId);
+      }
+
+      // Handle Stripe Checkout Return (Automatic Verification & Access Liberation)
+      if (params.get('payment_success') === 'true') {
+        const sessionId = params.get('session_id');
+        const planId = params.get('planId');
+        const userId = params.get('userId');
+        const recordId = params.get('recordId');
+
+        const sessionUser = JSON.parse(localStorage.getItem('odonto_session') || '{}');
+        const targetUserId = userId || currentUser?.id || sessionUser?.id;
+
+        // Auto-verify with server
+        fetch('/api/payments/verify-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            userId: targetUserId,
+            planId: planId || 'pro',
+            recordId
+          })
+        }).then(res => res.json()).then(data => {
+          if (data.success || data.paid) {
+            console.log("[Stripe] Pagamento identificado com sucesso! Liberando acesso imediatamente...");
+            if (targetUserId) {
+              const upgrade = {
+                isTrial: false,
+                isPremium: true,
+                trialPlan: planId || 'pro',
+                subscriptionStatus: 'Ativo',
+                paymentMethodUsed: 'Cartão de Crédito (Stripe)',
+                subscriptionPaymentDate: new Date().toISOString()
+              };
+              setCurrentUser((prev: any) => ({ ...prev, ...upgrade }));
+              localStorage.setItem('odonto_session', JSON.stringify({ ...(currentUser || sessionUser), ...upgrade }));
+            }
+          }
+        }).catch(err => {
+          console.warn("[Stripe] Erro na verificação de retorno:", err);
+        }).finally(() => {
+          // Clean URL query params to preserve clean history
+          const cleanUrl = window.location.origin + window.location.pathname;
+          window.history.replaceState({}, document.title, cleanUrl);
+        });
       }
     }
   }, []);
@@ -2606,7 +2651,7 @@ export default function App() {
               if (!phoneRawSnap.empty) {
                 const existingUser = phoneRawSnap.docs[0].data();
                 if (existingUser.isTrial === true) {
-                  throw new Error("Este número de WhatsApp já foi utilizado para cadastrar uma conta de teste (Trial). Cada profissional/clínica tem direito a apenas um período de teste de 14 dias.");
+                  throw new Error("Este número de WhatsApp já foi utilizado para cadastrar uma conta de teste (Trial). Cada profissional/clínica tem direito a apenas um período de teste de 15 dias.");
                 } else {
                   throw new Error("Este número de WhatsApp já está cadastrado em outra conta ativa.");
                 }
@@ -3036,6 +3081,10 @@ export default function App() {
             db={db}
             patientsCount={patients.length}
             dentistCount={users.filter((u: any) => u?.role === 'Dentista').length}
+            clinicPixKey={clinicPixKey}
+            clinicPixBeneficiary={clinicPixBeneficiary}
+            clinicPixCity={clinicPixCity}
+            clinicPixBank={clinicPixBank}
           />
         );
       case 'SuperAdmin':
